@@ -116,9 +116,12 @@ class AuthSettings(BaseModel):
     Fields:
         jwt_secret: Secret key for JWT signing.
         jwt_algorithm: JWT signing algorithm.
+        jwt_issuer: JWT issuer claim (``iss``).
+        jwt_audience: JWT audience claim (``aud``).
         access_token_ttl_minutes: Access token lifetime in minutes.
         refresh_token_ttl_days: Refresh token lifetime in days.
         api_key_header_name: HTTP header name for API key authentication.
+        credential_master_key_ref: Env var or Vault path for the AES master key.
     """
 
     jwt_secret: SecretStr = Field(
@@ -126,11 +129,17 @@ class AuthSettings(BaseModel):
         description="JWT signing secret",
     )
     jwt_algorithm: str = Field(default="HS256", description="JWT signing algorithm")
+    jwt_issuer: str = Field(default="nexus-agent", description="JWT issuer (iss)")
+    jwt_audience: str = Field(default="nexus-api", description="JWT audience (aud)")
     access_token_ttl_minutes: int = Field(
         default=30, ge=1, description="Access token TTL in minutes"
     )
     refresh_token_ttl_days: int = Field(default=7, ge=1, description="Refresh token TTL in days")
     api_key_header_name: str = Field(default="X-API-Key", description="API key header name")
+    credential_master_key_ref: str = Field(
+        default="env:NEXUS_CREDENTIAL_MASTER_KEY",
+        description="Env var or Vault path for the credential master key",
+    )
 
 
 class ObservabilitySettings(BaseModel):
@@ -153,6 +162,30 @@ class ObservabilitySettings(BaseModel):
     )
 
 
+class MemorySettings(BaseModel):
+    """Long-term memory and checkpointer configuration.
+
+    Fields:
+        enabled: Enable memory extraction and retrieval.
+        retrieval_top_k: Number of memories to retrieve per query.
+        importance_threshold: Minimum importance score for memories to retain.
+        similarity_threshold: Cosine similarity threshold for deduplication (0-1).
+        checkpointer_type: Checkpointer backend — postgres or memory.
+    """
+
+    enabled: bool = Field(default=True, description="Enable memory extraction and retrieval")
+    retrieval_top_k: int = Field(default=5, ge=1, le=50, description="Memories per query")
+    importance_threshold: float = Field(
+        default=0.3, ge=0, le=1, description="Minimum importance to retain"
+    )
+    similarity_threshold: float = Field(
+        default=0.92, ge=0, le=1, description="Cosine similarity for dedup"
+    )
+    checkpointer_type: str = Field(
+        default="postgres", description="Checkpointer backend: postgres or memory"
+    )
+
+
 class AgentSettings(BaseModel):
     """LangGraph agent execution configuration.
 
@@ -163,6 +196,7 @@ class AgentSettings(BaseModel):
         summarization_threshold_tokens: Token count triggering summarization.
         hitl_default: Require human approval for tool calls by default.
         hitl_tool_patterns: Regex patterns for tools requiring HITL approval.
+        approval_timeout_hours: Auto-reject pending approvals after this many hours.
     """
 
     max_iterations: int = Field(default=25, ge=1, description="Max iterations per turn")
@@ -175,6 +209,11 @@ class AgentSettings(BaseModel):
     hitl_tool_patterns: list[str] = Field(
         default_factory=list,
         description="Regex patterns for HITL-required tools",
+    )
+    approval_timeout_hours: int = Field(
+        default=24,
+        ge=1,
+        description="Auto-reject pending approvals after this many hours",
     )
 
 
@@ -249,6 +288,9 @@ class Settings(BaseSettings):
     )
     agent: AgentSettings = Field(
         default_factory=AgentSettings, description="Agent orchestration configuration"
+    )
+    memory: MemorySettings = Field(
+        default_factory=MemorySettings, description="Long-term memory configuration"
     )
     tools: ToolSettings = Field(
         default_factory=ToolSettings, description="Tool execution configuration"
