@@ -8,9 +8,14 @@ from fastapi import FastAPI
 
 from nexus.api.routes import router
 from nexus.config.settings import get_settings
+from nexus.llm.provider import ProviderRegistry
+from nexus.middleware.auth import AuthMiddleware
+from nexus.middleware.tenant import TenantMiddleware
 from nexus.observability.logging import setup_logging
 from nexus.observability.tracing import setup_tracing
 from nexus.redis_client.client import close_redis, init_redis, redis_health_check
+from nexus.tools.mcp_server import setup_mcp
+from nexus.tools.registry import ToolRegistry
 
 
 @asynccontextmanager
@@ -20,6 +25,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     setup_logging(settings)
     setup_tracing(settings)
     await init_redis()
+    ProviderRegistry.init()
+    tool_registry = ToolRegistry()
+    setup_mcp(app, tool_registry)
+    app.state.tool_registry = tool_registry
     app.state.settings = settings
     yield
     await close_redis()
@@ -60,6 +69,9 @@ def create_app() -> FastAPI:
 
         all_ok = all(v == "ok" for v in checks.values())
         return {"status": "ok" if all_ok else "degraded", **checks}
+
+    app.add_middleware(TenantMiddleware)
+    app.add_middleware(AuthMiddleware)
 
     app.include_router(router, prefix="/api/v1")
 

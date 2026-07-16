@@ -16,6 +16,7 @@ from nexus.db.models.memory import Memory
 from nexus.db.models.session import Message, Session
 from nexus.db.models.tenant import Tenant
 from nexus.db.models.tool import Tool, ToolExecution
+from nexus.db.models.tool_version import ToolVersion
 from nexus.db.models.user import ApiKey, User
 
 __all__ = [
@@ -37,5 +38,6 @@ __all__ = [
     "Tool",
     "ToolExecution",
     "ToolRiskLevel",
+    "ToolVersion",
     "User",
 ]

@@ -74,7 +74,7 @@ docker compose -f docker/docker-compose.yml up -d
 uv run alembic upgrade head
 
 # Start the development server
-uv run uvicorn src.nexus.main:app --reload
+uv run uvicorn src.nexus.main:create_app --factory --reload
 ```
 
 ### Environment Variables
