@@ -1,0 +1,99 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project]
+name = "nexus-agent"
+version = "0.1.0"
+description = "Standalone vendor-neutral agentic AI orchestration layer"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "langgraph>=0.6",
+    "langchain>=0.3",
+    "langchain-core>=0.3",
+    "pydantic>=2.9",
+    "pydantic-ai>=0.0.40",
+    "pydantic-settings>=2.5",
+    "litellm>=1.50,<1.92",
+    "sqlalchemy>=2.0.35",
+    "asyncpg>=0.29",
+    "alembic>=1.13",
+    "pgvector>=0.3",
+    "redis>=5.1",
+    "httpx>=0.27",
+    "tenacity>=9.0",
+    "structlog>=24.4",
+    "opentelemetry-sdk>=1.27",
+    "langsmith>=0.1",
+    "mcp>=1.0",
+    "fastapi-mcp>=0.3",
+    "python-jose[cryptography]>=3.3",
+    "passlib[bcrypt]>=1.7",
+    "python-multipart>=0.0.12",
+    "sse-starlette>=2.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=5.0",
+    "respx>=0.21",
+    "factory-boy>=3.3",
+    "freezegun>=1.5",
+    "fakeredis[lua]>=2.26",
+    "ruff>=0.7",
+    "mypy>=1.13",
+    "types-requests",
+    "types-python-dateutil",
+    "types-passlib",
+    "types-redis",
+    "pre-commit>=4.0",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC", "S", "PT", "RET", "PL"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S", "PL", "ASYNC"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+disallow_untyped_defs = true
+warn_return_any = true
+exclude = ["tests/", "alembic/"]
+
+[[tool.mypy.overrides]]
+module = ["asyncpg", "redis.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["sqlalchemy.dialects.postgresql"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --cov=nexus --cov-report=term-missing"
+filterwarnings = ["ignore::pytest_cov.plugin.CovReportWarning"]
+
+[tool.coverage.run]
+source = ["nexus"]
+omit = ["tests/*"]
+disable_warnings = ["no-data-collected", "module-not-imported"]
