@@ -1,7 +1,5 @@
 """Pydantic schemas for tool registration, discovery, and search."""
 
-from __future__ import annotations
-
 import uuid
 from datetime import datetime
 from typing import Any
@@ -45,6 +43,12 @@ class ToolCreate(BaseModel):
     requires_approval: bool = Field(default=False, description="Requires HITL approval")
     risk_level: str = Field(default="low", description="Risk level: low | medium | high")
     enabled: bool = Field(default=True, description="Whether the tool is active")
+    tenant_public: bool = Field(
+        default=False, description="Visible to all tenants when true"
+    )
+    idempotent: bool = Field(
+        default=False, description="Whether the tool supports idempotent execution (safe to retry)"
+    )
 
 
 class ToolUpdate(BaseModel):
@@ -91,6 +95,8 @@ class ToolRead(BaseModel):
     requires_approval: bool = Field(description="Requires HITL approval")
     risk_level: str = Field(description="Risk level")
     enabled: bool = Field(description="Whether the tool is active")
+    tenant_public: bool = Field(default=False, description="Visible to all tenants")
+    idempotent: bool = Field(default=False, description="Supports idempotent execution")
     version: int = Field(description="Tool definition version")
     created_at: datetime = Field(description="Creation timestamp")
     updated_at: datetime = Field(description="Last update timestamp")

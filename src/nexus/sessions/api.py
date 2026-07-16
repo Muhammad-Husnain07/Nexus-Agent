@@ -9,7 +9,9 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nexus.api.depends import TenantDep, UserDep
 from nexus.db.base import get_session
+from nexus.security.rbac import Permission, require_permission
 from nexus.sessions.schemas import (
     ForkRequest,
     MessageCreate,
@@ -27,14 +29,6 @@ logger = structlog.get_logger("nexus.sessions.api")
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
-
-
-def _stub_tenant_id() -> uuid.UUID:
-    return uuid.UUID("00000000-0000-0000-0000-000000000001")
-
-
-def _stub_user_id() -> uuid.UUID:
-    return uuid.UUID("00000000-0000-0000-0000-000000000002")
 
 
 async def get_session_service(db: SessionDep) -> SessionService:
@@ -64,10 +58,12 @@ ServiceDep = Annotated[SessionService, Depends(get_session_service)]
 async def create_session(
     data: SessionCreate,
     service: ServiceDep,
+    tenant_id: TenantDep,
+    user_id: UserDep,
 ) -> SessionRead:
     return await service.create_session(
-        tenant_id=_stub_tenant_id(),
-        user_id=_stub_user_id(),
+        tenant_id=tenant_id,
+        user_id=user_id,
         data=data,
     )
 
@@ -75,13 +71,14 @@ async def create_session(
 @router.get("", response_model=SessionList)
 async def list_sessions(
     service: ServiceDep,
+    tenant_id: TenantDep,
     user_id: uuid.UUID | None = Query(None, description="Filter by user ID"),
     status: str | None = Query(None, description="Filter by status (active, archived)"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
 ) -> SessionList:
     return await service.list_sessions(
-        tenant_id=_stub_tenant_id(),
+        tenant_id=tenant_id,
         user_id=user_id,
         status=status,
         page=page,
@@ -112,7 +109,11 @@ async def update_session(
     return session
 
 
-@router.delete("/{session_id}", status_code=204)
+@router.delete(
+    "/{session_id}",
+    status_code=204,
+    dependencies=[require_permission(Permission.SESSIONS_DELETE)],
+)
 async def archive_session(
     session_id: uuid.UUID,
     service: ServiceDep,

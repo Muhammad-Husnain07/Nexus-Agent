@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -31,6 +31,7 @@ class User(TenantMixin, Base):
 
     tenant = relationship("Tenant", back_populates="users", passive_deletes=True)
     sessions = relationship("Session", back_populates="user", passive_deletes=True)
+    api_keys = relationship("ApiKey", back_populates="owner", passive_deletes=True)
 
 
 class ApiKey(TenantMixin, Base):
@@ -42,8 +43,20 @@ class ApiKey(TenantMixin, Base):
     key_hash: Mapped[str] = mapped_column(
         String(255), nullable=False, comment="SHA-256 hash of the API key"
     )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="Owner of this API key",
+    )
+    role_hint: Mapped[str | None] = mapped_column(
+        String(50), nullable=True, comment="Cached RBAC role for quick access"
+    )
     scopes: Mapped[list[str]] = mapped_column(
         ARRAY(String), default=list, comment="Permission scopes"
+    )
+    label: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, comment="Human-readable label for the key"
     )
     last_used_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, comment="Last usage timestamp"
@@ -61,3 +74,4 @@ class ApiKey(TenantMixin, Base):
     )
 
     tenant = relationship("Tenant", back_populates="api_keys", passive_deletes=True)
+    owner = relationship("User", back_populates="api_keys", passive_deletes=True)

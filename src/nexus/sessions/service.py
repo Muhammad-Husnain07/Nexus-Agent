@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
 
 import structlog
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexus.config.settings import get_settings
-from nexus.db.context import get_tenant
 from nexus.db.models.session import Message as MessageModel
 from nexus.db.models.session import Session as SessionModel
 from nexus.llm.client import LLMClient

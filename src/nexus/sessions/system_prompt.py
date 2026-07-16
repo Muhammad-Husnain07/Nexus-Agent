@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -11,7 +10,6 @@ from typing import Any
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nexus.config.settings import get_settings
 from nexus.db.context import get_tenant
 from nexus.db.models.memory import Memory as MemoryModel
 from nexus.db.models.tenant import Tenant as TenantModel

@@ -6,10 +6,12 @@ import uuid
 from typing import Annotated, Any
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nexus.api.depends import TenantDep
 from nexus.db.base import get_session
+from nexus.security.rbac import Permission, require_permission
 from nexus.tools.registry import ToolRegistry
 from nexus.tools.schemas import ToolCreate, ToolList, ToolRead, ToolSearchResult, ToolUpdate
 
@@ -27,23 +29,27 @@ async def get_registry() -> ToolRegistry:
 RegistryDep = Annotated[ToolRegistry, Depends(get_registry)]
 
 
-def _stub_tenant_id() -> uuid.UUID:
-    return uuid.UUID("00000000-0000-0000-0000-000000000001")
-
-
-@router.post("", response_model=ToolRead, status_code=201)
+@router.post(
+    "",
+    response_model=ToolRead,
+    status_code=201,
+    dependencies=[require_permission(Permission.TOOLS_REGISTER)],
+)
 async def register_tool(
-    data: ToolCreate,
     session: SessionDep,
     registry: RegistryDep,
+    tenant_id: TenantDep,
+    tool_data: dict[str, Any] = Body(),  # noqa: B008
 ) -> ToolRead:
-    return await registry.register(session, _stub_tenant_id(), data)
+    tool = ToolCreate(**tool_data)
+    return await registry.register(session, tenant_id, tool)
 
 
 @router.get("", response_model=ToolList)
 async def list_tools(  # noqa: PLR0913
     registry: RegistryDep,
     session: SessionDep,
+    tenant_id: TenantDep,
     tags: str | None = Query(None, description="Comma-separated tag filter"),
     category: str | None = Query(None, description="Category filter"),
     enabled: bool | None = Query(True, description="Filter by enabled state"),
@@ -53,7 +59,7 @@ async def list_tools(  # noqa: PLR0913
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
     return await registry.list(
         session,
-        _stub_tenant_id(),
+        tenant_id,
         tags=tag_list,
         category=category,
         enabled=enabled,
@@ -66,10 +72,11 @@ async def list_tools(  # noqa: PLR0913
 async def search_tools(
     registry: RegistryDep,
     session: SessionDep,
+    tenant_id: TenantDep,
     q: str = Query(..., description="Search query"),
     k: int = Query(10, ge=1, le=50, description="Number of results"),
 ) -> list[ToolSearchResult]:
-    return await registry.search_semantic(session, _stub_tenant_id(), q, k=k)
+    return await registry.search_semantic(session, tenant_id, q, k=k)
 
 
 @router.get("/{tool_id}", response_model=ToolRead)
@@ -77,33 +84,44 @@ async def get_tool(
     tool_id: uuid.UUID,
     registry: RegistryDep,
     session: SessionDep,
+    tenant_id: TenantDep,
 ) -> ToolRead:
-    tool = await registry.get(session, _stub_tenant_id(), tool_id)
+    tool = await registry.get(session, tenant_id, tool_id)
     if tool is None:
         raise HTTPException(status_code=404, detail="Tool not found")
     return tool
 
 
-@router.put("/{tool_id}", response_model=ToolRead)
+@router.put(
+    "/{tool_id}",
+    response_model=ToolRead,
+    dependencies=[require_permission(Permission.TOOLS_REGISTER)],
+)
 async def update_tool(
     tool_id: uuid.UUID,
     data: ToolUpdate,
     registry: RegistryDep,
     session: SessionDep,
+    tenant_id: TenantDep,
 ) -> ToolRead:
-    tool = await registry.update(session, _stub_tenant_id(), tool_id, data)
+    tool = await registry.update(session, tenant_id, tool_id, data)
     if tool is None:
         raise HTTPException(status_code=404, detail="Tool not found")
     return tool
 
 
-@router.delete("/{tool_id}", status_code=204)
+@router.delete(
+    "/{tool_id}",
+    status_code=204,
+    dependencies=[require_permission(Permission.TOOLS_DELETE)],
+)
 async def delete_tool(
     tool_id: uuid.UUID,
     registry: RegistryDep,
     session: SessionDep,
+    tenant_id: TenantDep,
 ) -> None:
-    deleted = await registry.deregister(session, _stub_tenant_id(), tool_id)
+    deleted = await registry.deregister(session, tenant_id, tool_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Tool not found")
 
@@ -113,9 +131,10 @@ async def test_tool(
     tool_id: uuid.UUID,
     registry: RegistryDep,
     session: SessionDep,
+    tenant_id: TenantDep,
     sample_input: dict[str, Any] | None = None,  # noqa: PT028
 ) -> dict[str, Any]:
-    tool = await registry.get(session, _stub_tenant_id(), tool_id)
+    tool = await registry.get(session, tenant_id, tool_id)
     if tool is None:
         raise HTTPException(status_code=404, detail="Tool not found")
 

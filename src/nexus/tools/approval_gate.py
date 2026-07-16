@@ -71,13 +71,16 @@ def check_approval_required(  # noqa: PLR0913
     session_id: uuid.UUID,
     agent_run_id: uuid.UUID | None = None,
     settings: AgentSettings | None = None,
+    plan_step: dict[str, Any] | None = None,
 ) -> ApprovalCheckResult:
     """Check whether a tool call needs human approval.
 
     Approval is required if any of these are true:
     1. The tool's ``requires_approval`` flag is True.
-    2. ``settings.hitl_default`` is True (global default).
-    3. The tool name matches any regex in ``settings.hitl_tool_patterns``.
+    2. The plan step has ``is_destructive=True``.
+    3. The tool's ``risk_level`` is ``"medium"`` or ``"high"``.
+    4. ``settings.hitl_default`` is True (global default).
+    5. The tool name matches any regex in ``settings.hitl_tool_patterns``.
 
     When approval is required, the caller should raise
     ``ApprovalRequiredInterrupt``.
@@ -89,6 +92,8 @@ def check_approval_required(  # noqa: PLR0913
         session_id: Current session.
         agent_run_id: Optional agent run identifier.
         settings: Agent settings. If None, uses defaults from ``get_settings()``.
+        plan_step: The current plan step (optional). Used to check
+            ``is_destructive``.
 
     Returns:
         ``ApprovalCheckResult`` indicating whether approval is needed and why.
@@ -102,6 +107,18 @@ def check_approval_required(  # noqa: PLR0913
         return ApprovalCheckResult(
             required=True,
             reason=f"Tool '{tool.name}' has requires_approval=True",
+        )
+
+    if plan_step and plan_step.get("is_destructive", False):
+        return ApprovalCheckResult(
+            required=True,
+            reason=f"Plan step '{plan_step.get('id', '?')}' is destructive",
+        )
+
+    if tool.risk_level in ("medium", "high"):
+        return ApprovalCheckResult(
+            required=True,
+            reason=f"Tool '{tool.name}' risk_level is '{tool.risk_level}'",
         )
 
     if settings.hitl_default:
