@@ -1,0 +1,118 @@
+"""FastAPI dependencies — tenant, user, services, and registries.
+
+Provides reusable ``Annotated`` type aliases for dependency injection
+across all API routers.
+"""
+
+from __future__ import annotations
+
+import uuid
+from typing import Annotated, Any
+
+from fastapi import Depends, Request
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from nexus.db.base import get_session
+from nexus.db.context import get_tenant
+from nexus.llm.client import LLMClient
+from nexus.redis_client.client import get_redis_client
+from nexus.redis_client.pubsub import EventBus
+from nexus.sessions.context_window import ContextWindowManager
+from nexus.sessions.repository import MessageRepository, SessionRepository
+from nexus.sessions.service import SessionService
+from nexus.sessions.system_prompt import SystemPromptBuilder
+from nexus.tools.discovery import DynamicToolSelector
+from nexus.tools.executor import ToolExecutor
+from nexus.tools.registry import ToolRegistry
+
+# ---------------------------------------------------------------------------
+# Tenant & User
+# ---------------------------------------------------------------------------
+
+async def current_tenant() -> uuid.UUID | None:
+    """Return the currently active tenant from the middleware-set context var."""
+    return get_tenant()
+
+
+async def current_user(request: Request) -> uuid.UUID | None:
+    """Return the authenticated user ID from the request state."""
+    return request.state.user_id if hasattr(request.state, "user_id") else None
+
+
+TenantDep = Annotated[uuid.UUID | None, Depends(current_tenant)]
+UserDep = Annotated[uuid.UUID | None, Depends(current_user)]
+
+
+# ---------------------------------------------------------------------------
+# Session
+# ---------------------------------------------------------------------------
+
+async def get_session_service(db: Annotated[AsyncSession, Depends(get_session)]) -> SessionService:
+    """Build a SessionService wired to the DB session and LLM."""
+    from nexus.config.settings import get_settings  # noqa: PLC0415
+
+    settings = get_settings()
+    llm = LLMClient()
+    return SessionService(
+        session_repo=SessionRepository(db),
+        message_repo=MessageRepository(db),
+        context_window=ContextWindowManager(
+            llm_client=llm, model=settings.llm.default_model
+        ),
+        prompt_builder=SystemPromptBuilder(llm_client=llm),
+        llm_client=llm,
+        model=settings.llm.default_model,
+    )
+
+
+SessionServiceDep = Annotated[SessionService, Depends(get_session_service)]
+
+
+# ---------------------------------------------------------------------------
+# Agent
+# ---------------------------------------------------------------------------
+
+async def get_agent_runner(request: Request) -> Any:
+    """Build an AgentRunner wired to the application's services."""
+    from nexus.agent.runner import AgentRunner  # noqa: PLC0415
+
+    tool_registry: ToolRegistry = request.app.state.tool_registry
+    llm = LLMClient()
+    redis_client = get_redis_client()
+    event_bus = EventBus(redis_client) if redis_client else None
+    tool_executor = ToolExecutor(event_bus=event_bus)
+    tool_selector = DynamicToolSelector(
+        registry=tool_registry,
+        llm_client=llm,
+    )
+    from nexus.db.base import async_session  # noqa: PLC0415
+
+    return AgentRunner(
+        llm_client=llm,
+        tool_selector=tool_selector,
+        tool_executor=tool_executor,
+        event_bus=event_bus,
+        session_factory=async_session,
+    )
+
+
+AgentRunnerDep = Annotated[Any, Depends(get_agent_runner)]
+
+
+# ---------------------------------------------------------------------------
+# Tools
+# ---------------------------------------------------------------------------
+
+async def get_tool_registry(request: Request) -> ToolRegistry:
+    """Return the cached tool registry from the application state."""
+    return request.app.state.tool_registry
+
+
+ToolRegistryDep = Annotated[ToolRegistry, Depends(get_tool_registry)]
+
+
+# ---------------------------------------------------------------------------
+# DB Session (re-exported from base for convenience)
+# ---------------------------------------------------------------------------
+
+SessionDep = Annotated[AsyncSession, Depends(get_session)]

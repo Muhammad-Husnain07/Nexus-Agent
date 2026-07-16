@@ -37,6 +37,10 @@ dependencies = [
     "passlib[bcrypt]>=1.7",
     "python-multipart>=0.0.12",
     "sse-starlette>=2.1",
+    "langgraph-checkpoint-postgres>=3.1.0",
+    "psycopg-binary>=3.3.4",
+    "argon2-cffi>=25.1.0",
+    "cryptography>=49.0.0",
 ]
 
 [dependency-groups]
@@ -65,7 +69,9 @@ line-length = 100
 select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC", "S", "PT", "RET", "PL"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S", "PL", "ASYNC"]
+"tests/*" = ["S", "PL", "ASYNC", "E501", "SIM117"]
+"src/nexus/security/input_guard.py" = ["E501"]
+"src/nexus/security/rate_limit.py" = ["E501"]
 
 [tool.ruff.format]
 quote-style = "double"
