@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI
@@ -78,13 +78,27 @@ def app(mock_session_service: MagicMock) -> FastAPI:
 
     a.include_router(sessions_router)
 
-    async def mock_dependency() -> MagicMock:
+    async def mock_service() -> MagicMock:
         return mock_session_service
 
     from nexus.sessions import api as sessions_api_module
 
-    # We'll patch the dependency at the test level instead
-    a.dependency_overrides[sessions_api_module.get_session_service] = mock_dependency
+    a.dependency_overrides[sessions_api_module.get_session_service] = mock_service
+
+    # Override auth dependencies so tests don't need real credentials
+    import uuid
+
+    from nexus.api.depends import _current_tenant
+    from nexus.security.rbac import get_current_user, Role
+
+    async def mock_tenant() -> uuid.UUID:
+        return uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+    async def mock_user_with_role() -> tuple[uuid.UUID, Role]:
+        return uuid.UUID("00000000-0000-0000-0000-000000000002"), Role.TENANT_ADMIN
+
+    a.dependency_overrides[_current_tenant] = mock_tenant
+    a.dependency_overrides[get_current_user] = mock_user_with_role
     return a
 
 

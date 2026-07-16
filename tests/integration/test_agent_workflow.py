@@ -298,9 +298,28 @@ async def test_agent_workflow_handles_clarification(
                 update={
                     "content": json.dumps(
                         {
-                            "intent": "publish",
-                            "parameters": {},
-                            "missing_info_slots": ["content", "title"],
+                            "primary_goal": "publish",
+                            "implied_actions": [],
+                            "missing_info_slots": [
+                                {
+                                    "name": "content",
+                                    "description": "The content to publish",
+                                    "why_needed": "required by the publish tool",
+                                    "suggested_question": "What content would you like to publish?",
+                                    "possible_values": None,
+                                    "source": "user",
+                                },
+                                {
+                                    "name": "title",
+                                    "description": "Title of the content",
+                                    "why_needed": "required by the publish tool",
+                                    "suggested_question": "What title should the content have?",
+                                    "possible_values": None,
+                                    "source": "user",
+                                },
+                            ],
+                            "confidence": 0.95,
+                            "urgency": "normal",
                         }
                     )
                 }

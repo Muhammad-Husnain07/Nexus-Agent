@@ -33,7 +33,7 @@ class TestAgentErrors:
         assert str(inst) == msg
 
     def test_base_error_works(self) -> None:
-        inst = AgentError("generic agent error")
+        inst = AgentError(message="generic agent error")
         assert isinstance(inst, Exception)
         assert str(inst) == "generic agent error"
 

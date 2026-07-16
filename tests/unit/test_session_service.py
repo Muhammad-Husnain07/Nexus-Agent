@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from unittest.mock import ANY, AsyncMock, MagicMock, create_autospec
+from unittest.mock import AsyncMock, create_autospec
 
 import pytest
 

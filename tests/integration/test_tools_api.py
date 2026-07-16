@@ -23,6 +23,20 @@ def app() -> FastAPI:
     registry = ToolRegistry()
     setup_mcp(a, registry)
     a.state.tool_registry = registry
+
+    import uuid
+
+    from nexus.api.depends import _current_tenant
+    from nexus.security.rbac import Role, get_current_user
+
+    async def mock_user_with_role() -> tuple[uuid.UUID, Role]:
+        return uuid.UUID("00000000-0000-0000-0000-000000000002"), Role.TENANT_ADMIN
+
+    async def mock_tenant() -> uuid.UUID:
+        return uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+    a.dependency_overrides[_current_tenant] = mock_tenant
+    a.dependency_overrides[get_current_user] = mock_user_with_role
     return a
 
 
@@ -81,17 +95,18 @@ class TestToolApi:
     ) -> None:
         mock_register.return_value = sample_tool_read
 
+        body = sample_tool_read.model_dump(
+            exclude={
+                "id",
+                "tenant_id",
+                "created_at",
+                "updated_at",
+                "version",
+            }
+        )
         resp = await client.post(
             "/api/v1/tools",
-            json=sample_tool_read.model_dump(
-                exclude={
-                    "id",
-                    "tenant_id",
-                    "created_at",
-                    "updated_at",
-                    "version",
-                }
-            ),
+            json={"tool_data": body},
         )
         assert resp.status_code in (200, 201)
 

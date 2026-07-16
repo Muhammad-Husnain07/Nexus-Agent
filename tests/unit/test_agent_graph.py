@@ -6,11 +6,11 @@ Tests each node in isolation with mocked dependencies.
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from nexus.agent.graph import (
+from nexus.agent.nodes import (
     analyze_results,
     discover_tools,
     finalize,
@@ -53,6 +53,10 @@ _MINIMAL_STATE: AgentState = {
     "errors": [],
     "_bound_tools": [],
     "_routing_decision": "continue",
+    "intent_analysis": None,
+    "analysis_result": None,
+    "needs_human_review": False,
+    "questions_asked": 0,
 }
 
 
@@ -96,9 +100,11 @@ class TestUnderstandIntent:
     async def test_parses_intent(self, llm: LLMClient) -> None:
         payload = json.dumps(
             {
-                "intent": "create draft",
-                "parameters": {"title": "test"},
+                "primary_goal": "create draft",
+                "implied_actions": [],
                 "missing_info_slots": [],
+                "confidence": 0.95,
+                "urgency": "normal",
             }
         )
         llm.complete.return_value = _LLM_RESPONSE.model_copy(update={"content": payload})
@@ -109,9 +115,20 @@ class TestUnderstandIntent:
     async def test_detects_missing_info(self, llm: LLMClient) -> None:
         payload = json.dumps(
             {
-                "intent": "publish",
-                "parameters": {},
-                "missing_info_slots": ["content"],
+                "primary_goal": "publish",
+                "implied_actions": [],
+                "missing_info_slots": [
+                    {
+                        "name": "content",
+                        "description": "The content to publish",
+                        "why_needed": "required by publish tool",
+                        "suggested_question": "What content should I publish?",
+                        "possible_values": None,
+                        "source": "user",
+                    }
+                ],
+                "confidence": 0.9,
+                "urgency": "normal",
             }
         )
         llm.complete.return_value = _LLM_RESPONSE.model_copy(update={"content": payload})
@@ -129,6 +146,42 @@ class TestUnderstandIntent:
         llm.complete.return_value = _LLM_RESPONSE.model_copy(update={"content": "not json"})
         result = await understand_intent(_MINIMAL_STATE, llm, "gpt-4o")
         assert result["intent"]["intent"] == ""
+
+    async def test_populates_gathered_from_resolved_slots(self, llm: LLMClient) -> None:
+        """When a previously-missing slot is absent from the new analysis,
+        the user's last message is stored in gathered_requirements."""
+        payload = json.dumps(
+            {
+                "primary_goal": "send email",
+                "implied_actions": [],
+                "missing_info_slots": [],  # slot 'body' resolved
+                "confidence": 0.95,
+                "urgency": "normal",
+            }
+        )
+        llm.complete.return_value = _LLM_RESPONSE.model_copy(update={"content": payload})
+        state = dict(_MINIMAL_STATE)
+        state["missing_info_slots"] = ["body"]  # previously missing
+        state["messages"] = [{"role": "user", "content": "Say the meeting is at 3pm"}]
+        result = await understand_intent(state, llm, "gpt-4o")
+        assert result["gathered_requirements"] == {"body": "Say the meeting is at 3pm"}
+
+    async def test_skips_gathered_when_no_slots_resolved(self, llm: LLMClient) -> None:
+        """gathered_requirements stays empty when nothing was previously missing."""
+        payload = json.dumps(
+            {
+                "primary_goal": "send email",
+                "implied_actions": [],
+                "missing_info_slots": [],
+                "confidence": 0.95,
+                "urgency": "normal",
+            }
+        )
+        llm.complete.return_value = _LLM_RESPONSE.model_copy(update={"content": payload})
+        state = dict(_MINIMAL_STATE)
+        state["messages"] = [{"role": "user", "content": "Send email"}]
+        result = await understand_intent(state, llm, "gpt-4o")
+        assert result["gathered_requirements"] == {}
 
 
 class TestGatherRequirements:
@@ -150,6 +203,16 @@ class TestGatherRequirements:
         state["missing_info_slots"] = []
         result = await gather_requirements(state, llm, "gpt-4o")
         assert result["final_response"] is None
+
+    async def test_increments_questions_asked(self, llm: LLMClient) -> None:
+        state = dict(_MINIMAL_STATE)
+        state["missing_info_slots"] = ["location", "date"]
+        state["questions_asked"] = 1
+        llm.complete.return_value = _LLM_RESPONSE.model_copy(
+            update={"content": "Where is the event?"}
+        )
+        result = await gather_requirements(state, llm, "gpt-4o")
+        assert result["questions_asked"] == 2
 
 
 class TestDiscoverTools:
@@ -203,6 +266,95 @@ class TestPlanNode:
         with pytest.raises(PlanningError, match="empty plan"):
             await plan(_MINIMAL_STATE, llm, "gpt-4o", settings)
 
+    async def test_destructive_step_flags_human_review(  # noqa: E501
+        self, llm: LLMClient, settings: AgentSettings
+    ) -> None:
+        llm.complete.return_value = _LLM_RESPONSE.model_copy(
+            update={
+                "content": json.dumps(
+                    {
+                        "rationale": "Delete the record",
+                        "steps": [
+                            {
+                                "id": "step_1",
+                                "description": "Delete database record",
+                                "tool_name": "delete_tool",
+                                "inputs": {"record_id": "42"},
+                                "depends_on": [],
+                                "expected_outcome": "record deleted",
+                                "is_destructive": True,
+                            }
+                        ],
+                    }
+                )
+            }
+        )
+        state = dict(_MINIMAL_STATE)
+        state["available_tools"] = [{"name": "delete_tool", "description": "deletes records"}]
+        result = await plan(state, llm, "gpt-4o", settings)
+        assert result["needs_human_review"] is True
+
+    async def test_requires_approval_tool_flags_human_review(  # noqa: E501
+        self, llm: LLMClient, settings: AgentSettings
+    ) -> None:
+        llm.complete.return_value = _LLM_RESPONSE.model_copy(
+            update={
+                "content": json.dumps(
+                    {
+                        "rationale": "Publish the draft",
+                        "steps": [
+                            {
+                                "id": "step_1",
+                                "description": "Publish draft",
+                                "tool_name": "publish_tool",
+                                "inputs": {"draft_id": "42"},
+                                "depends_on": [],
+                                "expected_outcome": "draft published",
+                                "is_destructive": False,
+                            }
+                        ],
+                    }
+                )
+            }
+        )
+        state = dict(_MINIMAL_STATE)
+        state["available_tools"] = [
+            {
+                "name": "publish_tool",
+                "description": "publishes content",
+                "requires_approval": True,
+                "risk_level": "medium",
+            }
+        ]
+        result = await plan(state, llm, "gpt-4o", settings)
+        assert result["needs_human_review"] is True
+
+    async def test_plan_includes_expected_outcome(  # noqa: E501
+        self, llm: LLMClient, settings: AgentSettings
+    ) -> None:
+        llm.complete.return_value = _LLM_RESPONSE.model_copy(
+            update={
+                "content": json.dumps(
+                    {
+                        "steps": [
+                            {
+                                "id": "step_1",
+                                "description": "Create draft",
+                                "tool_name": "create_tool",
+                                "inputs": {},
+                                "depends_on": [],
+                                "expected_outcome": "draft created",
+                                "is_destructive": False,
+                            }
+                        ]
+                    }
+                )
+            }
+        )
+        result = await plan(_MINIMAL_STATE, llm, "gpt-4o", settings)
+        assert result["plan"][0]["expected_outcome"] == "draft created"
+        assert result["plan"][0]["is_destructive"] is False
+
 
 def _make_step(id: str, status: str, tool: str | None = None) -> dict:
     return {
@@ -212,6 +364,8 @@ def _make_step(id: str, status: str, tool: str | None = None) -> dict:
         "tool_name": tool,
         "inputs": {} if tool else None,
         "depends_on": [],
+        "expected_outcome": None,
+        "is_destructive": False,
     }
 
 
@@ -235,7 +389,9 @@ class TestAnalyzeResults:
 
     async def test_asks_llm_on_failure(self, llm: LLMClient) -> None:
         llm.complete.return_value = _LLM_RESPONSE.model_copy(
-            update={"content": json.dumps({"decision": "revise", "reason": "try different tool"})}
+            update={"content": json.dumps(  # noqa: E501
+                {"outcome": "failure", "next_action": "revise", "reasoning": "try different tool"}
+            )}
         )
         state = dict(_MINIMAL_STATE)
         state["plan"] = [_make_step("s1", "failed", tool="tool")]
@@ -243,9 +399,76 @@ class TestAnalyzeResults:
         result = await analyze_results(state, llm, "gpt-4o")
         assert result["_routing_decision"] == "revise"
 
+    async def test_parse_failure_fallback_to_finalize(self, llm: LLMClient) -> None:
+        llm.complete.return_value = _LLM_RESPONSE.model_copy(
+            update={"content": "not valid json at all"}
+        )
+        state = dict(_MINIMAL_STATE)
+        state["plan"] = [_make_step("s1", "done")]
+        state["current_step_index"] = 0
+        result = await analyze_results(state, llm, "gpt-4o")
+        assert result["_routing_decision"] == "finalize"
+
+    async def test_parse_failure_continues_when_more_steps(self, llm: LLMClient) -> None:
+        llm.complete.return_value = _LLM_RESPONSE.model_copy(
+            update={"content": "not valid json at all"}
+        )
+        state = dict(_MINIMAL_STATE)
+        state["plan"] = [_make_step("s1", "done"), _make_step("s2", "pending")]
+        state["current_step_index"] = 0
+        result = await analyze_results(state, llm, "gpt-4o")
+        assert result["_routing_decision"] == "continue"
+        assert result["current_step_index"] == 1
+
+    async def test_maps_clarify_to_ask(self, llm: LLMClient) -> None:
+        llm.complete.return_value = _LLM_RESPONSE.model_copy(
+            update={"content": json.dumps(  # noqa: E501
+                {"outcome": "partial", "next_action": "clarify", "reasoning": "need more info"}
+            )}
+        )
+        state = dict(_MINIMAL_STATE)
+        state["plan"] = [_make_step("s1", "failed", tool="tool")]
+        state["current_step_index"] = 0
+        result = await analyze_results(state, llm, "gpt-4o")
+        assert result["_routing_decision"] == "ask"
+
 
 class TestFinalize:
     """finalize node — compose final answer."""
+
+    async def test_persists_to_memory(self, llm: LLMClient) -> None:
+        llm.complete.return_value = _LLM_RESPONSE.model_copy(
+            update={"content": "Done. All steps completed."}
+        )
+        mock_mgr = MagicMock()
+        mock_mgr.extract_and_store = AsyncMock(return_value=["mem_1"])
+        mock_session_factory = MagicMock()
+
+        with patch("nexus.agent.nodes.finalize.MemoryManager", return_value=mock_mgr):
+            state = dict(_MINIMAL_STATE)
+            state["tool_results"] = [{"tool_name": "t1", "status": "success", "data": {"ok": True}}]
+            state["intent"] = {"intent": "test"}
+            result = await finalize(state, llm, "gpt-4o", session_factory=mock_session_factory)
+
+        assert result["final_response"] is not None
+        mock_mgr.extract_and_store.assert_awaited_once()
+
+    async def test_handles_memory_persist_failure_gracefully(self, llm: LLMClient) -> None:
+        llm.complete.return_value = _LLM_RESPONSE.model_copy(
+            update={"content": "Done."}
+        )
+        mock_mgr = MagicMock()
+        mock_mgr.extract_and_store = AsyncMock(side_effect=Exception("DB error"))
+        mock_session_factory = MagicMock()
+
+        with patch("nexus.agent.nodes.finalize.MemoryManager", return_value=mock_mgr):
+            state = dict(_MINIMAL_STATE)
+            state["tool_results"] = [{"tool_name": "t1", "status": "success", "data": {"ok": True}}]
+            state["intent"] = {"intent": "test"}
+            result = await finalize(state, llm, "gpt-4o", session_factory=mock_session_factory)
+
+        assert result["final_response"] is not None
+        mock_mgr.extract_and_store.assert_awaited_once()
 
     async def test_returns_summary(self, llm: LLMClient) -> None:
         llm.complete.return_value = _LLM_RESPONSE.model_copy(
