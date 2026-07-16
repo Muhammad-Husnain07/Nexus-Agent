@@ -1,5 +1,6 @@
 """LangGraph StateGraph orchestration graph."""
 
+from nexus.agent.api import router as agent_router
 from nexus.agent.errors import (
     AgentError,
     ApprovalRejected,
@@ -10,18 +11,42 @@ from nexus.agent.errors import (
 )
 from nexus.agent.graph import build_agent_graph
 from nexus.agent.runner import AgentEvent, AgentRunner
-from nexus.agent.state import AgentState, PlanStep
+from nexus.agent.schemas import (
+    AgentInvokeRequest,
+    AgentInvokeResponse,
+    AgentResumeResponse,
+    AgentStateResponse,
+    AgentStreamEvent,
+    ApprovalAction,
+)
+from nexus.agent.state import (
+    AgentState,
+    AnalysisResult,
+    IntentAnalysis,
+    MissingSlot,
+    PlanStep,
+)
 
 __all__ = [
     "AgentError",
     "AgentEvent",
+    "AgentInvokeRequest",
+    "AgentInvokeResponse",
+    "AgentResumeResponse",
     "AgentRunner",
     "AgentState",
+    "AgentStateResponse",
+    "AgentStreamEvent",
+    "AnalysisResult",
+    "ApprovalAction",
     "ApprovalRejected",
     "ContextWindowExceededError",
+    "IntentAnalysis",
     "MaxIterationsError",
+    "MissingSlot",
     "PlanStep",
     "PlanningError",
     "ToolExecutionError",
+    "agent_router",
     "build_agent_graph",
 ]
