@@ -67,6 +67,14 @@ async def get_redis() -> AsyncGenerator[Redis[Any], None]:
     yield client
 
 
+def get_redis_client() -> Redis[Any]:
+    """Return a shared or new Redis client for synchronous use.
+
+    Uses the module-level state pool if available, otherwise creates a fresh one.
+    """
+    return create_redis_client()
+
+
 async def redis_health_check() -> bool:
     """Return True if the shared Redis server responds to PING."""
     client = create_redis_client()

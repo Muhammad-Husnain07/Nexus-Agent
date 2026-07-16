@@ -19,4 +19,4 @@ COPY src/ ./src/
 
 EXPOSE 8000
 
-CMD ["uv", "run", "uvicorn", "src.nexus.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uv", "run", "uvicorn", "src.nexus.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]

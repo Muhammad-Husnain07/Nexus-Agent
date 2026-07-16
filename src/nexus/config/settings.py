@@ -55,18 +55,32 @@ class ProviderConfig(BaseModel):
     Fields:
         name: Provider identifier (e.g. openai, anthropic).
         base_url: Custom API base URL if different from default.
-        api_key_env: Environment variable name holding the API key.
+        api_key_ref: Environment variable name or secret ref for the API key.
         models: List of model identifiers available from this provider.
         cost_per_1k_input: Cost per 1,000 input tokens in USD.
         cost_per_1k_output: Cost per 1,000 output tokens in USD.
+        max_tokens: Default max tokens for responses from this provider.
+        supports_streaming: Whether the provider supports streaming responses.
+        supports_tools: Whether the provider supports tool/function calling.
+        supports_structured_output: Whether the provider supports JSON structured output.
+        default_headers: Optional default HTTP headers for API requests.
     """
 
     name: str = Field(description="Provider identifier")
     base_url: str = Field(default="", description="Custom API base URL")
-    api_key_env: str = Field(default="", description="Env var name for API key")
+    api_key_ref: str = Field(default="", description="Env var or secret ref for API key")
     models: list[str] = Field(default_factory=list, description="Available model IDs")
     cost_per_1k_input: float = Field(default=0.0, ge=0, description="Input cost per 1K tokens")
     cost_per_1k_output: float = Field(default=0.0, ge=0, description="Output cost per 1K tokens")
+    max_tokens: int = Field(default=4096, ge=1, description="Default max tokens for responses")
+    supports_streaming: bool = Field(default=True, description="Supports streaming responses")
+    supports_tools: bool = Field(default=True, description="Supports tool/function calling")
+    supports_structured_output: bool = Field(
+        default=False, description="Supports JSON structured output"
+    )
+    default_headers: dict[str, str] = Field(
+        default_factory=dict, description="Default HTTP headers for API requests"
+    )
 
 
 class LLMSettings(BaseModel):
@@ -86,6 +100,9 @@ class LLMSettings(BaseModel):
     default_model: str = Field(default="gpt-4o", description="Default model identifier")
     temperature: float = Field(default=0.7, ge=0, le=2, description="Sampling temperature")
     max_tokens: int = Field(default=4096, ge=1, description="Max tokens per response")
+    embedding_model: str = Field(
+        default="text-embedding-3-small", description="Default embedding model"
+    )
     timeout_s: int = Field(default=60, ge=1, description="Request timeout in seconds")
     max_retries: int = Field(default=3, ge=0, description="Max retries on failure")
     providers: list[ProviderConfig] = Field(
@@ -179,6 +196,10 @@ class ToolSettings(BaseModel):
     allowed_hosts: list[str] = Field(
         default_factory=lambda: ["*"], description="Allowed external hosts"
     )
+    proxy_url: str | None = Field(
+        default=None, description="HTTP proxy URL for tool calls (e.g. http://proxy:8080)"
+    )
+    http2_enabled: bool = Field(default=True, description="Enable HTTP/2 for tool calls")
 
 
 class ServerSettings(BaseModel):
