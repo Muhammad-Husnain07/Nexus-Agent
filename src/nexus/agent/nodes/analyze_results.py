@@ -57,10 +57,17 @@ async def analyze_results(
         else:
             step_description = step.get("description", "")
             expected_outcome = step.get("expected_outcome", "")
-            tool_result_data = json.dumps(
-                (state.get("tool_results") or [{}])[-1].get("data", "no data"), indent=2
-            )
             step_status = step.get("status", "done")
+            tool_results_list = state.get("tool_results") or []
+            tool_result_data = json.dumps(
+                (tool_results_list[-1] if tool_results_list else {}).get("data", "no data"), indent=2
+            )
+            last_result = tool_results_list[-1] if tool_results_list else {}
+
+            # Shortcut: if step succeeded and no more steps remain, finalize
+            if step_status == "done" and next_idx >= len(plan) and last_result.get("status") == "success":
+                logger.info("analyze.success_finalize", step=idx)
+                return {"_routing_decision": "finalize", "analysis_result": {"decision": "finalize"}}
 
             system_prompt = prompt_manager.render(
                 "analyze_results",

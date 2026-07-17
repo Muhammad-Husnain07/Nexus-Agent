@@ -93,7 +93,7 @@ async def understand_intent(
             urgency="normal",
         )
 
-    # Populate gathered_requirements from resolved missing slots
+    # Populate gathered_requirements from known_parameters and resolved missing slots
     prev_missing: list[str] = state.get("missing_info_slots") or []
     new_missing_names: list[str] = [s.name for s in analysis.missing_info_slots]
     resolved = [name for name in prev_missing if name not in new_missing_names]
@@ -101,11 +101,20 @@ async def understand_intent(
     if resolved and last_user:
         for name in resolved:
             gathered[name] = last_user
+    # Add any known_parameters extracted by the LLM
+    known_vals: dict[str, str] = analysis.known_parameters
+    for name, val in known_vals.items():
+        gathered[name] = val
 
     missing_slot_names = new_missing_names
+    # Build parameters: known values merged with null placeholders for truly missing ones
+    merged_params: dict[str, Any] = dict(known_vals)
+    for s in analysis.missing_info_slots:
+        if s.name not in merged_params:
+            merged_params[s.name] = None
     intent_dict: dict[str, Any] = {
         "intent": analysis.primary_goal,
-        "parameters": {s.name: None for s in analysis.missing_info_slots},
+        "parameters": merged_params,
     }
 
     messages.append(_openai_message("assistant", f"Parsed intent: {analysis.primary_goal}"))

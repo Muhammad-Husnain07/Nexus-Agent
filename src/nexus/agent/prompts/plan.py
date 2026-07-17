@@ -43,7 +43,7 @@ You are a planning agent. Given user intent, gathered requirements, and availabl
       "id": "step_1",
       "description": "what this step does",
       "tool_name": "EXACT tool name from 'Available tools' above, or null",
-      "inputs": {{"param1": "value1", "user_ref": "${{user.email}}"}},
+      "inputs": {{"param1": "value1"}},
       "expected_outcome": "what successful execution produces",
       "is_destructive": false,
       "depends_on": []

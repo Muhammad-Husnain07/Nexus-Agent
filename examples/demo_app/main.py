@@ -63,8 +63,8 @@ async def list_articles(category: str | None = None, status: str | None = None, 
             "category": a.category,
             "tags": a.tags,
             "status": a.status,
-            "created_at": a.created_at.isoformat(),
-            "updated_at": a.updated_at.isoformat(),
+            "created_at": a.created_at,
+            "updated_at": a.updated_at,
         }
         for a in results
     ]

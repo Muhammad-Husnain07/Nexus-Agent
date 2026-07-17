@@ -63,6 +63,9 @@ class IntentAnalysis(BaseModel):
     missing_info_slots: list[MissingSlot] = Field(
         default_factory=list, description="Required information not yet provided"
     )
+    known_parameters: dict[str, str] = Field(
+        default_factory=dict, description="Parameter values already extracted from the user's message"
+    )
     confidence: float = Field(
         ge=0.0, le=1.0, default=1.0, description="Confidence in this analysis"
     )
