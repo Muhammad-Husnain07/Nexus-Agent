@@ -257,8 +257,11 @@ class ToolExecutor:
                 result.status = "validation_error"
                 result.error = (result.error or "") + f"; Output validation: {exc.message}"
 
-        # 8. Persist
-        await self._persist_execution(session, tool, context, result, inputs)
+        # 8. Persist (gracefully handle DB errors so tool result is still returned)
+        try:
+            await self._persist_execution(session, tool, context, result, inputs)
+        except Exception as persist_exc:
+            logger.warning("tool.persist_failed", tool=tool.name, error=str(persist_exc))
 
         # 9. Publish event
         await self._publish_event(context, result)

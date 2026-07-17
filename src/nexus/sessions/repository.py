@@ -26,11 +26,13 @@ class SessionRepository(TenantScopedRepository[SessionModel]):
         user_id: uuid.UUID,
         title: str = "New Session",
         metadata_: dict | None = None,
+        **kwargs: Any,
     ) -> SessionModel:
         return await super().create(
             user_id=user_id,
             title=title,
             metadata_=metadata_ or {},
+            **kwargs,
         )
 
     async def list(  # type: ignore[override]

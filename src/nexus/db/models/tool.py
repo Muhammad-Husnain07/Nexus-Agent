@@ -65,7 +65,7 @@ class Tool(TenantMixin, Base):
         Boolean, default=True, comment="Whether the tool is active"
     )
     embedding: Mapped[list[float] | None] = mapped_column(
-        VECTOR(1536), nullable=True, comment="Semantic embedding for discovery"
+        VECTOR(768), nullable=True, comment="Semantic embedding for discovery"
     )
     version: Mapped[int] = mapped_column(Integer, default=1, comment="Tool definition version")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

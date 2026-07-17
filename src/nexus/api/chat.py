@@ -102,6 +102,10 @@ async def chat(
     uid = _get_user_id(request)
     tid = _get_tenant_id(request)
 
+    # Ensure a DB session record exists before tool execution writes to it
+    from nexus.agent.api import _ensure_session_exists  # noqa: PLC0415
+    await _ensure_session_exists(request, session_id, body.message)
+
     runner: AgentRunner = await get_agent_runner(request)
     app_state = request.app.state
 

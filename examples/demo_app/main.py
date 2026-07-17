@@ -29,16 +29,6 @@ app = FastAPI(
 
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# ── Auth stub ────────────────────────────────────────────────────────────────
-
-AUTH_TOKEN = "demo-token"
-
-
-async def _verify_auth(request: Request) -> None:
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer ") or auth[7:] != AUTH_TOKEN:
-        raise HTTPException(status_code=401, detail="Unauthorized — use Bearer demo-token")
-
 
 # ── In-memory store ──────────────────────────────────────────────────────────
 
@@ -52,120 +42,114 @@ def _get_article(article_id: str) -> Article:
     raise HTTPException(status_code=404, detail="Article not found")
 
 
-# ── Article endpoints ────────────────────────────────────────────────────────
+# ── Routes ───────────────────────────────────────────────────────────────────
 
 
-@app.get("/articles", tags=["articles"])
-async def list_articles(
-    request: Request,
-    category: str | None = None,
-    status: str | None = None,
-    tag: str | None = None,
-) -> dict:
-    await _verify_auth(request)
+@app.get("/articles")
+async def list_articles(category: str | None = None, status: str | None = None, tag: str | None = None):
+    """List articles with optional filters."""
     results = _store["articles"]
     if category:
-        results = [a for a in results if a.category.lower() == category.lower()]
+        results = [a for a in results if a.category == category]
     if status:
-        results = [a for a in results if a.status.lower() == status.lower()]
+        results = [a for a in results if a.status == status]
     if tag:
-        results = [a for a in results if tag.lower() in [t.lower() for t in a.tags]]
-    return {"articles": [a.model_dump(mode="json") for a in results], "total": len(results)}
+        results = [a for a in results if tag in (a.tags or [])]
+    articles = [
+        {
+            "id": a.id,
+            "title": a.title,
+            "content": a.content,
+            "category": a.category,
+            "tags": a.tags,
+            "status": a.status,
+            "created_at": a.created_at.isoformat(),
+            "updated_at": a.updated_at.isoformat(),
+        }
+        for a in results
+    ]
+    return {"articles": articles, "total": len(articles)}
 
 
-@app.post("/articles", status_code=201, tags=["articles"])
-async def create_article(request: Request, body: ArticleCreate) -> dict:
-    await _verify_auth(request)
+@app.get("/articles/{article_id}")
+async def get_article(article_id: str):
+    article = _get_article(article_id)
+    return {
+        "id": article.id,
+        "title": article.title,
+        "content": article.content,
+        "category": article.category,
+        "tags": article.tags,
+        "status": article.status,
+        "created_at": article.created_at.isoformat(),
+        "updated_at": article.updated_at.isoformat(),
+    }
+
+
+@app.post("/articles")
+async def create_article(data: ArticleCreate):
     article = Article(
-        title=body.title,
-        content=body.content,
-        category=body.category,
-        tags=body.tags,
+        id=f"a{str(uuid.uuid4())[:7]}",
+        title=data.title,
+        content=data.content,
+        category=data.category or "General",
+        tags=data.tags or [],
+        status="draft",
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
     )
     _store["articles"].append(article)
-    return {"article": article.model_dump(mode="json")}
+    return {"id": article.id, "status": "draft"}
 
 
-@app.get("/articles/{article_id}", tags=["articles"])
-async def get_article(request: Request, article_id: str) -> dict:
-    await _verify_auth(request)
-    a = _get_article(article_id)
-    return {"article": a.model_dump(mode="json")}
+@app.put("/articles/{article_id}")
+async def update_article(article_id: str, data: ArticleUpdate):
+    article = _get_article(article_id)
+    if data.title is not None:
+        article.title = data.title
+    if data.content is not None:
+        article.content = data.content
+    if data.category is not None:
+        article.category = data.category
+    if data.tags is not None:
+        article.tags = data.tags
+    article.updated_at = datetime.now(UTC)
+    return {"id": article.id, "status": "updated"}
 
 
-@app.put("/articles/{article_id}", tags=["articles"])
-async def update_article(request: Request, article_id: str, body: ArticleUpdate) -> dict:
-    await _verify_auth(request)
-    a = _get_article(article_id)
-    if body.title is not None:
-        a.title = body.title
-    if body.content is not None:
-        a.content = body.content
-    if body.category is not None:
-        a.category = body.category
-    if body.tags is not None:
-        a.tags = body.tags
-    a.updated_at = datetime.now(UTC).isoformat()
-    return {"article": a.model_dump(mode="json")}
+@app.post("/articles/{article_id}/publish")
+async def publish_article(article_id: str):
+    article = _get_article(article_id)
+    article.status = "published"
+    article.updated_at = datetime.now(UTC)
+    return {"id": article.id, "status": "published"}
 
 
-@app.post("/articles/{article_id}/publish", tags=["articles"])
-async def publish_article(request: Request, article_id: str) -> dict:
-    await _verify_auth(request)
-    a = _get_article(article_id)
-    if a.status == "published":
-        raise HTTPException(status_code=400, detail="Article already published")
-    a.status = "published"
-    a.updated_at = datetime.now(UTC).isoformat()
-    return {"article": a.model_dump(mode="json")}
+@app.delete("/articles/{article_id}")
+async def delete_article(article_id: str):
+    article = _get_article(article_id)
+    _store["articles"] = [a for a in _store["articles"] if a.id != article_id]
+    return {"id": article.id, "status": "deleted"}
 
 
-@app.delete("/articles/{article_id}", tags=["articles"])
-async def delete_article(request: Request, article_id: str) -> dict:
-    await _verify_auth(request)
-    a = _get_article(article_id)
-    _store["articles"] = [x for x in _store["articles"] if x.id != article_id]
-    return {"deleted": True, "article_id": article_id}
+@app.post("/articles/{article_id}/preview")
+async def preview_article(article_id: str):
+    article = _get_article(article_id)
+    html = f"""<html><body><h1>{article.title}</h1><p>{article.content}</p></body></html>"""
+    return {"html": html, "id": article.id}
 
 
-@app.post("/articles/{article_id}/preview", tags=["articles"])
-async def preview_article(request: Request, article_id: str) -> dict:
-    await _verify_auth(request)
-    a = _get_article(article_id)
-    html = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>{a.title}</title>
-<style>body{{font-family:sans-serif;max-width:720px;margin:2rem auto;padding:0 1rem}}
-h1{{color:#2563eb}}.meta{{color:#666;font-size:0.9em}}</style></head>
-<body><h1>{a.title}</h1>
-<p class="meta">Category: {a.category} | Tags: {', '.join(a.tags)} | Status: {a.status}</p>
-<p>{a.content}</p></body></html>"""
-    return {"html": html, "article_id": a.id, "title": a.title}
+@app.get("/categories")
+async def list_categories():
+    return {"categories": [{"id": 1, "name": "Tech"}, {"id": 2, "name": "Science"}, {"id": 3, "name": "Sports"}, {"id": 4, "name": "News"}]}
 
 
-# ── Category / Tag endpoints ─────────────────────────────────────────────────
+@app.get("/tags")
+async def list_tags():
+    return {"tags": [{"id": 1, "name": "AI"}, {"id": 2, "name": "ML"}, {"id": 3, "name": "Cloud"}, {"id": 4, "name": "SaaS"}, {"id": 5, "name": "Research"}], "total": 5}
 
 
-@app.get("/categories", tags=["categorisation"])
-async def list_categories(request: Request) -> dict:
-    await _verify_auth(request)
-    return {"categories": _store["categories"], "total": len(_store["categories"])}
-
-
-@app.get("/tags", tags=["categorisation"])
-async def list_tags(request: Request) -> dict:
-    await _verify_auth(request)
-    return {"tags": _store["tags"], "total": len(_store["tags"])}
-
-
-# ── Health ───────────────────────────────────────────────────────────────────
-
-
-@app.get("/healthz", tags=["system"])
-async def healthz() -> dict:
-    return {"status": "ok", "app": "content-studio"}
-
-
-# ── Entrypoint ───────────────────────────────────────────────────────────────
+# ── Main ────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    uvicorn.run("examples.demo_app.main:app", host="0.0.0.0", port=8080, reload=True)
+    uvicorn.run(app, host="127.0.0.1", port=8081)

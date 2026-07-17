@@ -55,7 +55,8 @@ def _get_tenant_id(request: Request) -> uuid.UUID:
     ct = get_tenant()
     if ct is not None:
         return ct
-    return uuid.UUID("00000000-0000-0000-0000-000000000001")
+    from nexus.utils.constants import DEFAULT_TENANT_ID
+    return DEFAULT_TENANT_ID
 
 
 def _get_user_id(request: Request) -> uuid.UUID:
@@ -63,7 +64,8 @@ def _get_user_id(request: Request) -> uuid.UUID:
     uid = getattr(request.state, "user_id", None)
     if uid is not None:
         return uuid.UUID(uid) if isinstance(uid, str) else uid
-    return uuid.UUID("00000000-0000-0000-0000-000000000002")
+    from nexus.utils.constants import DEFAULT_USER_ID
+    return DEFAULT_USER_ID
 
 
 async def _get_session_service(request: Request) -> SessionService:
@@ -93,18 +95,29 @@ async def _ensure_session_exists(
     session_id: uuid.UUID,
     user_message: str,
 ) -> None:
-    """Create a session in the database if it doesn't exist yet."""
+    """Create a session in the database if it doesn't exist yet.
+
+    Uses its own DB session with explicit commit to ensure the row
+    persists before the agent's tool executor writes ``ToolExecution``
+    rows that reference it.
+    """
+    from nexus.sessions.repository import SessionRepository  # noqa: PLC0415
+
     try:
-        service = await _get_session_service(request)
-        existing = await service.get_session(session_id)
-        if existing is None:
-            ellipsis = "..." if len(user_message) > _MAX_TITLE_LENGTH else ""
-            title = user_message[:_MAX_TITLE_LENGTH] + ellipsis
-            await service.create_session(
-                tenant_id=_get_tenant_id(request),
-                user_id=_get_user_id(request),
-                data=SessionCreate(title=title),
-            )
+        async with async_session() as db_session:
+            repo = SessionRepository(db_session)
+            existing = await repo.get(session_id)
+            if existing is None:
+                ellipsis = "..." if len(user_message) > _MAX_TITLE_LENGTH else ""
+                title = user_message[:_MAX_TITLE_LENGTH] + ellipsis
+                await repo.create(
+                    id=session_id,
+                    tenant_id=_get_tenant_id(request),
+                    user_id=_get_user_id(request),
+                    title=title,
+                )
+                await db_session.commit()
+                logger.info("session_created_for_agent", session_id=str(session_id))
     except Exception as exc:
         logger.warning("session.create_failed", session_id=str(session_id), error=str(exc))
 

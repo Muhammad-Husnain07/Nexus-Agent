@@ -79,6 +79,37 @@ Analysis:
   "confidence": 0.99,
   "urgency": "high"
 }
+
+Example 4:
+User: "list articles in the Tech category"
+Analysis:
+{
+  "primary_goal": "list articles",
+  "implied_actions": ["query articles API"],
+  "missing_info_slots": [],
+  "confidence": 0.97,
+  "urgency": "normal"
+}
+
+Example 5:
+User: "show me AI articles"
+Analysis:
+{
+  "primary_goal": "list articles",
+  "implied_actions": ["query articles API"],
+  "missing_info_slots": [
+    {
+      "name": "category",
+      "description": "Article category filter",
+      "why_needed": "the list_articles tool accepts an optional category parameter",
+      "suggested_question": "What category of articles are you looking for?",
+      "possible_values": ["Tech", "Science", "Sports", "News"],
+      "source": "user"
+    }
+  ],
+  "confidence": 0.92,
+  "urgency": "normal"
+}
 """
 
 prompt_manager.register("understand_intent", SYSTEM_PROMPT_V1, version="1.0")

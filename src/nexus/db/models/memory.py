@@ -31,7 +31,7 @@ class Memory(TenantMixin, Base):
     )
     content: Mapped[str] = mapped_column(Text, nullable=False, comment="Memory content text")
     embedding: Mapped[list[float] | None] = mapped_column(
-        VECTOR(1536), nullable=True, comment="Vector embedding for semantic search"
+        VECTOR(768), nullable=True, comment="Vector embedding for semantic search"
     )
     metadata_: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, default=dict, comment="Arbitrary memory metadata"

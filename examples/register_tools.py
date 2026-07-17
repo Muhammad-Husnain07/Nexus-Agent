@@ -11,7 +11,7 @@ from __future__ import annotations
 import httpx
 
 API_BASE = "http://localhost:8000/api/v1"
-DEMO_BASE = "http://localhost:8080"
+DEMO_BASE = "http://127.0.0.1:8081"
 TOKEN = "<your-nexus-jwt-or-api-key>"  # get from login endpoint
 
 TOOLS = [

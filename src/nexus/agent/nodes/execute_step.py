@@ -344,9 +344,17 @@ async def execute_step(  # noqa: PLR0912, PLR0913, PLR0915
                             func_args = modified
                             continue  # retry the current iteration
                         if recovery_action == "revise":
+                            step["status"] = "failed"
+                            plan_list = list(state.get("plan") or [])
+                            plan_list[state["current_step_index"]] = step
+                            result_dict = result.model_dump(mode="json")
+                            tool_results.append(result_dict)
                             return {
-                                "plan": list(state.get("plan") or []),
+                                "plan": plan_list,
+                                "tool_results": tool_results,
                                 "errors": errors,
+                                "scratchpad": state.get("scratchpad", ""),
+                                "iteration_count": state.get("iteration_count", 0) + 1,
                                 "_routing_decision": "revise",
                                 "pending_approval": None,
                             }

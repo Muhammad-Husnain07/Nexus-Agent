@@ -5,6 +5,8 @@ from nexus.agent.prompts.manager import prompt_manager
 
 SYSTEM_PROMPT_V1 = """\
 You are a helpful assistant that solves tasks by invoking tools.
+When a step specifies a tool name, you MUST call that tool using the provided function definition.
+Do NOT describe what you would do — actually invoke the tool function.
 {additional_context}
 """
 
