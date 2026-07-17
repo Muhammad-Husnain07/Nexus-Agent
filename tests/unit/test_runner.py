@@ -1,8 +1,7 @@
-"""Tests for AgentRunner — graph caching, lock enforcement, event translation."""
+"""Tests for AgentRunner — lock enforcement, event translation."""
 
 from __future__ import annotations
 
-import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -10,8 +9,8 @@ import pytest
 from nexus.agent.runner import AgentRunner
 
 
-class TestAgentRunnerCache:
-    """Verify AgentRunner caches compiled graphs per session."""
+class TestAgentRunnerBasics:
+    """Verify AgentRunner builds fresh graphs and enforces locks."""
 
     @pytest.fixture
     def runner(self) -> AgentRunner:
@@ -25,31 +24,18 @@ class TestAgentRunnerCache:
             event_bus=None,
         )
 
-    def test_get_or_create_graph_caches(self, runner: AgentRunner) -> None:
-        g1 = runner._get_or_create_graph("session-1")
-        g2 = runner._get_or_create_graph("session-1")
-        assert g1 is g2
-
-    def test_different_sessions_get_different_graphs(self, runner: AgentRunner) -> None:
-        g1 = runner._get_or_create_graph("session-A")
-        g2 = runner._get_or_create_graph("session-B")
-        assert g1 is not g2
-
-    def test_evict_session_removes_cache(self, runner: AgentRunner) -> None:
-        runner._get_or_create_graph("session-X")
-        runner.evict_session("session-X")
-        g2 = runner._get_or_create_graph("session-X")
-        assert "session-X" in runner._graphs
-
     async def test_invoke_yields_events(self, runner: AgentRunner) -> None:
         mock_event = MagicMock()
         mock_event.__iter__ = lambda s: iter([{"understand_intent": {"intent": {"intent": "test"}}}])
 
-        old_graph = runner._get_or_create_graph("s1")
         with (
-            patch.object(old_graph, "astream", return_value=mock_event.__iter__()),
+            patch.object(runner, "_build_graph") as mock_build,
             patch("nexus.agent.runner.get_redis_client", return_value=None),
         ):
+            mock_graph = MagicMock()
+            mock_graph.astream = lambda *a, **kw: mock_event.__iter__()
+            mock_build.return_value = mock_graph
+
             events = []
             async for e in runner.invoke(
                 session_id="s1",
@@ -59,6 +45,8 @@ class TestAgentRunnerCache:
             ):
                 events.append(e)
             assert len(events) >= 1
+            # Verify a fresh graph was built
+            mock_build.assert_called_once()
 
     async def test_lock_acquired_yields_error_when_busy(self, runner: AgentRunner) -> None:
         fake_redis = AsyncMock()
@@ -74,6 +62,38 @@ class TestAgentRunnerCache:
                 events.append(e)
             assert len(events) == 1
             assert events[0].type == "error"
+
+    async def test_resume_yields_events(self, runner: AgentRunner) -> None:
+        """Verify resume() builds fresh graph and streams events."""
+        async def _mock_astream(*args: object, **kwargs: object):
+            yield {"finalize": {"final_response": "Resumed."}}
+
+        with patch.object(runner, "_build_graph") as mock_build:
+            mock_graph = MagicMock()
+            mock_graph.aget_state = AsyncMock(return_value=MagicMock(next=["execute_step"]))
+            mock_graph.astream = _mock_astream
+            mock_build.return_value = mock_graph
+
+            events = []
+            async for e in runner.resume("s1", {"action": "approve"}):
+                events.append(e)
+            assert len(events) >= 1
+            has_final = any(e.type == "final_response" for e in events)
+            assert has_final
+
+    async def test_resume_no_paused_run(self, runner: AgentRunner) -> None:
+        """Verify resume() yields error when no paused run exists."""
+        with patch.object(runner, "_build_graph") as mock_build:
+            mock_graph = MagicMock()
+            mock_graph.aget_state = AsyncMock(return_value=MagicMock(next=[]))
+            mock_build.return_value = mock_graph
+
+            events = []
+            async for e in runner.resume("s1", {"action": "approve"}):
+                events.append(e)
+            assert len(events) == 1
+            assert events[0].type == "error"
+            assert "No paused run" in events[0].payload.get("message", "")
 
 
 class TestAgentEventTranslation:
