@@ -19,6 +19,7 @@ from nexus.agent.state import AgentState
 from nexus.config.settings import AgentSettings
 from nexus.llm.client import LLMClient
 from nexus.redis_client.pubsub import EventBus, agent_channel
+from nexus.security.cost_control import CostController
 from nexus.tools.executor import ExecutionContext, ToolExecutor
 from nexus.tools.result import ToolResult
 from nexus.tools.schemas import ToolRead
@@ -142,6 +143,18 @@ async def execute_step(  # noqa: PLR0912, PLR0913, PLR0915
 
     tools: list[dict[str, Any]] = state.get("available_tools", [])
     tool_map: dict[str, dict[str, Any]] = {t["name"]: t for t in tools}
+
+    # Check for cost-based model degradation
+    _cost_ctrl = CostController()
+    _tenant_id_str: str | None = state.get("tenant_id")
+    if _tenant_id_str:
+        try:
+            degraded_model = await _cost_ctrl.get_degraded_model(uuid.UUID(_tenant_id_str))
+            if degraded_model:
+                model = degraded_model
+                logger.info("using_degraded_model", model=model, tenant_id=_tenant_id_str)
+        except Exception as exc:
+            logger.debug("cost_control_check_failed", error=str(exc))
 
     if step.get("tool_name") and step["tool_name"] not in tool_map:
         step["status"] = "failed"

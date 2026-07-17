@@ -63,6 +63,9 @@ dev = [
     "types-passlib",
     "types-redis",
     "pre-commit>=4.0",
+    "bandit>=1.7",
+    "pip-audit>=2.7",
+    "locust>=2.32",
 ]
 
 [tool.ruff]
@@ -112,7 +115,12 @@ markers = [
     "integration: marks tests that require real infrastructure (Docker containers)",
     "contract: marks API contract tests for tool schemas and response shapes",
     "eval: marks LLM evaluation tests (may use LangSmith)",
+    "load: marks load / performance tests (run separately via locust)",
 ]
+
+[tool.bandit]
+exclude_dirs = ["tests", "alembic", ".venv"]
+skips = ["B101", "B311"]
 
 [tool.coverage.run]
 source = ["nexus"]

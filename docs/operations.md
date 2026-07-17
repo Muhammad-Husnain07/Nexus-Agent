@@ -82,27 +82,31 @@ See [deploy/k8s/](../deploy/k8s/) for all manifests:
 
 ## Backups
 
-### PostgreSQL + pgvector
+Use the provided scripts for consistent backup and restore operations:
 
 ```bash
-# Daily backup
-pg_dump -h localhost -p 5433 -U nexus -d nexus -F c -f nexus_backup_$(date +%Y%m%d).dump
+# Create a timestamped backup
+DATABASE_URL="postgresql://nexus:pass@localhost:5433/nexus" ./scripts/backup.sh
 
-# Restore
-pg_restore -h localhost -p 5433 -U nexus -d nexus -F c nexus_backup_20260717.dump
-
-# With WAL archiving for point-in-time recovery
-# Enable in postgresql.conf: archive_mode=on, archive_command='cp %p /backups/%f'
+# Restore from a backup (with --confirm flag)
+DATABASE_URL="postgresql://nexus:pass@localhost:5433/nexus" ./scripts/restore.sh /path/to/backup.dump --confirm
 ```
 
 ### Automated Backup Strategy
 
 | Data | Frequency | Retention | Tool |
 |------|-----------|-----------|------|
-| Database | Hourly | 24 hours | pg_dump / WAL-G |
-| Database | Daily | 30 days | pg_dump / WAL-G |
-| Database | Monthly | 1 year | pg_dump / WAL-G |
+| Database | Hourly | 24 hours | `scripts/backup.sh` via cron |
+| Database | Daily | 30 days | `scripts/backup.sh` via cron |
+| Database | Monthly | 1 year | S3 lifecycle policy |
 | Config (.env, k8s) | Per change | Git history | git |
+
+### RPO / RTO
+
+| Metric | Target |
+|--------|--------|
+| Recovery Point Objective (RPO) | 1 hour (hourly backup schedule) |
+| Recovery Time Objective (RTO) | 30 minutes for 10 GB database |
 
 ---
 
@@ -160,69 +164,15 @@ LANGSMITH_PROJECT=nexus-agent
 
 ## Runbook
 
-### Incident: LLM Provider Down
-
-**Symptoms:** Agent returns `"Service degraded"`, `/metrics` shows `llm_cost_usd_total` flat.
-
-**Steps:**
-1. Check `DegradationManager.check_llm_available()` — returns `False`
-2. Identify which provider: check circuit breaker states via logs
-3. Configure fallback provider in env: `NEXUS_LLM__DEFAULT_MODEL=gpt-4o-mini`
-4. If all providers down, the agent returns cached responses or degradation message
-5. **Fix:** Restart provider or swap API key
-
-### Incident: Redis Disconnected
-
-**Symptoms:** `/readyz` shows `redis: error`, rate limiting disabled, caching disabled.
-
-**Steps:**
-1. Check Redis container: `docker compose ps redis`
-2. Check logs: `docker compose logs redis`
-3. If Redis is down and cannot restart, the app continues working (cache miss, rate limiting bypassed)
-4. **Fix:** `docker compose restart redis`
-5. If persistent, check Redis RAM: `docker compose exec redis redis-cli info memory`
-
-### Incident: DB Pool Exhausted
-
-**Symptoms:** Slow requests, `TimeoutError` from DB operations, `/readyz` may still report OK.
-
-**Steps:**
-1. Check active connections: `SELECT count(*) FROM pg_stat_activity WHERE datname = 'nexus'`
-2. Increase pool: edit `NEXUS_DATABASE__POOL_SIZE` and restart
-3. Kill long-running queries: 
-   ```sql
-   SELECT pg_terminate_backend(pid) 
-   FROM pg_stat_activity 
-   WHERE state = 'active' AND now() - query_start > interval '30 seconds';
-   ```
-4. **Fix:** Optimise query patterns, increase pool size, add connection pooling (PgBouncer)
-
-### Incident: High Approval Latency
-
-**Symptoms:** Users complaining about slow responses, `hitl_approvals_pending` gauge > 50.
-
-**Steps:**
-1. Check pending approvals: `GET /api/v1/approvals/pending/{session_id}`
-2. Check `approval_timeout_hours` setting (default 24h)
-3. If too many pending, reduce timeout: `NEXUS_AGENT__APPROVAL_TIMEOUT_HOURS=1`
-4. **Fix:** Implement auto-approve for low-risk tools, add Slack notification for pending approvals
-
-### Incident: Memory Growing
-
-**Symptoms:** Container OOM-killed, memory graph shows steady increase.
-
-**Steps:**
-1. Check checkpoint table: `SELECT count(*) FROM checkpoints`
-2. LangGraph checkpoints grow with conversation history
-3. Run VACUUM: `VACUUM ANALYZE checkpoints;`
-4. **Fix:** Configure checkpoint TTL or periodic cleanup job
-
-### Incident: Unhealthy Pod (Kubernetes)
-
-**Symptoms:** `kubectl get pods` shows `CrashLoopBackOff` or `Unhealthy`.
-
-**Steps:**
-1. Check logs: `kubectl logs <pod-name> --previous`
-2. Check probes match readiness: failureThreshold may need adjustment
-3. If `/readyz` fails for dependencies (PG/Redis down), the pod will not receive traffic
-4. **Fix:** Ensure dependencies are healthy first, then `kubectl delete pod <pod-name>`
+See the [Incident Runbook](runbook.md) for complete incident procedures covering:
+- LLM Provider Outage
+- Database Connection Exhaustion
+- Stuck Agent Run
+- Runaway Cost
+- Tool Endpoint Down
+- Redis Out of Memory
+- HITL Approval Stalled
+- Agent Revise Loop
+- SSE Connection Leak
+- Checkpoint / Memory Growth
+- Pod CrashLoopBackOff

@@ -9,6 +9,8 @@ from nexus.security.auth import (
     verify_api_key,
     verify_jwt,
 )
+from nexus.security.cost_alerts import CostAlertService
+from nexus.security.cost_control import CostController
 from nexus.security.input_guard import OutputGuard, PromptInjectionGuard
 from nexus.security.quota import QuotaEnforcer
 from nexus.security.rbac import (
@@ -32,6 +34,8 @@ __all__ = [
     "can_delete_tools",
     "filter_tools_by_role",
     "QuotaEnforcer",
+    "CostController",
+    "CostAlertService",
     "AuditLogger",
     "create_access_token",
     "create_refresh_token",
