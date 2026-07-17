@@ -1,0 +1,15 @@
+# =============================================================================
+# Nexus Agent — Development docker-compose override
+#
+# Mounts the source tree for hot-reload and adds --reload to uvicorn.
+# Run with:
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.override.yml up
+# =============================================================================
+
+services:
+  nexus-agent:
+    volumes:
+      - ../src:/app/src
+    environment:
+      NEXUS_ENV: development
+    command: ["uv", "run", "uvicorn", "nexus.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

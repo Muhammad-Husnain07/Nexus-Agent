@@ -1,4 +1,13 @@
-FROM python:3.12-slim AS base
+# =============================================================================
+# Nexus Agent — Multi-stage Dockerfile
+#
+# Builder:   installs dependencies via uv
+# Runtime:   minimal python:3.12-slim with .venv copied from builder,
+#            runs as non-root nexus user, healthcheck, starts with migrations
+# =============================================================================
+
+# ── Builder ──────────────────────────────────────────────────────────────────
+FROM python:3.12-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -15,8 +24,36 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
-COPY src/ ./src/
+# ── Runtime ──────────────────────────────────────────────────────────────────
+FROM python:3.12-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/app/.venv/bin:$PATH"
+
+# Install curl for healthcheck, nothing else
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root user for security
+RUN groupadd -r nexus && useradd -r -g nexus -d /app -s /sbin/nologin nexus
+
+WORKDIR /app
+
+# Copy pre-built venv from builder
+COPY --from=builder /app/.venv /app/.venv
+
+# Copy application code
+COPY src/ /app/src/
+COPY alembic/ /app/alembic/
+COPY alembic.ini /app/
 
 EXPOSE 8000
 
-CMD ["uv", "run", "uvicorn", "src.nexus.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8000/healthz || exit 1
+
+USER nexus
+
+CMD ["sh", "-c", "python -m alembic upgrade head && exec python -m uvicorn nexus.main:app --host 0.0.0.0 --port 8000"]

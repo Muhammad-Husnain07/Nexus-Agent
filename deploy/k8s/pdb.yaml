@@ -1,0 +1,11 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nexus-agent
+  labels:
+    app: nexus-agent
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: nexus-agent

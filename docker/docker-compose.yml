@@ -1,4 +1,16 @@
-version: "3.9"
+# =============================================================================
+# Nexus Agent — Production docker-compose
+#
+# Runs the full stack: nexus-agent, PostgreSQL+pgvector, Redis.
+# Optional services (commented out): litellm-proxy, otel-collector, prometheus.
+#
+# Usage:
+#   docker compose up -d
+#   docker compose logs -f
+#   docker compose down
+#
+# For local development, docker-compose.override.yml adds hot-reload + src mount.
+# =============================================================================
 
 services:
   nexus-agent:
@@ -9,14 +21,16 @@ services:
       - "8000:8000"
     env_file:
       - ../.env
+    environment:
+      NEXUS_ENV: production
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      - ../src:/app/src
-    command: ["uv", "run", "uvicorn", "src.nexus.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    networks:
+      - nexus-network
+    restart: unless-stopped
 
   postgres:
     image: pgvector/pgvector:pg16
@@ -25,7 +39,7 @@ services:
       POSTGRES_USER: nexus
       POSTGRES_PASSWORD: nexus
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -33,6 +47,9 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - nexus-network
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
@@ -45,7 +62,52 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - nexus-network
+    restart: unless-stopped
+
+  # ── Optional: LiteLLM Proxy ──────────────────────────────────────────────
+  # litellm-proxy:
+  #   image: ghcr.io/berriai/litellm:main-latest
+  #   ports:
+  #     - "4000:4000"
+  #   env_file:
+  #     - ../.env
+  #   networks:
+  #     - nexus-network
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #   command:
+  #     ["--port", "4000", "--config", "/app/config.yaml"]
+
+  # ── Optional: OpenTelemetry Collector ─────────────────────────────────────
+  # otel-collector:
+  #   image: otel/opentelemetry-collector-contrib:latest
+  #   ports:
+  #     - "4318:4318"
+  #     - "4317:4317"
+  #   volumes:
+  #     - ./otel-collector.yaml:/etc/otel/config.yaml
+  #   networks:
+  #     - nexus-network
+
+  # ── Optional: Prometheus ──────────────────────────────────────────────────
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   ports:
+  #     - "9090:9090"
+  #   volumes:
+  #     - prometheus-data:/prometheus
+  #     - ./prometheus.yaml:/etc/prometheus/prometheus.yml
+  #   networks:
+  #     - nexus-network
 
 volumes:
   postgres-data:
   redis-data:
+  # prometheus-data:
+
+networks:
+  nexus-network:
+    driver: bridge
