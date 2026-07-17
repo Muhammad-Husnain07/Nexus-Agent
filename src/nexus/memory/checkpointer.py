@@ -46,10 +46,11 @@ async def get_checkpointer():
         settings = get_settings()
         raw_url = settings.database.url
         pg_url = raw_url.replace("postgresql+asyncpg://", "postgresql://")
-        _pool = AsyncConnectionPool(pg_url, min_size=1, max_size=5)
+        _pool = AsyncConnectionPool(pg_url, min_size=1, max_size=5, open=False)
+        await _pool.open()
         conn_cm = _pool.connection()
         conn = await conn_cm.__aenter__()
-        conn.autocommit = True
+        await conn.set_autocommit(True)
         conn.row_factory = dict_row
         saver = AsyncPostgresSaver(conn=conn)
         await saver.setup()
