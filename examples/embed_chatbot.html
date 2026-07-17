@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Nexus Agent — Chatbot Embed Example</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+  #messages { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; height: 400px; overflow-y: auto; margin-bottom: 1rem; background: #fafafa; }
+  .msg-user { color: #2563eb; margin: 0.5rem 0; }
+  .msg-agent { color: #059669; margin: 0.5rem 0; }
+  .msg-plan { color: #7c3aed; font-size: 0.9em; margin: 0.5rem 0; }
+  .msg-approval { background: #fef3c7; border: 1px solid #f59e0b; border-radius: 6px; padding: 0.75rem; margin: 0.5rem 0; }
+  #input-area { display: flex; gap: 0.5rem; }
+  #input { flex: 1; padding: 0.5rem; border: 1px solid #ddd; border-radius: 6px; font-size: 1rem; }
+  button { padding: 0.5rem 1rem; background: #2563eb; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 1rem; }
+  button:hover { background: #1d4ed8; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; }
+  .badge-low { background: #dbeafe; color: #1e40af; }
+  .badge-medium { background: #fef3c7; color: #92400e; }
+  .badge-high { background: #fee2e2; color: #991b1b; }
+</style>
+</head>
+<body>
+<h1>Nexus Agent Chat</h1>
+<div id="messages"></div>
+<div id="input-area">
+  <input type="text" id="input" placeholder="Type a message..." />
+  <button id="send-btn" onclick="send()">Send</button>
+</div>
+
+<script>
+  const API = 'http://localhost:8000';
+  const TOKEN = '<your-jwt-or-api-key>';
+
+  let sessionId = null;
+  const messagesEl = document.getElementById('messages');
+  const inputEl = document.getElementById('input');
+  const sendBtn = document.getElementById('send-btn');
+
+  // Auto-create a session on page load
+  async function init() {
+    const resp = await fetch(`${API}/api/v1/sessions`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Web Embed Chat' }),
+    });
+    const data = await resp.json();
+    sessionId = data.id;
+    addMessage('system', `Session created: ${sessionId.slice(0, 8)}...`);
+  }
+
+  function addMessage(role, content) {
+    const div = document.createElement('div');
+    div.className = `msg-${role}`;
+    div.textContent = role === 'user' ? `You: ${content}`
+      : role === 'agent' ? `Agent: ${content}`
+      : role === 'plan' ? `Plan: ${content}`
+      : content;
+    messagesEl.appendChild(div);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  function showApproval(payload) {
+    const tc = payload.tool_call || {};
+    const div = document.createElement('div');
+    div.className = 'msg-approval';
+    const risk = payload.risk_level || 'low';
+    div.innerHTML = `
+      <strong>⚠️ Approval Required</strong><br/>
+      Tool: <code>${tc.name}</code><br/>
+      Inputs: <code>${JSON.stringify(tc.inputs)}</code><br/>
+      Risk: <span class="badge badge-${risk}">${risk}</span><br/>
+      <button onclick="decide('approve')" style="margin-top:8px;background:#059669">Approve</button>
+      <button onclick="decide('reject')" style="margin-top:8px;background:#dc2626">Reject</button>
+      <button onclick="decideEdit()" style="margin-top:8px;background:#7c3aed">Edit</button>
+    `;
+    div.dataset.payload = JSON.stringify(payload);
+    messagesEl.appendChild(div);
+  }
+
+  window.decide = async function(action) {
+    const payloadEl = document.querySelector('.msg-approval:last-child');
+    if (!payloadEl) return;
+    const payload = JSON.parse(payloadEl.dataset.payload);
+    const resp = await fetch(`${API}/api/v1/approvals/pending/${sessionId}`);
+    const pending = await resp.json();
+    if (pending.length > 0) {
+      await fetch(`${API}/api/v1/approvals/${pending[0].id}/decide`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, comment: action === 'reject' ? 'User declined' : undefined }),
+      });
+      addMessage('system', `Decision: ${action}`);
+    }
+  };
+
+  window.send = async function() {
+    const msg = inputEl.value.trim();
+    if (!msg || !sessionId) return;
+    inputEl.value = '';
+    sendBtn.disabled = true;
+    addMessage('user', msg);
+
+    try {
+      const resp = await fetch(`${API}/api/v1/sessions/${sessionId}/chat`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg, stream: true }),
+      });
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        let eventType = '';
+        for (const line of lines) {
+          if (line.startsWith('event: ')) eventType = line.slice(7);
+          else if (line.startsWith('data: ')) {
+            const data = JSON.parse(line.slice(6));
+            if (data.type === 'final_response') addMessage('agent', data.payload.text || '');
+            else if (data.type === 'plan_created') addMessage('plan', `${data.payload.steps?.length || 0} step(s) planned`);
+            else if (data.type === 'tool_call_completed') addMessage('plan', `Tool ${data.payload.tool_name} completed`);
+            else if (data.type === 'approval_required') showApproval(data.payload);
+            else if (data.type === 'clarification_needed') addMessage('agent', `❓ ${data.payload.question || ''}`);
+            else if (data.type === 'error') addMessage('system', `⚠️ Error: ${data.payload.message || ''}`);
+          }
+        }
+      }
+    } catch (err) {
+      addMessage('system', `⚠️ Connection error: ${err.message}`);
+    }
+    sendBtn.disabled = false;
+  };
+
+  inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
+  init();
+</script>
+</body>
+</html>
