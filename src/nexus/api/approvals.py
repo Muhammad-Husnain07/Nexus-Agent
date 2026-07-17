@@ -12,19 +12,54 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from langgraph.types import Command
 
-from nexus.agent import graph_cache
+from nexus.agent.graph import build_agent_graph
 from nexus.agent.schemas import ApprovalAction
 from nexus.config.settings import get_settings
 from nexus.db.base import async_session
 from nexus.db.models.agent_run import Approval
 from nexus.db.repositories.base import GenericRepository
+from nexus.llm.client import LLMClient
+from nexus.redis_client.client import get_redis_client
+from nexus.redis_client.pubsub import EventBus
+from nexus.tools.discovery import DynamicToolSelector
+from nexus.tools.executor import ToolExecutor
+from nexus.tools.registry import ToolRegistry
 
 logger = structlog.get_logger("nexus.api.approvals")
 
 router = APIRouter(prefix="/approvals", tags=["approvals"])
+
+
+def _build_graph_from_request(request: Request) -> Any:
+    """Build a fresh compiled graph (stateless — state is in the Postgres checkpointer)."""
+    settings = get_settings()
+    tool_registry: ToolRegistry = request.app.state.tool_registry
+
+    llm = LLMClient()
+    event_bus: EventBus | None = None
+    redis_client = get_redis_client()
+    if redis_client is not None:
+        event_bus = EventBus(redis_client)
+
+    tool_executor = ToolExecutor(event_bus=event_bus)
+    tool_selector = DynamicToolSelector(
+        registry=tool_registry,
+        llm_client=llm,
+    )
+    checkpointer = getattr(request.app.state, "checkpointer", None)
+
+    return build_agent_graph(
+        llm_client=llm,
+        tool_selector=tool_selector,
+        tool_executor=tool_executor,
+        event_bus=event_bus,
+        model=settings.llm.default_model,
+        session_factory=async_session,
+        checkpointer=checkpointer,
+    )
 
 
 @router.get("/pending/{session_id}")
@@ -110,6 +145,7 @@ async def get_approval(
 async def decide_approval(
     approval_id: uuid.UUID,
     decision: ApprovalAction,
+    request: Request,
 ) -> dict[str, Any]:
     """Make a decision on a pending approval and resume the agent graph.
 
@@ -146,16 +182,9 @@ async def decide_approval(
                 detail=f"Approval is already {approval.status}",
             )
 
-        # Check session archived (via tool_call payload session_id)
+        # Extract session_id from approval tool_call payload
         tool_call = approval.tool_call or {}
         session_id = tool_call.get("session_id")
-        if session_id:
-            sid = str(session_id)
-            if not graph_cache.has_graph(sid):
-                raise HTTPException(
-                    status_code=410,
-                    detail="Session is no longer active; graph has been evicted",
-                )
 
         # Persist the decision
         resume_value: dict[str, Any] = {
@@ -171,32 +200,25 @@ async def decide_approval(
         )
         await session.commit()
 
-    # Resume the graph
+    # Resume the graph via checkpointer (cross-worker safe, no in-memory cache)
     if session_id:
         sid = str(session_id)
-        graph = graph_cache.get_graph(sid)
-        if graph is not None:
+        try:
+            graph = _build_graph_from_request(request)
             config = {"configurable": {"thread_id": sid}}
-            try:
-                async for _event in graph.astream(
-                    Command(resume=resume_value),
-                    config,
-                    stream_mode="updates",
-                ):
-                    pass  # Consume all events
-            except Exception as exc:
-                err_msg = f"Failed to resume agent: {exc}"
-                logger.error("approvals.resume_failed", approval_id=str(approval_id), error=err_msg)
-                graph_cache.remove_graph(sid)
-                raise HTTPException(
-                    status_code=500,
-                    detail=err_msg,
-                ) from exc
-
-            # Check if graph paused again or completed
-            snapshot = await graph.aget_state(config)
-            if not snapshot.next:
-                graph_cache.remove_graph(sid)
+            async for _event in graph.astream(
+                Command(resume=resume_value),
+                config,
+                stream_mode="updates",
+            ):
+                pass  # Consume all events
+        except Exception as exc:
+            err_msg = f"Failed to resume agent: {exc}"
+            logger.error("approvals.resume_failed", approval_id=str(approval_id), error=err_msg)
+            raise HTTPException(
+                status_code=500,
+                detail=err_msg,
+            ) from exc
 
     return {
         "status": "ok",

@@ -229,6 +229,7 @@ def _initial_state(user_message: str) -> AgentState:
         "tenant_id": "00000000-0000-0000-0000-000000000001",
         "session_id": "00000000-0000-0000-0000-000000000002",
         "user_id": "00000000-0000-0000-0000-000000000003",
+        "user_context": {"id": "00000000-0000-0000-0000-000000000003"},
         "plan": None,
         "current_step_index": 0,
         "gathered_requirements": {},

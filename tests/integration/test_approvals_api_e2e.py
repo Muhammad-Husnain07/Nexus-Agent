@@ -226,8 +226,7 @@ class TestApprovalsAPIE2E:
         with (
             patch("nexus.api.approvals.async_session", return_value=mock_session),
             patch("nexus.api.approvals.GenericRepository", return_value=mock_repo),
-            patch("nexus.api.approvals.graph_cache.get_graph", return_value=mock_graph),
-            patch("nexus.api.approvals.graph_cache.has_graph", return_value=True),
+            patch("nexus.api.approvals.build_agent_graph", return_value=mock_graph),
         ):
             resp = client.post(
                 f"/api/v1/approvals/{approval_id}/decide",
@@ -264,8 +263,7 @@ class TestApprovalsAPIE2E:
         with (
             patch("nexus.api.approvals.async_session", return_value=mock_session),
             patch("nexus.api.approvals.GenericRepository", return_value=mock_repo),
-            patch("nexus.api.approvals.graph_cache.has_graph", return_value=True),
-            patch("nexus.api.approvals.graph_cache.get_graph", return_value=mock_graph),
+            patch("nexus.api.approvals.build_agent_graph", return_value=mock_graph),
         ):
             resp = client.post(
                 f"/api/v1/approvals/{approval_id}/decide",
@@ -300,8 +298,7 @@ class TestApprovalsAPIE2E:
         with (
             patch("nexus.api.approvals.async_session", return_value=mock_session),
             patch("nexus.api.approvals.GenericRepository", return_value=mock_repo),
-            patch("nexus.api.approvals.graph_cache.has_graph", return_value=True),
-            patch("nexus.api.approvals.graph_cache.get_graph", return_value=mock_graph),
+            patch("nexus.api.approvals.build_agent_graph", return_value=mock_graph),
         ):
             resp = client.post(
                 f"/api/v1/approvals/{approval_id}/decide",
@@ -352,25 +349,32 @@ class TestApprovalsAPIE2E:
         assert resp.status_code == 404
 
     def test_decide_session_gone(self, client: TestClient) -> None:
-        """POST /{id}/decide returns 410 if graph cache evicted."""
+        """POST /{id}/decide succeeds without in-memory cache (state from checkpointer)."""
         session_id = "00000000-0000-0000-0000-000000000001"
         approval_id = uuid.uuid4()
         mock_approval = _make_approval_row(
             approval_id=approval_id,
             session_id=session_id,
         )
+        mock_graph = MagicMock()
+        mock_graph.astream = _make_empty_astream()
+        mock_graph.aget_state = AsyncMock()
+        mock_graph.aget_state.return_value.next = ()
 
         mock_session = _make_mock_session()
         mock_repo = MagicMock()
         mock_repo.get = AsyncMock(return_value=mock_approval)
+        mock_repo.update = AsyncMock(return_value=None)
         mock_session.__aenter__.return_value = mock_session
 
-        with patch("nexus.api.approvals.async_session", return_value=mock_session):
-            with patch("nexus.api.approvals.GenericRepository", return_value=mock_repo):
-                with patch("nexus.api.approvals.graph_cache.has_graph", return_value=False):
-                    resp = client.post(
-                        f"/api/v1/approvals/{approval_id}/decide",
-                        json={"action": "approve"},
-                    )
+        with (
+            patch("nexus.api.approvals.async_session", return_value=mock_session),
+            patch("nexus.api.approvals.GenericRepository", return_value=mock_repo),
+            patch("nexus.api.approvals.build_agent_graph", return_value=mock_graph),
+        ):
+            resp = client.post(
+                f"/api/v1/approvals/{approval_id}/decide",
+                json={"action": "approve"},
+            )
 
-        assert resp.status_code == 410
+        assert resp.status_code == 200

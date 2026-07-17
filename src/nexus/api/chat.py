@@ -1,8 +1,7 @@
 """Chat SSE endpoint — stream agent events in real time via Server-Sent Events.
 
-Provides a single ``POST /api/v1/sessions/{session_id}/chat`` endpoint that
-accepts a user message and streams agent execution events back via SSE with
-a 15-second heartbeat.
+Provides ``POST /sessions/{session_id}/chat`` for invoking the agent,
+and ``GET /sessions/{session_id}/state`` for inspecting checkpoint state.
 """
 
 from __future__ import annotations
@@ -14,11 +13,12 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 from starlette.requests import Request as StarletteRequest
 
 from nexus.agent.runner import AgentEvent, AgentRunner
+from nexus.agent.schemas import AgentStateResponse
 from nexus.api.dependencies import get_agent_runner
 from nexus.api.schemas import ChatRequest, ChatResponse
 from nexus.utils.constants import DEFAULT_TENANT_ID_STR, DEFAULT_USER_ID_STR
@@ -28,6 +28,47 @@ logger = structlog.get_logger("nexus.api.chat")
 router = APIRouter(prefix="/sessions", tags=["chat"])
 
 _HEARTBEAT_INTERVAL = 15
+_MAX_TITLE_LENGTH: int = 80
+
+
+async def _ensure_session_exists(
+    request: Request,
+    session_id: uuid.UUID,
+    user_message: str,
+) -> None:
+    """Create a session in the database if it doesn't exist yet.
+
+    Uses its own DB session with explicit commit to ensure the row
+    persists before the agent's tool executor writes ``ToolExecution``
+    rows that reference it.
+    """
+    from nexus.db.base import async_session  # noqa: PLC0415
+    from nexus.db.context import get_tenant  # noqa: PLC0415
+    from nexus.sessions.repository import SessionRepository  # noqa: PLC0415
+
+    try:
+        async with async_session() as db_session:
+            repo = SessionRepository(db_session)
+            existing = await repo.get(session_id)
+            if existing is None:
+                ellipsis = "..." if len(user_message) > _MAX_TITLE_LENGTH else ""
+                title = user_message[:_MAX_TITLE_LENGTH] + ellipsis
+                tid = getattr(request.state, "tenant_id", None)
+                if tid is None:
+                    tid = get_tenant()
+                uid = getattr(request.state, "user_id", None)
+                if uid is None:
+                    uid = uuid.UUID(DEFAULT_USER_ID_STR)
+                await repo.create(
+                    id=session_id,
+                    tenant_id=uuid.UUID(str(tid)) if isinstance(tid, str) else tid,
+                    user_id=uuid.UUID(str(uid)) if isinstance(uid, str) else uid,
+                    title=title,
+                )
+                await db_session.commit()
+                logger.info("session_created_for_agent", session_id=str(session_id))
+    except Exception as exc:
+        logger.warning("session.create_failed", session_id=str(session_id), error=str(exc))
 
 
 def _get_tenant_id(request: StarletteRequest) -> str:
@@ -103,7 +144,6 @@ async def chat(
     tid = _get_tenant_id(request)
 
     # Ensure a DB session record exists before tool execution writes to it
-    from nexus.agent.api import _ensure_session_exists  # noqa: PLC0415
     await _ensure_session_exists(request, session_id, body.message)
 
     runner: AgentRunner = await get_agent_runner(request)
@@ -199,4 +239,53 @@ async def _json_response(
         interrupted=interrupted,
         error=error,
         events=events,
+    )
+
+
+@router.get("/{session_id}/state")
+async def get_session_state(
+    session_id: uuid.UUID,
+    request: Request,
+) -> AgentStateResponse:
+    """Get the current state of an agent run for a session.
+
+    Returns run status, pending approvals, and the final response.
+    Returns 404 if no state exists for the session.
+    """
+    sid = str(session_id)
+    runner: AgentRunner = await get_agent_runner(request)
+    graph = runner._build_graph()
+    config = {"configurable": {"thread_id": sid}}
+
+    try:
+        state_snapshot = await graph.aget_state(config)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve agent state: {exc}",
+        ) from exc
+
+    if not state_snapshot.values.get("messages"):
+        raise HTTPException(
+            status_code=404,
+            detail="No agent run found for this session",
+        )
+
+    pending = state_snapshot.values.get("pending_approval")
+    fr = state_snapshot.values.get("final_response")
+    next_nodes = state_snapshot.next or []
+
+    if not next_nodes:
+        status = "completed"
+    elif pending:
+        status = "paused"
+    else:
+        status = "running"
+
+    return AgentStateResponse(
+        session_id=session_id,
+        status=status,
+        current_node=next_nodes[0] if next_nodes else None,
+        pending_approval=pending,
+        final_response=fr,
     )

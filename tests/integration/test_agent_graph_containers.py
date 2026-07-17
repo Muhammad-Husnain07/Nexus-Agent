@@ -158,6 +158,7 @@ class TestAgentGraphWithTestContainers:
             "tenant_id": str(uuid.uuid4()),
             "session_id": sid,
             "user_id": str(uuid.uuid4()),
+            "user_context": {"id": str(uuid.uuid4())},
             "plan": None,
             "current_step_index": 0,
             "gathered_requirements": {},
