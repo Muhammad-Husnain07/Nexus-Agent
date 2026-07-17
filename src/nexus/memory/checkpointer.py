@@ -1,21 +1,22 @@
-"""Persistent LangGraph checkpointer via PostgresSaver.
+"""Persistent LangGraph checkpointer via AsyncPostgresSaver.
 
-Provides a singleton ``PostgresSaver`` bound to the application's async
-SQLAlchemy engine.  Used by the compiled agent graph to persist checkpoint
+Provides a singleton ``AsyncPostgresSaver`` bound to the application's async
+PostgreSQL pool.  Used by the compiled agent graph to persist checkpoint
 state across process restarts (enables resume + HITL + time-travel).
 """
 
 from __future__ import annotations
 
 import structlog
-from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from nexus.config.settings import get_settings
 
 logger = structlog.get_logger("nexus.memory.checkpointer")
 
-_checkpointer: PostgresSaver | None = None
+_checkpointer: AsyncPostgresSaver | None = None
 _pool: AsyncConnectionPool | None = None
 
 
@@ -32,11 +33,12 @@ def create_pool() -> AsyncConnectionPool:
     return AsyncConnectionPool(pg_url, min_size=1, max_size=5)
 
 
-async def get_checkpointer() -> PostgresSaver:
-    """Return a singleton ``PostgresSaver`` connected via an async pool.
+async def get_checkpointer() -> AsyncPostgresSaver:
+    """Return a singleton ``AsyncPostgresSaver`` connected via an async pool.
 
-    The first call creates the pool, connects the saver, runs ``setup()``
-    to ensure checkpoint tables exist, and caches the instance.
+    The first call creates the pool, connects the saver with ``autocommit``
+    and ``dict_row`` (both required by LangGraph's PostgresSaver), runs
+    ``setup()`` to ensure checkpoint tables exist, and caches the instance.
     """
     global _checkpointer, _pool  # noqa: PLW0603
 
@@ -46,14 +48,16 @@ async def get_checkpointer() -> PostgresSaver:
     if _pool is None:
         _pool = create_pool()
     conn = await _pool.connection()
-    saver = PostgresSaver(conn=conn)
+    conn.autocommit = True
+    conn.row_factory = dict_row
+    saver = AsyncPostgresSaver(conn=conn)
     await saver.setup()
     _checkpointer = saver
     logger.info("checkpointer.initialized")
     return _checkpointer
 
 
-def get_sync_checkpointer() -> PostgresSaver | None:
+def get_sync_checkpointer() -> AsyncPostgresSaver | None:
     """Return the cached checkpointer if already initialised."""
     return _checkpointer
 

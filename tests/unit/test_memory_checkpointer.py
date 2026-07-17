@@ -28,7 +28,7 @@ class TestCheckpointer:
 
         with (
             patch("nexus.memory.checkpointer.create_pool") as mock_create_pool,
-            patch("nexus.memory.checkpointer.PostgresSaver", return_value=mock_saver) as mock_saver_cls,
+            patch("nexus.memory.checkpointer.AsyncPostgresSaver", return_value=mock_saver) as mock_saver_cls,
         ):
             mock_pool = MagicMock()
             mock_pool.connection = AsyncMock(return_value=mock_conn)
@@ -40,6 +40,8 @@ class TestCheckpointer:
             assert saver1 is saver2
             mock_saver_cls.assert_called_once_with(conn=mock_conn)
             mock_saver.setup.assert_awaited_once()
+            # Verify autocommit and row_factory were set on the connection
+            assert mock_conn.autocommit is True
 
     async def test_close_checkpointer(self) -> None:
         mock_pool = MagicMock()
