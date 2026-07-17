@@ -31,3 +31,8 @@ repos:
       - id: check-added-large-files
         args: [--maxkb=1024]
       - id: detect-private-key
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.2
+    hooks:
+      - id: gitleaks

@@ -54,6 +54,24 @@ See [deploy/k8s/](../deploy/k8s/) for all manifests:
 
 ---
 
+## JWT Secret Management
+
+The JWT signing secret (`NEXUS_AUTH__JWT_SECRET`) must NEVER be stored in
+`.env.example` or committed to git. In production, set it via a secret manager
+(HashiCorp Vault, AWS Secrets Manager, GitHub Actions secrets) and inject it
+as an environment variable.
+
+Generate a strong secret:
+
+```bash
+python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+The application will refuse to start if the secret is empty, is the literal
+string ``change-me``, or is shorter than 32 characters.
+
+---
+
 ## Scaling
 
 ### Horizontal Scaling (Kubernetes)

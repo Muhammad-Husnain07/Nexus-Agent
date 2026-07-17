@@ -126,8 +126,8 @@ class AuthSettings(BaseModel):
     """
 
     jwt_secret: SecretStr = Field(
-        default=SecretStr("dev-secret-change-in-production"),
-        description="JWT signing secret",
+        default=SecretStr("change-me"),
+        description="JWT signing secret (min 32 chars; use a 64-char hex string)",
     )
     jwt_algorithm: str = Field(default="HS256", description="JWT signing algorithm")
     jwt_issuer: str = Field(default="nexus-agent", description="JWT issuer (iss)")
@@ -143,18 +143,22 @@ class AuthSettings(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _check_jwt_secret_in_production(self) -> "AuthSettings":
-        """Fail loudly if the default JWT secret is used outside development."""
-        env = os.environ.get("NEXUS_ENV", os.environ.get("ENV", "development"))
-        if (
-            env not in ("development", "dev", "test")
-            and self.jwt_secret.get_secret_value() == "dev-secret-change-in-production"
-        ):
-            msg = (
-                "JWT secret is using the default value. "
-                "Set NEXUS_AUTH__JWT_SECRET in production environments."
+    def _validate_jwt_secret(self) -> "AuthSettings":
+        """Reject weak or missing JWT secrets regardless of environment."""
+        secret = self.jwt_secret.get_secret_value()
+        if not secret or secret == "change-me" or len(secret) < 32:
+            import structlog
+
+            logger = structlog.get_logger("nexus.config.settings")
+            logger.error(
+                "jwt_secret.weak_or_missing",
+                length=len(secret),
+                hint="Set NEXUS_AUTH__JWT_SECRET to a strong random value (min 32 chars, recommended 64-char hex)",
             )
-            raise ValueError(msg)
+            raise RuntimeError(
+                "JWT secret is weak or missing. "
+                "Set NEXUS_AUTH__JWT_SECRET to a strong random value (min 32 chars)."
+            )
         return self
 
 

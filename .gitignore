@@ -52,4 +52,9 @@ alembic/versions/*.pyc
 
 # OS
 Thumbs.db
-token.txt  
+token.txt
+
+# Secrets
+*.token
+*.jwt
+tokens/
