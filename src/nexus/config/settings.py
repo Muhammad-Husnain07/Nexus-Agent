@@ -235,6 +235,18 @@ class AgentSettings(BaseModel):
         ge=1,
         description="Auto-reject pending approvals after this many hours",
     )
+    run_lock_ttl_s: int = Field(
+        default=600,
+        ge=30,
+        le=3600,
+        description="TTL in seconds for the per-session run lock (heartbeat renews every ttl/3)",
+    )
+    max_sub_iterations: int = Field(
+        default=5,
+        ge=1,
+        le=50,
+        description="Max ReAct sub-iterations per step (internal micro-loop)",
+    )
 
 
 class ToolSettings(BaseModel):
@@ -251,9 +263,9 @@ class ToolSettings(BaseModel):
     execution_timeout_s: int = Field(default=30, ge=1, description="Tool execution timeout")
     max_retries: int = Field(default=3, ge=0, description="Max tool retries")
     retry_backoff_s: float = Field(default=1.0, ge=0, description="Retry backoff seconds")
-    sandbox_enabled: bool = Field(default=False, description="Enable sandboxed execution")
+    sandbox_enabled: bool = Field(default=True, description="Enable sandboxed execution")
     allowed_hosts: list[str] = Field(
-        default_factory=lambda: ["*"], description="Allowed external hosts"
+        default_factory=list, description="Allowed external hosts (empty = block all)"
     )
     proxy_url: str | None = Field(
         default=None, description="HTTP proxy URL for tool calls (e.g. http://proxy:8080)"

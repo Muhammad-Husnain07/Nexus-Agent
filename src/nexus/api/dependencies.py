@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
+import structlog
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +25,8 @@ from nexus.sessions.system_prompt import SystemPromptBuilder
 from nexus.tools.discovery import DynamicToolSelector
 from nexus.tools.executor import ToolExecutor
 from nexus.tools.registry import ToolRegistry
+
+logger = structlog.get_logger("nexus.api.dependencies")
 
 __all__ = [
     "AgentRunnerDep",
@@ -72,12 +75,25 @@ async def get_agent_runner(request: Request) -> Any:
     llm = LLMClient()
     redis_client = get_redis_client()
     event_bus = EventBus(redis_client) if redis_client else None
-    tool_executor = ToolExecutor(event_bus=event_bus)
+    http_client = getattr(request.app.state, "http_client", None)
+    tool_executor = ToolExecutor(event_bus=event_bus, http_client=http_client)
     tool_selector = DynamicToolSelector(
         registry=tool_registry,
         llm_client=llm,
     )
+    # Resolve checkpointer from settings
+    from nexus.config.settings import get_settings  # noqa: PLC0415
     from nexus.db.base import async_session  # noqa: PLC0415
+    from nexus.memory.checkpointer import get_checkpointer  # noqa: PLC0415
+
+    checkpointer = None
+    settings = get_settings()
+    if settings.memory.checkpointer_type == "postgres":
+        try:
+            checkpointer = await get_checkpointer()
+            logger.info("checkpointer.wired", checkpointer_type="postgres")
+        except Exception as exc:
+            logger.warning("checkpointer.unavailable", error=str(exc))
 
     return AgentRunner(
         llm_client=llm,
@@ -85,6 +101,7 @@ async def get_agent_runner(request: Request) -> Any:
         tool_executor=tool_executor,
         event_bus=event_bus,
         session_factory=async_session,
+        checkpointer=checkpointer,
     )
 
 

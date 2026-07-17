@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import structlog
 from langgraph.checkpoint.postgres import PostgresSaver
-from psycopg import Connection
 from psycopg_pool import AsyncConnectionPool
 
 from nexus.config.settings import get_settings
@@ -17,6 +16,7 @@ from nexus.config.settings import get_settings
 logger = structlog.get_logger("nexus.memory.checkpointer")
 
 _checkpointer: PostgresSaver | None = None
+_pool: AsyncConnectionPool | None = None
 
 
 def create_pool() -> AsyncConnectionPool:
@@ -28,7 +28,6 @@ def create_pool() -> AsyncConnectionPool:
     """
     settings = get_settings()
     raw_url = settings.database.url
-    # psycopg needs postgres:// not postgresql+asyncpg://
     pg_url = raw_url.replace("postgresql+asyncpg://", "postgresql://")
     return AsyncConnectionPool(pg_url, min_size=1, max_size=5)
 
@@ -39,13 +38,14 @@ async def get_checkpointer() -> PostgresSaver:
     The first call creates the pool, connects the saver, runs ``setup()``
     to ensure checkpoint tables exist, and caches the instance.
     """
-    global _checkpointer  # noqa: PLW0603
+    global _checkpointer, _pool  # noqa: PLW0603
 
     if _checkpointer is not None:
         return _checkpointer
 
-    pool = create_pool()
-    conn: Connection = await pool.connection()
+    if _pool is None:
+        _pool = create_pool()
+    conn = await _pool.connection()
     saver = PostgresSaver(conn=conn)
     await saver.setup()
     _checkpointer = saver
@@ -60,11 +60,10 @@ def get_sync_checkpointer() -> PostgresSaver | None:
 
 async def close_checkpointer() -> None:
     """Close the underlying connection pool."""
-    global _checkpointer  # noqa: PLW0603
+    global _checkpointer, _pool  # noqa: PLW0603
 
-    if _checkpointer is not None:
-        pool = _checkpointer.conn.pool  # type: ignore[union-attr]
-        if pool is not None:
-            await pool.close()
-        _checkpointer = None
+    _checkpointer = None
+    if _pool is not None:
+        await _pool.close()
+        _pool = None
         logger.info("checkpointer.closed")

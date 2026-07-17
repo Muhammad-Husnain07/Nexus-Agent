@@ -19,7 +19,9 @@ from collections.abc import AsyncGenerator, Set
 from contextlib import asynccontextmanager
 
 import asyncpg
+import httpx
 import structlog
+from typing import Any
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -145,6 +147,34 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     await start_scheduler()
 
+    # Initialize checkpointer for persistent agent state
+    from nexus.memory.checkpointer import close_checkpointer, get_checkpointer  # noqa: PLC0415
+
+    if settings.memory.checkpointer_type == "postgres":
+        try:
+            cp = await get_checkpointer()
+            app.state.checkpointer = cp
+            logger.info("checkpointer.ready")
+        except Exception as exc:
+            logger.warning("checkpointer.init_failed", error=str(exc))
+
+    # Initialize shared HTTPX client for tool execution (singleton, avoids connection leaks)
+    client_kwargs: dict[str, Any] = {
+        "timeout": httpx.Timeout(settings.tools.execution_timeout_s),
+        "limits": httpx.Limits(max_keepalive_connections=20, max_connections=100),
+    }
+    if settings.tools.http2_enabled:
+        try:
+            import h2  # noqa: F401, PLC0415
+
+            client_kwargs["http2"] = True
+        except ImportError:
+            logger.warning("http2_disabled", reason="h2 package not installed")
+    if settings.tools.proxy_url:
+        client_kwargs["proxies"] = settings.tools.proxy_url
+    app.state.http_client = httpx.AsyncClient(**client_kwargs)
+    logger.info("http_client.initialized")
+
     yield
 
     # ── Graceful shutdown ──────────────────────────────────────────────
@@ -173,6 +203,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.warning("shutdown.force_exit", active_runs=remaining)
 
     await stop_scheduler()
+    await close_checkpointer()
+    if hasattr(app.state, "http_client") and app.state.http_client is not None:
+        await app.state.http_client.aclose()
+        logger.info("http_client.closed")
     await close_redis()
     from nexus.db.base import dispose_engine
 

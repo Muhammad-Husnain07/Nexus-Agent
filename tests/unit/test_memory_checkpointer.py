@@ -44,11 +44,10 @@ class TestCheckpointer:
     async def test_close_checkpointer(self) -> None:
         mock_pool = MagicMock()
         mock_pool.close = AsyncMock()
-        mock_conn = MagicMock()
-        mock_conn.pool = mock_pool
-        mock_saver = MagicMock()
-        mock_saver.conn = mock_conn
 
-        with patch("nexus.memory.checkpointer._checkpointer", mock_saver):
+        with (
+            patch("nexus.memory.checkpointer._checkpointer", MagicMock()),
+            patch("nexus.memory.checkpointer._pool", mock_pool),
+        ):
             await close_checkpointer()
             mock_pool.close.assert_awaited_once()
