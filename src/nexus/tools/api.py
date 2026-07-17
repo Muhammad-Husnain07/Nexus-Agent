@@ -17,7 +17,7 @@ from nexus.tools.schemas import ToolCreate, ToolList, ToolRead, ToolSearchResult
 
 logger = structlog.get_logger("nexus.tools.api")
 
-router = APIRouter(prefix="/api/v1/tools", tags=["tools"])
+router = APIRouter(prefix="/tools", tags=["tools"])
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 

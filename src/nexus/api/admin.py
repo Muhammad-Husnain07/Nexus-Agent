@@ -25,7 +25,7 @@ from nexus.security.rbac import (
 
 logger = structlog.get_logger("nexus.api.admin")
 
-router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
+router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 async def _require_admin(

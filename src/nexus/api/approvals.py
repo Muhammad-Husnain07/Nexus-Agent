@@ -24,7 +24,7 @@ from nexus.db.repositories.base import GenericRepository
 
 logger = structlog.get_logger("nexus.api.approvals")
 
-router = APIRouter(prefix="/api/v1/approvals", tags=["approvals"])
+router = APIRouter(prefix="/approvals", tags=["approvals"])
 
 
 @router.get("/pending/{session_id}")

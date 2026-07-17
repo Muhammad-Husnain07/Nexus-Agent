@@ -16,7 +16,7 @@ from nexus.security.rbac import Permission, require_permission
 
 logger = structlog.get_logger("nexus.observability.cost")
 
-router = APIRouter(prefix="/api/v1/cost", tags=["cost"])
+router = APIRouter(prefix="/cost", tags=["cost"])
 
 
 @router.get(

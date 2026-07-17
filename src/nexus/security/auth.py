@@ -9,7 +9,7 @@ from typing import Any
 
 import structlog
 from argon2 import PasswordHasher
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from jose import JWTError, jwt
 from sqlalchemy import select
 
@@ -22,7 +22,7 @@ from nexus.security.rbac import require_user
 
 logger = structlog.get_logger("nexus.security.auth")
 
-router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+router = APIRouter(prefix="/auth", tags=["auth"])
 
 _ph = PasswordHasher()
 
@@ -187,7 +187,7 @@ async def verify_api_key(key: str, key_hash: str) -> bool:
 
 
 @router.post("/login")
-async def login(email: str) -> dict[str, str]:
+async def login(email: str = Body(..., embed=True)) -> dict[str, str]:
     """Issue access + refresh tokens (stub — no password verification yet).
 
     TODO: Add credential verification (password hash, OAuth, etc.) when

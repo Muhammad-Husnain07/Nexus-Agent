@@ -37,7 +37,7 @@ from nexus.tools.registry import ToolRegistry
 
 logger = structlog.get_logger("nexus.agent.api")
 
-router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
+router = APIRouter(prefix="/agent", tags=["agent"])
 
 # ---------------------------------------------------------------------------
 # Shared compiled graph cache lives in ``graph_cache`` module

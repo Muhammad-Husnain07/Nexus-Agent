@@ -26,7 +26,7 @@ from nexus.tools.registry import ToolRegistry
 
 logger = structlog.get_logger("nexus.api.websocket")
 
-router = APIRouter(prefix="/api/v1/sessions", tags=["chat"])
+router = APIRouter(prefix="/sessions", tags=["chat"])
 
 
 @router.websocket("/{session_id}/ws")

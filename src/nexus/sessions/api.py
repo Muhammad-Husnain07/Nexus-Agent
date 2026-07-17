@@ -26,7 +26,7 @@ from nexus.sessions.service import SessionService
 
 logger = structlog.get_logger("nexus.sessions.api")
 
-router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
+router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 

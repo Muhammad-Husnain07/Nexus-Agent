@@ -25,7 +25,7 @@ from nexus.utils.constants import DEFAULT_TENANT_ID_STR, DEFAULT_USER_ID_STR
 
 logger = structlog.get_logger("nexus.api.chat")
 
-router = APIRouter(prefix="/api/v1/sessions", tags=["chat"])
+router = APIRouter(prefix="/sessions", tags=["chat"])
 
 _HEARTBEAT_INTERVAL = 15
 

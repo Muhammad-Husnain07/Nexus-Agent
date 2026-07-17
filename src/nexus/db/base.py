@@ -89,7 +89,7 @@ def get_engine() -> AsyncEngine:
             pool_pre_ping=True,
             echo=settings.database.echo_sql,
             connect_args={
-                "statement_timeout": settings.database.statement_timeout_ms,
+                "command_timeout": settings.database.statement_timeout_ms / 1000,
             },
         )
     return _engine
