@@ -43,8 +43,10 @@ def requires_approval(
     if tool_read.requires_approval:
         return True
 
-    step = plan_step if isinstance(plan_step, dict) else (
-        plan_step.model_dump(mode="json") if plan_step else {}
+    step = (
+        plan_step
+        if isinstance(plan_step, dict)
+        else (plan_step.model_dump(mode="json") if plan_step else {})
     )
     if step.get("is_destructive", False):
         return True
@@ -54,15 +56,13 @@ def requires_approval(
 
     if settings is None:
         from nexus.config.settings import get_settings
+
         settings = get_settings().agent
 
     if settings.hitl_default:
         return True
 
-    return any(
-        re.search(pattern, tool_read.name)
-        for pattern in settings.hitl_tool_patterns
-    )
+    return any(re.search(pattern, tool_read.name) for pattern in settings.hitl_tool_patterns)
 
 
 def build_approval_payload(

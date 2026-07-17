@@ -51,6 +51,7 @@ def _get_tenant_id(request: Request) -> uuid.UUID:
     if tid is not None:
         return uuid.UUID(tid) if isinstance(tid, str) else tid
     from nexus.db.context import get_tenant  # noqa: PLC0415
+
     ct = get_tenant()
     if ct is not None:
         return ct
@@ -227,18 +228,18 @@ async def _check_if_run_exists(
 # Helper: translate LangGraph state updates to event dicts
 # ---------------------------------------------------------------------------
 
+
 def _translate_events(state_updates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Convert a list of LangGraph state-update dicts into flat event dicts."""
     events: list[dict[str, Any]] = []
     for update in state_updates:
         for node_name, state_update in update.items():
-            events.append({
-                "node": node_name,
-                "update": {
-                    k: v for k, v in state_update.items()
-                    if v is not None
-                },
-            })
+            events.append(
+                {
+                    "node": node_name,
+                    "update": {k: v for k, v in state_update.items() if v is not None},
+                }
+            )
     return events
 
 
@@ -378,11 +379,13 @@ async def stream_agent(
                 if state_update.get("pending_approval") is not None:
                     yield {
                         "event": "interrupt",
-                        "data": json.dumps({
-                            "type": "approval_required",
-                            "session_id": sid,
-                            "payload": state_update["pending_approval"],
-                        }),
+                        "data": json.dumps(
+                            {
+                                "type": "approval_required",
+                                "session_id": sid,
+                                "payload": state_update["pending_approval"],
+                            }
+                        ),
                     }
                     return
 
@@ -508,7 +511,9 @@ async def approve_tool(
 ) -> AgentResumeResponse:
     """Approve a pending tool call and resume execution."""
     return await resume_agent(
-        session_id, ApprovalAction(action="approve"), request,
+        session_id,
+        ApprovalAction(action="approve"),
+        request,
     )
 
 
@@ -519,7 +524,9 @@ async def reject_tool(
 ) -> AgentResumeResponse:
     """Reject a pending tool call and resume execution (tool is skipped)."""
     return await resume_agent(
-        session_id, ApprovalAction(action="reject"), request,
+        session_id,
+        ApprovalAction(action="reject"),
+        request,
     )
 
 

@@ -42,12 +42,15 @@ async def plan(
     """
     tools: list[dict[str, Any]] = state.get("available_tools", [])
     tool_descriptions = json.dumps(
-        [{
-            "name": t["name"],
-            "description": t.get("description", ""),
-            "requires_approval": t.get("requires_approval", False),
-            "risk_level": t.get("risk_level", "low"),
-        } for t in tools],
+        [
+            {
+                "name": t["name"],
+                "description": t.get("description", ""),
+                "requires_approval": t.get("requires_approval", False),
+                "risk_level": t.get("risk_level", "low"),
+            }
+            for t in tools
+        ],
         indent=2,
     )
     intent: dict[str, Any] = state.get("intent") or {}

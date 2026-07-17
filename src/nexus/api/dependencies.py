@@ -1,19 +1,19 @@
 """FastAPI dependencies — tenant, user, services, and registries.
 
 Provides reusable ``Annotated`` type aliases for dependency injection
-across all API routers.
+across all API routers.  The lightweight ``TenantDep``/``UserDep`` are
+re-exported from ``nexus.api.depends`` to avoid circular imports.
 """
 
 from __future__ import annotations
 
-import uuid
 from typing import Annotated, Any
 
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nexus.api.depends import TenantDep, UserDep
 from nexus.db.base import get_session
-from nexus.db.context import get_tenant
 from nexus.llm.client import LLMClient
 from nexus.redis_client.client import get_redis_client
 from nexus.redis_client.pubsub import EventBus
@@ -25,27 +25,20 @@ from nexus.tools.discovery import DynamicToolSelector
 from nexus.tools.executor import ToolExecutor
 from nexus.tools.registry import ToolRegistry
 
-# ---------------------------------------------------------------------------
-# Tenant & User
-# ---------------------------------------------------------------------------
-
-async def current_tenant() -> uuid.UUID | None:
-    """Return the currently active tenant from the middleware-set context var."""
-    return get_tenant()
-
-
-async def current_user(request: Request) -> uuid.UUID | None:
-    """Return the authenticated user ID from the request state."""
-    return request.state.user_id if hasattr(request.state, "user_id") else None
-
-
-TenantDep = Annotated[uuid.UUID | None, Depends(current_tenant)]
-UserDep = Annotated[uuid.UUID | None, Depends(current_user)]
+__all__ = [
+    "AgentRunnerDep",
+    "SessionDep",
+    "SessionServiceDep",
+    "TenantDep",
+    "ToolRegistryDep",
+    "UserDep",
+]
 
 
 # ---------------------------------------------------------------------------
 # Session
 # ---------------------------------------------------------------------------
+
 
 async def get_session_service(db: Annotated[AsyncSession, Depends(get_session)]) -> SessionService:
     """Build a SessionService wired to the DB session and LLM."""
@@ -56,9 +49,7 @@ async def get_session_service(db: Annotated[AsyncSession, Depends(get_session)])
     return SessionService(
         session_repo=SessionRepository(db),
         message_repo=MessageRepository(db),
-        context_window=ContextWindowManager(
-            llm_client=llm, model=settings.llm.default_model
-        ),
+        context_window=ContextWindowManager(llm_client=llm, model=settings.llm.default_model),
         prompt_builder=SystemPromptBuilder(llm_client=llm),
         llm_client=llm,
         model=settings.llm.default_model,
@@ -71,6 +62,7 @@ SessionServiceDep = Annotated[SessionService, Depends(get_session_service)]
 # ---------------------------------------------------------------------------
 # Agent
 # ---------------------------------------------------------------------------
+
 
 async def get_agent_runner(request: Request) -> Any:
     """Build an AgentRunner wired to the application's services."""
@@ -102,6 +94,7 @@ AgentRunnerDep = Annotated[Any, Depends(get_agent_runner)]
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
+
 
 async def get_tool_registry(request: Request) -> ToolRegistry:
     """Return the cached tool registry from the application state."""

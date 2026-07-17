@@ -87,6 +87,7 @@ def _resolve_placeholders(
                 if key == "user.email":
                     return "${{user.email}}"  # Keep as literal if not resolved
             return f"${{{key}}}"  # Keep as literal
+
         return _PLACEHOLDER_RE.sub(_replacer, val)
 
     resolved: dict[str, Any] = {}

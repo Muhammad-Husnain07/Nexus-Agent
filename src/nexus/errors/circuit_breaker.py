@@ -137,4 +137,5 @@ registry = CircuitBreakerRegistry()
 
 def _is_async(func: Any) -> bool:
     import asyncio
+
     return asyncio.iscoroutinefunction(func)

@@ -8,11 +8,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 import structlog
-from langgraph.graph import StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from nexus.agent.graph import build_agent_graph
 from nexus.agent.state import AgentState
 from nexus.llm.client import LLMClient
+from nexus.redis_client.client import get_redis_client
 from nexus.redis_client.pubsub import EventBus, agent_channel
 from nexus.tools.discovery import DynamicToolSelector
 from nexus.tools.executor import ToolExecutor
@@ -55,6 +56,9 @@ class AgentEvent:
 class AgentRunner:
     """Orchestrates a single agent run and streams events.
 
+    Caches compiled graphs per session to preserve conversation state
+    across turns (checkpointer state, plan continuity).
+
     Usage::
 
         runner = AgentRunner(llm_client, tool_selector, tool_executor, event_bus)
@@ -77,6 +81,20 @@ class AgentRunner:
         self._executor = tool_executor
         self._event_bus = event_bus
         self._session_factory = session_factory
+        self._graphs: dict[str, CompiledStateGraph] = {}
+
+    def _get_or_create_graph(self, session_id: str) -> CompiledStateGraph:
+        """Return a cached compiled graph for the session, creating if needed."""
+        if session_id not in self._graphs:
+            graph = build_agent_graph(
+                llm_client=self._llm,
+                tool_selector=self._selector,
+                tool_executor=self._executor,
+                event_bus=self._event_bus,
+                session_factory=self._session_factory,
+            )
+            self._graphs[session_id] = graph
+        return self._graphs[session_id]
 
     async def invoke(
         self,
@@ -99,17 +117,11 @@ class AgentRunner:
         Yields:
             ``AgentEvent`` instances as the graph progresses.
         """
-        graph: StateGraph = build_agent_graph(
-            llm_client=self._llm,
-            tool_selector=self._selector,
-            tool_executor=self._executor,
-            event_bus=self._event_bus,
-            session_factory=self._session_factory,
-        )
-
         sid = str(session_id)
         tid = str(tenant_id)
         uid = str(user_id)
+
+        graph = self._get_or_create_graph(sid)
 
         initial_state: AgentState = {
             "messages": [{"role": "user", "content": user_message}],
@@ -134,6 +146,25 @@ class AgentRunner:
         run_config: dict[str, Any] = dict(config or {})
         run_config.setdefault("configurable", {})["thread_id"] = sid
 
+        redis = get_redis_client()
+        lock_acquired = False
+        lock_key = f"lock:agent_run:{sid}"
+        lock_token = ""
+
+        if redis is not None:
+            import secrets
+
+            lock_token = secrets.token_hex(16)
+            acquired = await redis.set(lock_key, lock_token, nx=True, ex=120)
+            if not acquired:
+                error_event = AgentEvent(
+                    "error",
+                    {"message": "Another agent run is already in progress for this session"},
+                )
+                yield error_event
+                return
+            lock_acquired = True
+
         try:
             async for event in graph.astream(initial_state, run_config, stream_mode="updates"):
                 node_name: str = next(iter(event))
@@ -152,6 +183,20 @@ class AgentRunner:
             if self._event_bus:
                 await self._event_bus.publish(agent_channel(sid), error_event.to_dict())
             yield error_event
+        finally:
+            if lock_acquired and redis is not None:
+                try:
+                    release_script = redis.register_script(
+                        "if redis.call('GET', KEYS[1]) == ARGV[1] then "
+                        "return redis.call('DEL', KEYS[1]) else return 0 end"
+                    )
+                    await release_script(keys=[lock_key], args=[lock_token])
+                except Exception:
+                    logger.warning("agent.lock_release_failed", session_id=sid)
+
+    def evict_session(self, session_id: str) -> None:
+        """Remove a cached graph for a session."""
+        self._graphs.pop(session_id, None)
 
     @staticmethod
     def _translate(node_name: str, state_update: dict[str, Any]) -> list[AgentEvent]:

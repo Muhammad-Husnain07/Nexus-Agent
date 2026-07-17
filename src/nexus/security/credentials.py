@@ -6,6 +6,8 @@ Decrypted credentials are never logged.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import uuid
@@ -18,16 +20,12 @@ from sqlalchemy import select
 from nexus.config.secrets import SecretResolver
 from nexus.config.settings import get_settings
 from nexus.db.base import async_session
-from nexus.db.models.tool import Tool
+from nexus.db.models.credential import ToolCredential
 
 logger = structlog.get_logger("nexus.security.credentials")
 
 _KEY_CACHE: bytes | None = None
 _KEY_REF: str = ""
-
-# Model name for the credential — we store encrypted blobs in tool.metadata_
-# since the Tool model already has a metadata_ JSONB column.
-# In production, a dedicated Credential table should be created via migration.
 
 
 def _get_master_key() -> bytes:
@@ -56,9 +54,6 @@ def _get_master_key() -> bytes:
         secret = resolver.resolve(ref)
 
     raw = secret.get_secret_value().encode("utf-8")
-    # Derive a 32-byte key using SHA-256
-    import hashlib
-
     key = hashlib.sha256(raw).digest()
     _KEY_CACHE = key
     _KEY_REF = ref
@@ -75,15 +70,12 @@ def encrypt_credential(auth_type: str, payload: dict[str, Any]) -> str:
     Returns:
         Base64-encoded encrypted blob string.
     """
-    import base64
-
     key = _get_master_key()
     aesgcm = AESGCM(key)
     nonce = os.urandom(12)
     plaintext = json.dumps({"type": auth_type, **payload}).encode("utf-8")
     ciphertext = aesgcm.encrypt(nonce, plaintext, None)
-    blob = base64.b64encode(nonce + ciphertext).decode("ascii")
-    return blob
+    return base64.b64encode(nonce + ciphertext).decode("ascii")
 
 
 def decrypt_credential(encrypted_blob: str) -> dict[str, Any]:
@@ -95,8 +87,6 @@ def decrypt_credential(encrypted_blob: str) -> dict[str, Any]:
     Returns:
         The original credential payload dict.
     """
-    import base64
-
     key = _get_master_key()
     aesgcm = AESGCM(key)
     raw = base64.b64decode(encrypted_blob.encode("ascii"))
@@ -106,14 +96,45 @@ def decrypt_credential(encrypted_blob: str) -> dict[str, Any]:
     return dict(json.loads(plaintext.decode("utf-8")))
 
 
+async def store_credential(
+    tenant_id: uuid.UUID,
+    tool_id: uuid.UUID,
+    auth_type: str,
+    payload: dict[str, Any],
+) -> ToolCredential:
+    """Encrypt and persist a credential for a tool.
+
+    Args:
+        tenant_id: The tenant UUID.
+        tool_id: The tool UUID.
+        auth_type: Authentication type (bearer, basic, oauth2, api_key).
+        payload: The credential data dict.
+
+    Returns:
+        The created ToolCredential record.
+    """
+    encrypted = encrypt_credential(auth_type, payload)
+    async with async_session() as session:
+        credential = ToolCredential(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            tool_id=tool_id,
+            auth_type=auth_type,
+            encrypted_blob=encrypted,
+        )
+        session.add(credential)
+        await session.commit()
+    logger.info("credential.stored", tool_id=str(tool_id), auth_type=auth_type)
+    return credential
+
+
 async def resolve_credential(
     tool_id: uuid.UUID,
     tenant_id: uuid.UUID,
 ) -> dict[str, Any]:
     """Resolve and decrypt the credential for a tool.
 
-    Fetches the tool from the DB, extracts the encrypted credential
-    from ``tool.metadata_.get("encrypted_credential")``, decrypts it,
+    Fetches the ToolCredential row from the DB, decrypts the blob,
     and returns the plaintext credential dict.
 
     The decrypted credential is **never logged**.
@@ -127,22 +148,24 @@ async def resolve_credential(
         ``password``, etc.
 
     Raises:
-        LookupError: If the tool is not found or has no credential.
+        LookupError: If the tool has no stored credential.
     """
     async with async_session() as session:
-        stmt = select(Tool).where(Tool.id == tool_id, Tool.tenant_id == tenant_id)
+        stmt = (
+            select(ToolCredential)
+            .where(
+                ToolCredential.tool_id == tool_id,
+                ToolCredential.tenant_id == tenant_id,
+            )
+            .order_by(ToolCredential.created_at.desc())
+            .limit(1)
+        )
         result = await session.execute(stmt)
-        tool = result.scalar_one_or_none()
+        credential = result.scalar_one_or_none()
 
-    if tool is None:
-        raise LookupError(f"Tool {tool_id} not found for tenant {tenant_id}")
+    if credential is None:
+        raise LookupError(f"No credential stored for tool {tool_id}")
 
-    metadata = tool.metadata_ or {}
-    encrypted = metadata.get("encrypted_credential")
-    if not encrypted:
-        raise LookupError(f"Tool {tool_id} has no stored credential")
-
-    credential = decrypt_credential(encrypted)
-    # Sanitise: never log the decrypted content
+    decrypted = decrypt_credential(credential.encrypted_blob)
     logger.info("credential.resolved", tool_id=str(tool_id))
-    return credential
+    return decrypted

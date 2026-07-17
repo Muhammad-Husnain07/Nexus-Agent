@@ -88,7 +88,7 @@ class DegradationManager:
             "tool_name": tool_name,
             "error_code": ErrorCode.SERVICE_DEGRADED.value,
             "message": f"The tool '{tool_name}' is currently unavailable.  "
-                       f"Please try again later or use an alternative tool.",
+            f"Please try again later or use an alternative tool.",
             "retryable": True,
         }
 

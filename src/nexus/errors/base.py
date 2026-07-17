@@ -77,6 +77,7 @@ class NexusError(Exception):
 
 # ── Security Errors ─────────────────────────────────────────────────────────
 
+
 class UnauthorizedError(NexusError):
     def __init__(self, message: str = "Authentication required", **kwargs: Any) -> None:
         super().__init__(code=ErrorCode.UNAUTHORIZED, message=message, status_code=401, **kwargs)
@@ -89,14 +90,21 @@ class ForbiddenError(NexusError):
 
 class TenantSuspendedError(NexusError):
     def __init__(self, message: str = "Tenant account is suspended", **kwargs: Any) -> None:
-        super().__init__(code=ErrorCode.TENANT_SUSPENDED, message=message, status_code=403, **kwargs)
+        super().__init__(
+            code=ErrorCode.TENANT_SUSPENDED, message=message, status_code=403, **kwargs
+        )
 
 
 # ── Agent Errors ────────────────────────────────────────────────────────────
 
+
 class AgentError(NexusError):
-    def __init__(self, code: ErrorCode = ErrorCode.INTERNAL_ERROR, message: str = "Agent error",
-                 **kwargs: Any) -> None:
+    def __init__(
+        self,
+        code: ErrorCode = ErrorCode.INTERNAL_ERROR,
+        message: str = "Agent error",
+        **kwargs: Any,
+    ) -> None:
         super().__init__(code=code, message=message, status_code=400, **kwargs)
 
 
@@ -127,9 +135,11 @@ class ApprovalRejected(AgentError):
 
 # ── Rate / Quota Errors ─────────────────────────────────────────────────────
 
+
 class RateLimitError(NexusError):
-    def __init__(self, message: str = "Rate limit exceeded", retry_after_s: float = 0.0,
-                 **kwargs: Any) -> None:
+    def __init__(
+        self, message: str = "Rate limit exceeded", retry_after_s: float = 0.0, **kwargs: Any
+    ) -> None:
         self.retry_after_s = retry_after_s
         super().__init__(code=ErrorCode.RATE_LIMITED, message=message, status_code=429, **kwargs)
 
@@ -140,6 +150,7 @@ class QuotaExceededError(NexusError):
 
 
 # ── Resilience Errors ───────────────────────────────────────────────────────
+
 
 class CircuitOpenError(NexusError):
     """Raised when a circuit breaker is open and the call is rejected."""

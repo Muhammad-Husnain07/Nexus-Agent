@@ -56,6 +56,8 @@ def _setup_opentelemetry(settings: Settings) -> None:
 
     trace.set_tracer_provider(provider)
 
+    _setup_auto_instrumentation()
+
     import litellm  # noqa: PLC0415
     from litellm.integrations.custom_logger import CustomLogger  # noqa: PLC0415
 
@@ -94,3 +96,32 @@ def _setup_opentelemetry(settings: Settings) -> None:
         "OpenTelemetry tracing enabled for LiteLLM",
         extra={"endpoint": endpoint},
     )
+
+
+def _setup_auto_instrumentation() -> None:
+    """Auto-instrument httpx, asyncpg, redis, and fastapi for OpenTelemetry."""
+    try:
+        from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+
+        HTTPXClientInstrumentor().instrument()
+    except ImportError:
+        pass
+
+    try:
+        from opentelemetry.instrumentation.asyncpg import AsyncPGInstrumentor
+
+        AsyncPGInstrumentor().instrument()
+    except ImportError:
+        pass
+
+    try:
+        from opentelemetry.instrumentation.redis import RedisInstrumentor
+
+        RedisInstrumentor().instrument()
+    except ImportError:
+        pass
+
+    try:
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    except ImportError:
+        pass

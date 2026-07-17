@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import Sequence
 from typing import Any
@@ -56,6 +57,12 @@ def count_tokens(text: str, model: str = "gpt-4o") -> int:
     return len(encoding.encode(text))
 
 
+async def count_tokens_async(text: str, model: str = "gpt-4o") -> int:
+    """Count tokens asynchronously by running in an executor."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, count_tokens, text, model)
+
+
 def _message_to_text(msg: MessageModel) -> str:
     """Convert a Message DB model to plain text for token counting.
 
@@ -80,6 +87,14 @@ def messages_token_count(messages: Sequence[MessageModel], model: str = "gpt-4o"
     for msg in messages:
         total += count_tokens(_message_to_text(msg), model)
     return total
+
+
+async def messages_token_count_async(
+    messages: Sequence[MessageModel], model: str = "gpt-4o"
+) -> int:
+    """Count total tokens asynchronously for a sequence of messages."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, messages_token_count, list(messages), model)
 
 
 def _message_to_openai(msg: MessageModel) -> dict[str, Any]:
@@ -125,9 +140,9 @@ class ContextWindowManager:
         self._settings = settings or get_settings().agent
         self._preserve_last_n = preserve_last_n
 
-    def _should_summarize(self, messages: Sequence[MessageModel]) -> bool:
+    async def _should_summarize(self, messages: Sequence[MessageModel]) -> bool:
         """Check if total tokens exceed the summarization threshold."""
-        total = messages_token_count(messages, self._model)
+        total = await messages_token_count_async(messages, self._model)
         return total > self._settings.summarization_threshold_tokens
 
     def _identify_preserved_indices(
@@ -181,7 +196,7 @@ class ContextWindowManager:
         Returns:
             List of OpenAI-format message dicts ready for the LLM.
         """
-        if not self._should_summarize(messages):
+        if not await self._should_summarize(messages):
             return [_message_to_openai(m) for m in messages]
 
         preserved = self._identify_preserved_indices(messages, plan)

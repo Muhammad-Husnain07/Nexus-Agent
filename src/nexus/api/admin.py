@@ -220,8 +220,9 @@ def _audit_to_dict(entry: AuditLog) -> dict[str, Any]:
         "tenant_id": str(entry.tenant_id),
         "action": entry.action,
         "actor_id": str(entry.actor_id) if entry.actor_id else None,
-        "target_type": entry.target_type,
-        "target_id": str(entry.target_id) if entry.target_id else None,
-        "details": entry.details,
+        "resource_type": entry.resource_type,
+        "resource_id": entry.resource_id,
+        "payload": entry.payload,
+        "ip": entry.ip,
         "created_at": entry.created_at.isoformat() if entry.created_at else None,
     }

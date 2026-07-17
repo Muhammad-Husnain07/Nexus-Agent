@@ -26,9 +26,7 @@ class AgentInvokeResponse(BaseModel):
     approval_payload: dict[str, Any] | None = Field(
         default=None, description="Details of the pending approval request"
     )
-    interrupted: bool = Field(
-        default=False, description="Whether execution paused at an interrupt"
-    )
+    interrupted: bool = Field(default=False, description="Whether execution paused at an interrupt")
     error: str | None = Field(default=None, description="Error message if execution failed")
     events: list[dict[str, Any]] = Field(
         default_factory=list, description="All state update events from the run"
@@ -72,9 +70,7 @@ class AgentResumeResponse(BaseModel):
     """Response after resuming from an approval interrupt."""
 
     session_id: uuid.UUID
-    status: str = Field(
-        description="Result status: completed, interrupted, or error"
-    )
+    status: str = Field(description="Result status: completed, interrupted, or error")
     final_response: str | None = Field(
         default=None, description="Final agent response after resume"
     )

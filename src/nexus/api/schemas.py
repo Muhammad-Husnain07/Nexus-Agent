@@ -80,9 +80,7 @@ class ChatResponse(BaseModel):
     approval_payload: dict[str, Any] | None = Field(
         default=None, description="Details of the pending approval request"
     )
-    interrupted: bool = Field(
-        default=False, description="Whether execution paused at an interrupt"
-    )
+    interrupted: bool = Field(default=False, description="Whether execution paused at an interrupt")
     error: str | None = Field(default=None, description="Error message if execution failed")
     events: list[dict[str, Any]] = Field(
         default_factory=list, description="All state update events from the run"
@@ -112,8 +110,10 @@ class ChatStreamEvent(BaseModel):
         "json_schema_extra": {
             "example": {
                 "event": "tool_call_completed",
-                "data": ('{"type":"tool_call_completed","ts":"2026-07-16T12:00:00",'
-                         '"payload":{"tool_name":"send_email","status":"success"}}'),
+                "data": (
+                    '{"type":"tool_call_completed","ts":"2026-07-16T12:00:00",'
+                    '"payload":{"tool_name":"send_email","status":"success"}}'
+                ),
             }
         }
     }

@@ -108,15 +108,13 @@ async def understand_intent(
         "parameters": {s.name: None for s in analysis.missing_info_slots},
     }
 
-    messages.append(
-        _openai_message("assistant", f"Parsed intent: {analysis.primary_goal}")
-    )
+    messages.append(_openai_message("assistant", f"Parsed intent: {analysis.primary_goal}"))
 
     # Low-confidence routing
     if analysis.confidence < 0.5:
         meta_question = (
             f"I'm not entirely sure I understand. "
-            f"You said: \"{last_user[:100]}\". "
+            f'You said: "{last_user[:100]}". '
             f"I think you want to {analysis.primary_goal}, "
             f"but I'm not confident (score: {analysis.confidence:.2f}). "
             f"Could you rephrase or clarify?"

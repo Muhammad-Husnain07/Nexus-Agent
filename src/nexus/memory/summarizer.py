@@ -87,8 +87,7 @@ class EpisodicSummarizer:
 
         if plan:
             step_descriptions = [
-                f"  - {s.get('description', '?')} ({s.get('tool_name', 'none')})"
-                for s in plan
+                f"  - {s.get('description', '?')} ({s.get('tool_name', 'none')})" for s in plan
             ]
             parts.append("Plan steps:\n" + "\n".join(step_descriptions))
 

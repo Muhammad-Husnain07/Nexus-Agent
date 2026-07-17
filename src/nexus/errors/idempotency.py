@@ -47,11 +47,13 @@ async def cache_idempotent_response(
     if redis is None:
         return
 
-    payload = json.dumps({
-        "status_code": status_code,
-        "body": body,
-        "headers": headers or {},
-    })
+    payload = json.dumps(
+        {
+            "status_code": status_code,
+            "body": body,
+            "headers": headers or {},
+        }
+    )
     await redis.set(f"idempotency:{key}", payload, ex=ttl_s)
 
 
@@ -125,7 +127,9 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         try:
             is_new = await try_lock_idempotency_key(idem_key, body_text)
         except IdempotencyConflict as exc:
-            return JSONResponse(status_code=409, content={"error": {"code": exc.code.value, "message": exc.message}})
+            return JSONResponse(
+                status_code=409, content={"error": {"code": exc.code.value, "message": exc.message}}
+            )
 
         if not is_new:
             # Duplicate with same body — fall back to cache check after lock released
@@ -145,7 +149,9 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             response_body = await _extract_response_body(response)
             if response_body is not None:
                 resp_headers = dict(response.headers) if hasattr(response, "headers") else {}
-                await cache_idempotent_response(idem_key, response.status_code, response_body, resp_headers)
+                await cache_idempotent_response(
+                    idem_key, response.status_code, response_body, resp_headers
+                )
 
         return response
 

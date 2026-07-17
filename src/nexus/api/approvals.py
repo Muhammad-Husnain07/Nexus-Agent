@@ -67,13 +67,15 @@ async def list_pending_approvals(
                 await update_session.commit()
             continue
 
-        session_pending.append({
-            "id": str(approval.id),
-            "agent_run_id": str(approval.agent_run_id),
-            "tool_call": approval.tool_call,
-            "status": approval.status,
-            "created_at": approval.created_at.isoformat() if approval.created_at else None,
-        })
+        session_pending.append(
+            {
+                "id": str(approval.id),
+                "agent_run_id": str(approval.agent_run_id),
+                "tool_call": approval.tool_call,
+                "status": approval.status,
+                "created_at": approval.created_at.isoformat() if approval.created_at else None,
+            }
+        )
 
     if auto_rejected:
         logger.info("approvals.auto_rejected", count=len(auto_rejected), ids=auto_rejected)

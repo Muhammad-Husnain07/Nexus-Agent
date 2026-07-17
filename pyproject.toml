@@ -4,6 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["nexus*", "nexus_sdk*"]
 
 [project]
 name = "nexus-agent"
@@ -41,6 +42,8 @@ dependencies = [
     "psycopg-binary>=3.3.4",
     "argon2-cffi>=25.1.0",
     "cryptography>=49.0.0",
+    "jsonschema>=4.23",
+    "prometheus-client>=0.21",
 ]
 
 [dependency-groups]
@@ -52,6 +55,7 @@ dev = [
     "factory-boy>=3.3",
     "freezegun>=1.5",
     "fakeredis[lua]>=2.26",
+    "testcontainers>=4.0",
     "ruff>=0.7",
     "mypy>=1.13",
     "types-requests",
@@ -94,11 +98,21 @@ ignore_missing_imports = true
 module = ["sqlalchemy.dialects.postgresql"]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = ["jsonschema", "prometheus_client", "fastapi_mcp", "sse_starlette", "testcontainers.*", "langsmith.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-ra --strict-markers --cov=nexus --cov-report=term-missing"
 filterwarnings = ["ignore::pytest_cov.plugin.CovReportWarning"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests that require real infrastructure (Docker containers)",
+    "contract: marks API contract tests for tool schemas and response shapes",
+    "eval: marks LLM evaluation tests (may use LangSmith)",
+]
 
 [tool.coverage.run]
 source = ["nexus"]

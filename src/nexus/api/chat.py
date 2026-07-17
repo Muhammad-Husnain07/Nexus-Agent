@@ -13,10 +13,24 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
-from starlette.requests import Request
+import structlog
+from fastapi import APIRouter, Request
+from sse_starlette.sse import EventSourceResponse
+from starlette.requests import Request as StarletteRequest
+
+from nexus.agent.runner import AgentEvent, AgentRunner
+from nexus.api.dependencies import get_agent_runner
+from nexus.api.schemas import ChatRequest, ChatResponse
+from nexus.utils.constants import DEFAULT_TENANT_ID_STR, DEFAULT_USER_ID_STR
+
+logger = structlog.get_logger("nexus.api.chat")
+
+router = APIRouter(prefix="/api/v1/sessions", tags=["chat"])
+
+_HEARTBEAT_INTERVAL = 15
 
 
-def _get_tenant_id(request: Request) -> str:
+def _get_tenant_id(request: StarletteRequest) -> str:
     """Extract tenant_id from request state or middleware context."""
     from nexus.db.context import get_tenant  # noqa: PLC0415
 
@@ -26,29 +40,15 @@ def _get_tenant_id(request: Request) -> str:
     ct = get_tenant()
     if ct is not None:
         return str(ct)
-    return "00000000-0000-0000-0000-000000000001"
+    return DEFAULT_TENANT_ID_STR
 
 
-def _get_user_id(request: Request) -> str:
+def _get_user_id(request: StarletteRequest) -> str:
     """Extract user_id from request state."""
     uid = getattr(request.state, "user_id", None)
     if uid is not None:
         return str(uid)
-    return "00000000-0000-0000-0000-000000000002"
-
-import structlog
-from fastapi import APIRouter, Request
-from sse_starlette.sse import EventSourceResponse
-
-from nexus.agent.runner import AgentEvent, AgentRunner
-from nexus.api.dependencies import get_agent_runner
-from nexus.api.schemas import ChatRequest, ChatResponse
-
-logger = structlog.get_logger("nexus.api.chat")
-
-router = APIRouter(prefix="/api/v1/sessions", tags=["chat"])
-
-_HEARTBEAT_INTERVAL = 15  # seconds
+    return DEFAULT_USER_ID_STR
 
 
 async def _heartbeat_generator(
@@ -56,61 +56,29 @@ async def _heartbeat_generator(
 ) -> AsyncIterator[dict[str, Any]]:
     """Yield SSE events from *event_aiter*, interleaving keepalive comments.
 
-    Sends a ``:keep-alive`` SSE comment every ``_HEARTBEAT_INTERVAL`` seconds
-    so that proxies and browsers do not time out the connection.
+    Uses ``asyncio.wait_for`` with a timeout to send a ``:keep-alive`` SSE
+    comment every ``_HEARTBEAT_INTERVAL`` seconds while waiting for the
+    next agent event.
     """
-    done = False
+    aiter = event_aiter.__aiter__()
 
-    async def _drain() -> None:
-        nonlocal done
-        async for agent_event in event_aiter:
-            yield agent_event
-        done = True
-
-    async def _heartbeat() -> None:
-        while not done:
-            await asyncio.sleep(_HEARTBEAT_INTERVAL)
+    while True:
+        try:
+            event = await asyncio.wait_for(
+                aiter.__anext__(),
+                timeout=_HEARTBEAT_INTERVAL,
+            )
+            if isinstance(event, AgentEvent):
+                yield {"event": event.type, "data": json.dumps(event.to_dict())}
+            else:
+                yield event
+        except TimeoutError:
             yield {"comment": "keep-alive"}
-
-    ag = _drain()
-    hb = _heartbeat()
-
-    ag_task = asyncio.create_task(ag.__anext__())
-    hb_task = asyncio.create_task(hb.__anext__())
-
-    while not done:
-        done_inner = done
-        tasks = [ag_task, hb_task]
-        if done_inner:
-            tasks = [hb_task]
-
-        done_set, _ = await asyncio.wait(
-            tasks,
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-
-        for t in done_set:
-            try:
-                result = t.result()
-                if result is not None:
-                    yield result
-            except StopAsyncIteration:
-                done = True
-                break
-            except Exception as exc:
-                logger.error("chat.heartbeat_error", error=str(exc))
-                done = True
-                break
-
-        if not done:
-            ag_task = asyncio.create_task(ag.__anext__())
-            hb_task = asyncio.create_task(hb.__anext__())
-
-    # Cancel any pending tasks
-    if not ag_task.done():
-        ag_task.cancel()
-    if not hb_task.done():
-        hb_task.cancel()
+        except StopAsyncIteration:
+            break
+        except Exception as exc:
+            logger.error("chat.heartbeat_error", error=str(exc))
+            break
 
 
 @router.post("/{session_id}/chat", response_model=None)
@@ -135,10 +103,12 @@ async def chat(
     tid = _get_tenant_id(request)
 
     runner: AgentRunner = get_agent_runner(request)
+    app_state = request.app.state
 
     if body.stream:
-        return _stream_response(runner, sid, tid, uid, body.message)
-    return await _json_response(runner, sid, tid, uid, body.message)
+        return _stream_response(runner, sid, tid, uid, body.message, app_state)
+    return await _json_response(runner, sid, tid, uid, body.message, app_state)
+
 
 
 def _stream_response(
@@ -147,31 +117,34 @@ def _stream_response(
     tid: str,
     uid: str,
     message: str,
+    app_state: Any = None,
 ) -> EventSourceResponse:
-    """Return an SSE streaming response with heartbeats."""
+    """Return an SSE streaming response with heartbeats and shutdown tracking."""
+
+    conn_id = str(uuid.uuid4())
+    if app_state is not None:
+        if not hasattr(app_state, "active_sse_connections"):
+            app_state.active_sse_connections = set()
+        app_state.active_sse_connections.add(conn_id)
+        app_state.active_agent_runs = getattr(app_state, "active_agent_runs", 0) + 1
 
     async def _generate() -> AsyncIterator[dict[str, Any]]:
-        event_aiter = runner.invoke(
-            session_id=sid,
-            user_message=message,
-            tenant_id=tid,
-            user_id=uid,
-        )
+        try:
+            event_aiter = runner.invoke(
+                session_id=sid,
+                user_message=message,
+                tenant_id=tid,
+                user_id=uid,
+            )
 
-        async for sse_event in _heartbeat_generator(event_aiter):
-            # If it's a keepalive comment, yield as-is
-            if "comment" in sse_event:
-                yield sse_event
-                continue
-
-            # Otherwise it's an AgentEvent wrapped in a dict-like
-            if isinstance(sse_event, AgentEvent):
-                yield {"event": sse_event.type, "data": json.dumps(sse_event.to_dict())}
-            else:
+            async for sse_event in _heartbeat_generator(event_aiter):
                 yield sse_event
 
-        # Signal completion
-        yield {"event": "done", "data": "{}"}
+            yield {"event": "done", "data": "{}"}
+        finally:
+            if app_state is not None:
+                app_state.active_agent_runs = max(0, getattr(app_state, "active_agent_runs", 1) - 1)
+                app_state.active_sse_connections.discard(conn_id)
 
     return EventSourceResponse(_generate())
 
@@ -182,6 +155,7 @@ async def _json_response(
     tid: str,
     uid: str,
     message: str,
+    app_state: Any = None,
 ) -> ChatResponse:
     """Collect all events and return as a single JSON response."""
     events: list[dict[str, Any]] = []
@@ -190,21 +164,28 @@ async def _json_response(
     approval_payload: dict[str, Any] | None = None
     error: str | None = None
 
-    async for agent_event in runner.invoke(
-        session_id=sid,
-        user_message=message,
-        tenant_id=tid,
-        user_id=uid,
-    ):
-        if agent_event.type == "final_response":
-            final_text = agent_event.payload.get("text")
-        elif agent_event.type == "approval_required":
-            interrupted = True
-            approval_payload = agent_event.payload
-        elif agent_event.type == "error":
-            error = agent_event.payload.get("message") or agent_event.payload.get("errors", [""])[0]
+    if app_state is not None:
+        app_state.active_agent_runs = getattr(app_state, "active_agent_runs", 0) + 1
 
-        events.append(agent_event.to_dict())
+    try:
+        async for agent_event in runner.invoke(
+            session_id=sid,
+            user_message=message,
+            tenant_id=tid,
+            user_id=uid,
+        ):
+            if agent_event.type == "final_response":
+                final_text = agent_event.payload.get("text")
+            elif agent_event.type == "approval_required":
+                interrupted = True
+                approval_payload = agent_event.payload
+            elif agent_event.type == "error":
+                error = agent_event.payload.get("message") or agent_event.payload.get("errors", [""])[0]
+
+            events.append(agent_event.to_dict())
+    finally:
+        if app_state is not None:
+            app_state.active_agent_runs = max(0, getattr(app_state, "active_agent_runs", 1) - 1)
 
     return ChatResponse(
         session_id=sid,

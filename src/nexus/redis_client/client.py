@@ -35,13 +35,14 @@ def create_redis_client() -> Redis[Any]:
         return _state.client
 
     settings = get_settings()
-    _state.pool = ConnectionPool.from_url(
-        settings.redis.url,
-        db=settings.redis.db,
-        max_connections=settings.redis.max_connections,
-        decode_responses=True,
-        ssl=settings.redis.ssl,
-    )
+    pool_kwargs: dict[str, Any] = {
+        "db": settings.redis.db,
+        "max_connections": settings.redis.max_connections,
+        "decode_responses": True,
+    }
+    if settings.redis.ssl:
+        pool_kwargs["ssl"] = True
+    _state.pool = ConnectionPool.from_url(settings.redis.url, **pool_kwargs)
     _state.client = Redis(connection_pool=_state.pool)
     return _state.client
 

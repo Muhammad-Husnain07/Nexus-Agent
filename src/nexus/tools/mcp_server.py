@@ -11,10 +11,11 @@ import uuid
 
 import httpx
 import structlog
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, Request
 from fastapi_mcp import FastApiMCP
 
 from nexus.db.base import get_session
+from nexus.db.context import get_tenant
 from nexus.tools.registry import ToolRegistry
 
 logger = structlog.get_logger("nexus.tools.mcp")
@@ -25,10 +26,11 @@ def setup_mcp(app: FastAPI, registry: ToolRegistry) -> None:
     mcp_internal = APIRouter(prefix="/_mcp", tags=["mcp"])
 
     @mcp_internal.get("/tools/list")
-    async def mcp_list_tools() -> list[dict[str, object]]:
+    async def mcp_list_tools(request: Request) -> list[dict[str, object]]:
+        tenant_id = _resolve_tenant(request)
         results: list[dict[str, object]] = []
         async for session in get_session():
-            tool_list = await registry.list(session, uuid.UUID(int=0), enabled=True, page_size=500)
+            tool_list = await registry.list(session, tenant_id, enabled=True, page_size=500)
             for t in tool_list.items:
                 results.append(
                     {
@@ -41,12 +43,14 @@ def setup_mcp(app: FastAPI, registry: ToolRegistry) -> None:
 
     @mcp_internal.post("/tools/call")
     async def mcp_call_tool(
+        request: Request,
         tool_name: str,
         arguments: dict[str, object] | None = None,
     ) -> list[dict[str, object]]:
+        tenant_id = _resolve_tenant(request)
         args = arguments or {}
         async for session in get_session():
-            tool_list = await registry.list(session, uuid.UUID(int=0), enabled=True, page_size=500)
+            tool_list = await registry.list(session, tenant_id, enabled=True, page_size=500)
             tool = next((t for t in tool_list.items if t.name == tool_name), None)
             if tool is None:
                 return [{"content": f"Tool '{tool_name}' not found", "is_error": True}]
@@ -87,3 +91,15 @@ def setup_mcp(app: FastAPI, registry: ToolRegistry) -> None:
         include_tags=["mcp"],
     )
     logger.info("mcp.server.attached", base_url="/mcp")
+
+
+def _resolve_tenant(request: Request) -> uuid.UUID:
+    """Resolve tenant ID from request context or state."""
+    tid = getattr(request.state, "tenant_id", None)
+    if tid is not None:
+        return uuid.UUID(tid) if isinstance(tid, str) else tid
+    ct = get_tenant()
+    if ct is not None:
+        return ct
+    msg = "MCP endpoints require tenant context"
+    raise ValueError(msg)

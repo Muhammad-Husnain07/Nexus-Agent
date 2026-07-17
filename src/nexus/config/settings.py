@@ -1,9 +1,10 @@
 """Application settings via Pydantic BaseSettings with nested groups."""
 
+import os
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -140,6 +141,21 @@ class AuthSettings(BaseModel):
         default="env:NEXUS_CREDENTIAL_MASTER_KEY",
         description="Env var or Vault path for the credential master key",
     )
+
+    @model_validator(mode="after")
+    def _check_jwt_secret_in_production(self) -> "AuthSettings":
+        """Fail loudly if the default JWT secret is used outside development."""
+        env = os.environ.get("NEXUS_ENV", os.environ.get("ENV", "development"))
+        if (
+            env not in ("development", "dev", "test")
+            and self.jwt_secret.get_secret_value() == "dev-secret-change-in-production"
+        ):
+            msg = (
+                "JWT secret is using the default value. "
+                "Set NEXUS_AUTH__JWT_SECRET in production environments."
+            )
+            raise ValueError(msg)
+        return self
 
 
 class ObservabilitySettings(BaseModel):

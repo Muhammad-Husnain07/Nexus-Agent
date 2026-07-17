@@ -91,14 +91,18 @@ class TieredRateLimitMiddleware(BaseHTTPMiddleware):
         # Check per-tenant
         if tid is not None:
             key = _tenant_key(str(tid), "api")
-            allowed = await limiter.acquire(key, max_requests=max_r, window_s=win, raise_on_limit=False)
+            allowed = await limiter.acquire(
+                key, max_requests=max_r, window_s=win, raise_on_limit=False
+            )
             if not allowed:
                 return _rate_limit_response(win)
 
         # Check per-user
         if uid is not None:
             key = _user_key(str(uid), "api")
-            allowed = await limiter.acquire(key, max_requests=max_r, window_s=win, raise_on_limit=False)
+            allowed = await limiter.acquire(
+                key, max_requests=max_r, window_s=win, raise_on_limit=False
+            )
             if not allowed:
                 return _rate_limit_response(win)
 

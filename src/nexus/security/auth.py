@@ -30,6 +30,7 @@ _ph = PasswordHasher()
 # JWT
 # ---------------------------------------------------------------------------
 
+
 def create_access_token(
     user_id: uuid.UUID,
     role: str,
@@ -92,6 +93,7 @@ def create_refresh_token(user_id: uuid.UUID, expires_delta: timedelta | None = N
     redis = get_redis_client()
     if redis is not None:
         import asyncio
+
         try:
             asyncio.ensure_future(_store_refresh_token(redis, payload["jti"], expire))
         except Exception:
@@ -144,6 +146,7 @@ async def verify_jwt(token: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # API keys
 # ---------------------------------------------------------------------------
+
 
 def generate_api_key() -> str:
     """Generate a cryptographically random API key with the ``nxs_`` prefix.

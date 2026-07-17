@@ -50,9 +50,7 @@ async def analyze_results(
         next_idx: int = idx + 1
 
         deps = step.get("depends_on", [])
-        deps_met = all(
-            any(p["id"] == dep and p["status"] == "done" for p in plan) for dep in deps
-        )
+        deps_met = all(any(p["id"] == dep and p["status"] == "done" for p in plan) for dep in deps)
 
         if not deps_met:
             decision = "continue"

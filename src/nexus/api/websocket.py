@@ -7,7 +7,9 @@ subscribers per session via Redis pub/sub fan-out.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import uuid
 from contextlib import suppress
 from typing import Any
 
@@ -46,7 +48,6 @@ async def websocket_endpoint(websocket: WebSocket) -> None:  # noqa: PLR0912, PL
 
     logger.info("websocket.connected", session_id=sid)
 
-    # Build shared dependencies
     redis_client = get_redis_client()
     event_bus = EventBus(redis_client) if redis_client else None
     tool_registry = ToolRegistry()
@@ -66,8 +67,9 @@ async def websocket_endpoint(websocket: WebSocket) -> None:  # noqa: PLR0912, PL
         session_factory=async_session,
     )
 
-    # Subscribe to the session's Redis channel for fan-out
     pubsub = None
+    pubsub_task: asyncio.Task[None] | None = None
+
     if redis_client:
         try:
             channel = agent_channel(sid)
@@ -83,6 +85,34 @@ async def websocket_endpoint(websocket: WebSocket) -> None:  # noqa: PLR0912, PL
             await websocket.send_json(event_dict)
         except Exception as exc:
             logger.warning("websocket.send_failed", session_id=sid, error=str(exc))
+
+    async def _listen_pubsub() -> None:
+        """Read events from Redis pub/sub and broadcast to the WebSocket."""
+        if pubsub is None:
+            return
+        try:
+            async for message in pubsub.listen():
+                if message is None:
+                    continue
+                msg_type = message.get("type", "")
+                if msg_type != "message":
+                    continue
+                data = message.get("data")
+                if isinstance(data, bytes):
+                    data = data.decode("utf-8")
+                if isinstance(data, str):
+                    try:
+                        event_dict = json.loads(data)
+                        await _broadcast(event_dict)
+                    except json.JSONDecodeError:
+                        pass
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            logger.warning("websocket.pubsub_listen_error", session_id=sid, error=str(exc))
+
+    if pubsub is not None:
+        pubsub_task = asyncio.create_task(_listen_pubsub())
 
     try:
         while True:
@@ -109,8 +139,8 @@ async def websocket_endpoint(websocket: WebSocket) -> None:  # noqa: PLR0912, PL
                 await _broadcast({"type": "error", "payload": {"message": err_msg}})
                 continue
 
-            # Extract tenant/user from context or headers
             from nexus.db.context import get_tenant as _gt  # noqa: PLC0415
+
             ct = _gt()
             tid = str(ct) if ct else "00000000-0000-0000-0000-000000000001"
             default_user = "00000000-0000-0000-0000-000000000002"
@@ -133,6 +163,10 @@ async def websocket_endpoint(websocket: WebSocket) -> None:  # noqa: PLR0912, PL
         with suppress(Exception):
             await _broadcast({"type": "error", "payload": {"message": str(exc)}})
     finally:
+        if pubsub_task is not None:
+            pubsub_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await pubsub_task
         if pubsub is not None:
             with suppress(Exception):
                 await pubsub.unsubscribe()

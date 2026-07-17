@@ -43,9 +43,7 @@ class ToolCreate(BaseModel):
     requires_approval: bool = Field(default=False, description="Requires HITL approval")
     risk_level: str = Field(default="low", description="Risk level: low | medium | high")
     enabled: bool = Field(default=True, description="Whether the tool is active")
-    tenant_public: bool = Field(
-        default=False, description="Visible to all tenants when true"
-    )
+    tenant_public: bool = Field(default=False, description="Visible to all tenants when true")
     idempotent: bool = Field(
         default=False, description="Whether the tool supports idempotent execution (safe to retry)"
     )

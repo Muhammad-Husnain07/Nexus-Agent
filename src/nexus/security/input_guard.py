@@ -21,14 +21,32 @@ logger = structlog.get_logger("nexus.security.input_guard")
 
 _INJECTION_PATTERNS: list[tuple[str, str]] = [
     # Direct instruction override
-    ("ignore_previous", r"(?i)(ignore|disregard|forget|override|bypass)\s+(all\s+)?(previous|prior|above|earlier)\s+(instructions|directives|commands|rules)"),
-    ("system_prompt_leak", r"(?i)(your\s+)?(system\s+)?(prompt|instructions|directive)\s*(:|=|is|was|tell|give|reveal|show|what)?"),
-    ("system_prompt_query", r"(?i)(what\s+(is|are)\s+(your\s+)?(system\s+)?(prompt|instructions|directive))"),
-    ("role_play_override", r"(?i)(you\s+are\s+(now|no\s+longer)|act\s+as\s+if|pretend\s+(that\s+)?you)\s+(?!.*(assistant|helpful|ai))"),
+    (
+        "ignore_previous",
+        r"(?i)(ignore|disregard|forget|override|bypass)\s+(all\s+)?(previous|prior|above|earlier)\s+(instructions|directives|commands|rules)",
+    ),
+    (
+        "system_prompt_leak",
+        r"(?i)(your\s+)?(system\s+)?(prompt|instructions|directive)\s*(:|=|is|was|tell|give|reveal|show|what)?",
+    ),
+    (
+        "system_prompt_query",
+        r"(?i)(what\s+(is|are)\s+(your\s+)?(system\s+)?(prompt|instructions|directive))",
+    ),
+    (
+        "role_play_override",
+        r"(?i)(you\s+are\s+(now|no\s+longer)|act\s+as\s+if|pretend\s+(that\s+)?you)\s+(?!.*(assistant|helpful|ai))",
+    ),
     ("dan_mode", r"(?i)(do\s+anything\s+now|jailbreak|dan\s*mode|developer\s*mode)"),
     ("injected_context", r"(?i)(the\s+following\s+is\s+(an?\s+)?(instruction|directive|command))"),
-    ("output_formatting", r"(?i)(output\s+(only|exclusively|just)\s+(json|xml|yaml)|respond\s+with\s+(json|xml))"),
-    ("ignore_constraints", r"(?i)(ignore\s+(your\s+)?(constraints|boundaries|limitations|safeguards|ethics|guidelines))"),
+    (
+        "output_formatting",
+        r"(?i)(output\s+(only|exclusively|just)\s+(json|xml|yaml)|respond\s+with\s+(json|xml))",
+    ),
+    (
+        "ignore_constraints",
+        r"(?i)(ignore\s+(your\s+)?(constraints|boundaries|limitations|safeguards|ethics|guidelines))",
+    ),
 ]
 
 # ---------------------------------------------------------------------------
@@ -37,7 +55,10 @@ _INJECTION_PATTERNS: list[tuple[str, str]] = [
 
 _PII_PATTERNS: list[tuple[str, str]] = [
     ("email", r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"),
-    ("api_key_generic", r"(?i)(api[_-]?key|apikey|api_secret|secret\s*key)\s*[:=]\s*['\"]?[A-Za-z0-9_\-]{16,}"),
+    (
+        "api_key_generic",
+        r"(?i)(api[_-]?key|apikey|api_secret|secret\s*key)\s*[:=]\s*['\"]?[A-Za-z0-9_\-]{16,}",
+    ),
     ("nxs_api_key", r"nxs_[A-Za-z0-9\-_]{32,}"),
     ("bearer_token", r"(?i)bearer\s+[A-Za-z0-9\-._~+/]{20,}"),
     ("credit_card", r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b"),
@@ -50,7 +71,15 @@ _PII_PATTERNS: list[tuple[str, str]] = [
 # Hidden unicode characters
 # ---------------------------------------------------------------------------
 
-_HIDDEN_UNICODE: list[int] = list(range(0x200B, 0x200F)) + [0xFEFF, 0x00AD, 0x2060, 0x2061, 0x2062, 0x2063, 0x2064]
+_HIDDEN_UNICODE: list[int] = list(range(0x200B, 0x200F)) + [
+    0xFEFF,
+    0x00AD,
+    0x2060,
+    0x2061,
+    0x2062,
+    0x2063,
+    0x2064,
+]
 
 
 # ---------------------------------------------------------------------------
@@ -106,11 +135,13 @@ class PromptInjectionGuard:
         if hidden_matches:
             result.flagged = True
             result.reason = "Hidden unicode characters detected"
-            result.matched_patterns.append({
-                "pattern": "hidden_unicode",
-                "count": len(hidden_matches),
-                "positions": [m.start() for m in hidden_matches[:5]],
-            })
+            result.matched_patterns.append(
+                {
+                    "pattern": "hidden_unicode",
+                    "count": len(hidden_matches),
+                    "positions": [m.start() for m in hidden_matches[:5]],
+                }
+            )
             if sanitize:
                 result.sanitized = self._hidden_re.sub("", text)
 
@@ -121,11 +152,13 @@ class PromptInjectionGuard:
                 result.flagged = True
                 if not result.reason:
                     result.reason = f"Matched injection pattern: {name}"
-                result.matched_patterns.append({
-                    "pattern": name,
-                    "count": len(matches),
-                    "sample": matches[0].group()[:100],
-                })
+                result.matched_patterns.append(
+                    {
+                        "pattern": name,
+                        "count": len(matches),
+                        "sample": matches[0].group()[:100],
+                    }
+                )
 
         return result
 
@@ -169,10 +202,12 @@ class OutputGuard:
                 result.flagged = True
                 if not result.reason:
                     result.reason = f"Matched PII/secret pattern: {name}"
-                result.matched_patterns.append({
-                    "pattern": name,
-                    "count": len(matches),
-                })
+                result.matched_patterns.append(
+                    {
+                        "pattern": name,
+                        "count": len(matches),
+                    }
+                )
                 if redact:
                     sanitized = re.sub(pattern, "[REDACTED]", sanitized or text)
 

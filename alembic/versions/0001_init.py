@@ -6,6 +6,7 @@ Create Date: 2026-07-15
 """
 
 import sqlalchemy as sa
+from pgvector.sqlalchemy import VECTOR
 
 from alembic import op
 
@@ -249,7 +250,7 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("true"),
         ),
-        sa.Column("embedding", sa.Vector(1536), nullable=True, comment="Semantic embedding"),
+        sa.Column("embedding", VECTOR(1536), nullable=True, comment="Semantic embedding"),
         sa.Column("version", sa.Integer, nullable=False, server_default="1"),
         sa.Column(
             "created_at",
@@ -468,7 +469,7 @@ def upgrade() -> None:
         ),
         sa.Column("kind", sa.String(50), nullable=False),
         sa.Column("content", sa.Text, nullable=False),
-        sa.Column("embedding", sa.Vector(1536), nullable=True, comment="Semantic embedding"),
+        sa.Column("embedding", VECTOR(1536), nullable=True, comment="Semantic embedding"),
         sa.Column("metadata_", sa.JSON, nullable=True, server_default="{}"),
         sa.Column("importance", sa.Float, nullable=False, server_default="0.0"),
         sa.Column("last_accessed_at", sa.DateTime(timezone=True), nullable=True),

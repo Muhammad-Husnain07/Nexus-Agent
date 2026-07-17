@@ -15,6 +15,7 @@ from nexus.errors import ForbiddenError, UnauthorizedError
 
 # ── Roles ───────────────────────────────────────────────────────────────────
 
+
 class Role(str, Enum):  # noqa: UP042
     """RBAC roles available in the system."""
 
@@ -25,6 +26,7 @@ class Role(str, Enum):  # noqa: UP042
 
 
 # ── Permissions ─────────────────────────────────────────────────────────────
+
 
 class Permission(str, Enum):  # noqa: UP042
     """Fine-grained action permissions."""
@@ -91,6 +93,7 @@ ROLE_PERMISSIONS: dict[Role, list[Permission]] = {
 
 
 # ── Permission checker ──────────────────────────────────────────────────────
+
 
 def _get_user_role(user: User) -> Role:
     """Map a User model's ``role`` string to a ``Role`` enum."""
@@ -161,8 +164,6 @@ def require_permission(*permissions: Permission):
         allowed = ROLE_PERMISSIONS.get(role, [])
         for perm in permissions:
             if perm not in allowed:
-                raise ForbiddenError(
-                    f"Role '{role.value}' lacks permission '{perm.value}'"
-                )
+                raise ForbiddenError(f"Role '{role.value}' lacks permission '{perm.value}'")
 
     return Depends(_check)

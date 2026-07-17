@@ -25,9 +25,7 @@ class DeadLetterExecution(TenantMixin, Base):
 
     __tablename__ = "dead_letter_execution"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tool_name: Mapped[str] = mapped_column(
         String(255), nullable=False, comment="Name of the tool that failed"
     )
@@ -37,9 +35,7 @@ class DeadLetterExecution(TenantMixin, Base):
     input_payload: Mapped[dict[str, Any]] = mapped_column(
         JSONB, default=dict, comment="The input arguments that were passed"
     )
-    error_message: Mapped[str] = mapped_column(
-        Text, default="", comment="The final error message"
-    )
+    error_message: Mapped[str] = mapped_column(Text, default="", comment="The final error message")
     error_code: Mapped[str] = mapped_column(
         String(100), default="UNKNOWN", comment="Machine-readable error code"
     )
@@ -50,7 +46,9 @@ class DeadLetterExecution(TenantMixin, Base):
         String(50), default="pending", comment="DLQ status: pending | replayed | archived"
     )
     original_timestamp: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), comment="When the original failure occurred"
+        DateTime(timezone=True),
+        server_default=func.now(),
+        comment="When the original failure occurred",
     )
     last_retry_timestamp: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, comment="Timestamp of the last retry"
@@ -58,9 +56,7 @@ class DeadLetterExecution(TenantMixin, Base):
     replayed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, comment="When this was replayed"
     )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = tenant_table_args(
         "dead_letter_execution",
@@ -195,7 +191,9 @@ def _to_dict(entry: DeadLetterExecution) -> dict[str, Any]:
         "error_code": entry.error_code,
         "retry_count": entry.retry_count,
         "status": entry.status,
-        "original_timestamp": entry.original_timestamp.isoformat() if entry.original_timestamp else None,
+        "original_timestamp": entry.original_timestamp.isoformat()
+        if entry.original_timestamp
+        else None,
         "created_at": entry.created_at.isoformat() if entry.created_at else None,
     }
 

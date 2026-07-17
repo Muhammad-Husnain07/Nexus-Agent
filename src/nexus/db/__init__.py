@@ -3,9 +3,10 @@
 from nexus.db.base import (
     Base,
     async_session,
-    create_async_engine_from_settings,
-    engine,
+    dispose_engine,
+    get_engine,
     get_session,
+    get_session_factory,
     tenant_table_args,
 )
 from nexus.db.context import TenantContext, get_tenant, reset_tenant, set_tenant
@@ -18,9 +19,10 @@ __all__ = [
     "TenantContext",
     "TenantScopedRepository",
     "async_session",
-    "create_async_engine_from_settings",
-    "engine",
+    "dispose_engine",
+    "get_engine",
     "get_session",
+    "get_session_factory",
     "get_tenant",
     "reset_tenant",
     "set_tenant",

@@ -155,3 +155,45 @@ async def test_tool(
         "input_validated": True,
         "mock_output": tool.output_schema or {"type": "object", "properties": {}},
     }
+
+
+@router.get("/{tool_id}/versions/diff")
+async def diff_tool_versions(
+    tool_id: uuid.UUID,
+    session: SessionDep,
+    tenant_id: TenantDep,
+    from_version: int = Query(..., ge=1, description="Source version number"),
+    to_version: int = Query(..., ge=1, description="Target version number"),
+) -> dict[str, Any]:
+    """Compare two versions of a tool definition."""
+    from sqlalchemy import select as sa_select
+
+    from nexus.db.models.tool_version import ToolVersion
+    from nexus.tools.schemas import ToolVersionDiff
+
+    stmt = sa_select(ToolVersion).where(
+        ToolVersion.tool_id == tool_id,
+        ToolVersion.tenant_id == tenant_id,
+        ToolVersion.version.in_([from_version, to_version]),
+    )
+    result = await session.execute(stmt)
+    versions = {v.version: v for v in result.scalars().all()}
+
+    if from_version not in versions or to_version not in versions:
+        raise HTTPException(status_code=404, detail="One or both versions not found")
+
+    old_snapshot = versions[from_version].snapshot or {}
+    new_snapshot = versions[to_version].snapshot or {}
+
+    changed_fields: list[str] = []
+    all_keys = set(old_snapshot.keys()) | set(new_snapshot.keys())
+    for key in sorted(all_keys):
+        if old_snapshot.get(key) != new_snapshot.get(key):
+            changed_fields.append(key)
+
+    return ToolVersionDiff(
+        tool_id=tool_id,
+        old_version=from_version,
+        new_version=to_version,
+        changed_fields=changed_fields,
+    ).model_dump(mode="json")
