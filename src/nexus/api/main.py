@@ -13,15 +13,20 @@ Creates a configured ``FastAPI`` instance with:
 from __future__ import annotations
 
 import asyncio
+import sys
 import time
 import uuid
-from collections.abc import AsyncGenerator, Set
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import Any
+
+# On Windows, psycopg requires SelectorEventLoop. Set before any async operations.
+if sys.platform == "win32" and hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 import asyncpg
 import httpx
 import structlog
-from typing import Any
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware

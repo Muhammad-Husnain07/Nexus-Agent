@@ -1,38 +1,33 @@
-"""Unit tests for the PostgresSaver checkpointer."""
+"""Unit tests for the AsyncPostgresSaver checkpointer."""
 
 from __future__ import annotations
 
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from nexus.memory.checkpointer import close_checkpointer, create_pool, get_checkpointer
+import pytest
+
+from nexus.memory.checkpointer import close_checkpointer, get_checkpointer
 
 
 class TestCheckpointer:
-    """PostgresSaver checkpointer."""
+    """AsyncPostgresSaver checkpointer."""
 
-    async def test_create_pool_rewrites_url(self) -> None:
-        with patch("nexus.memory.checkpointer.get_settings") as mock_settings:
-            mock_settings.return_value.database.url = "postgresql+asyncpg://u:p@h:5432/db"
-            mock_settings.return_value.database.pool_size = 5
-            with patch("nexus.memory.checkpointer.AsyncConnectionPool") as mock_pool:
-                create_pool()
-                assert mock_pool.called
-                url_arg = mock_pool.call_args[0][0]
-                assert "postgresql://" in url_arg
-                assert "+asyncpg" not in url_arg
-
+    @pytest.mark.skipif(sys.platform == "win32", reason="pgvector/psycopg not available on Windows")
     async def test_get_checkpointer_creates_singleton(self) -> None:
         mock_saver = MagicMock()
         mock_saver.setup = AsyncMock()
         mock_conn = MagicMock()
 
         with (
-            patch("nexus.memory.checkpointer.create_pool") as mock_create_pool,
+            patch("nexus.memory.checkpointer.AsyncConnectionPool") as mock_pool_cls,
             patch("nexus.memory.checkpointer.AsyncPostgresSaver", return_value=mock_saver) as mock_saver_cls,
         ):
             mock_pool = MagicMock()
-            mock_pool.connection = AsyncMock(return_value=mock_conn)
-            mock_create_pool.return_value = mock_pool
+            mock_conn_cm = MagicMock()
+            mock_conn_cm.__aenter__ = AsyncMock(return_value=mock_conn)
+            mock_pool.connection.return_value = mock_conn_cm
+            mock_pool_cls.return_value = mock_pool
 
             saver1 = await get_checkpointer()
             saver2 = await get_checkpointer()
@@ -40,8 +35,13 @@ class TestCheckpointer:
             assert saver1 is saver2
             mock_saver_cls.assert_called_once_with(conn=mock_conn)
             mock_saver.setup.assert_awaited_once()
-            # Verify autocommit and row_factory were set on the connection
             assert mock_conn.autocommit is True
+
+    async def test_get_checkpointer_returns_none_on_windows(self) -> None:
+        """On Windows, get_checkpointer returns None."""
+        if sys.platform == "win32":
+            result = await get_checkpointer()
+            assert result is None
 
     async def test_close_checkpointer(self) -> None:
         mock_pool = MagicMock()
