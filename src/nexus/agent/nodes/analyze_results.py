@@ -32,6 +32,7 @@ async def analyze_results(
     - continue (advance to next step)
     - revise (regenerate remaining plan)
     - clarify (ask user for more info)
+    - preview (show intermediate result for user approval before continuing)
     - escalate (surface error to user)
     - finalize (plan complete)
 
@@ -67,7 +68,13 @@ async def analyze_results(
             # Shortcut: if step succeeded and no more steps remain, finalize
             if step_status == "done" and next_idx >= len(plan) and last_result.get("status") == "success":
                 logger.info("analyze.success_finalize", step=idx)
-                return {"_routing_decision": "finalize", "analysis_result": {"decision": "finalize"}}
+                step["status"] = "done"
+                plan[idx] = step
+                return {
+                    "plan": plan,
+                    "_routing_decision": "finalize",
+                    "analysis_result": {"decision": "finalize"},
+                }
 
             system_prompt = prompt_manager.render(
                 "analyze_results",
@@ -148,6 +155,7 @@ def _map_next_action(next_action: str, next_idx: int, plan_len: int) -> str:
         "revise": "revise",
         "clarify": "ask",
         "escalate": "ask",
+        "preview": "preview",
         "finalize": "finalize",
     }
     decision = mapping.get(next_action, "finalize")

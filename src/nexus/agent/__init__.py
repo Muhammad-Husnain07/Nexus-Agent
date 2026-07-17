@@ -1,6 +1,5 @@
 """LangGraph StateGraph orchestration graph."""
 
-from nexus.agent.api import router as agent_router
 from nexus.agent.errors import (
     AgentError,
     ApprovalRejected,
@@ -47,6 +46,5 @@ __all__ = [
     "PlanStep",
     "PlanningError",
     "ToolExecutionError",
-    "agent_router",
     "build_agent_graph",
 ]

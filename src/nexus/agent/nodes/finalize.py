@@ -74,8 +74,7 @@ async def finalize(
     else:
         final = "No results were produced."
 
-    messages: list[dict[str, Any]] = list(state.get("messages", []))
-    messages.append(_openai_message("assistant", final))
+    final_msg = _openai_message("assistant", final)
 
     # Persist to long-term memory via MemoryManager
     mem_error: str | None = None
@@ -103,6 +102,6 @@ async def finalize(
     )
     return {
         "final_response": final,
-        "messages": messages,
+        "messages": [final_msg],
         "_routing_decision": "finalize",
     }

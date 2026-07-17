@@ -26,7 +26,6 @@ from nexus.tools.schemas import ToolRead
 
 logger = structlog.get_logger("nexus.agent.nodes.execute_step")
 
-_MAX_SUB_ITERATIONS = 5
 _PLACEHOLDER_RE = re.compile(r"\$\{([^}]+)\}")
 
 
@@ -62,6 +61,7 @@ def _resolve_placeholders(
     raw_inputs: dict[str, Any],
     gathered: dict[str, Any],
     tool_results: list[dict[str, Any]],
+    user_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Resolve ``${...}`` placeholders in step inputs."""
 
@@ -71,23 +71,22 @@ def _resolve_placeholders(
             # Try gathered_requirements first
             if key in gathered:
                 return str(gathered[key])
-            # Try dot-notation for nested access
+            # Try user.* placeholders
+            if key.startswith("user.") and user_context:
+                user_key = key[5:]
+                if user_key in user_context:
+                    return str(user_context[user_key])
+            # Try dot-notation for nested access from tool results
             parts = key.split(".", 1)
             if len(parts) == 2:
                 prefix, suffix = parts
-                if prefix == "step" and suffix.startswith("_") and len(parts) > 2:
-                    pass
-                # Try result references like step_1.result
                 for r in tool_results:
                     r_tool = r.get("tool_name", "")
                     if prefix == r_tool or prefix == r.get("tool_call_id", ""):
                         data = r.get("data", {})
                         if isinstance(data, dict) and suffix in data:
                             return str(data[suffix])
-                # Try user.email as a key
-                if key == "user.email":
-                    return "${{user.email}}"  # Keep as literal if not resolved
-            return f"${{{key}}}"  # Keep as literal
+            return f"${{{key}}}"  # Keep as literal if not resolved
 
         return _PLACEHOLDER_RE.sub(_replacer, val)
 
@@ -168,6 +167,7 @@ async def execute_step(  # noqa: PLR0912, PLR0913, PLR0915
 
     sub_iterations: int = 0
     messages: list[dict[str, Any]] = list(state.get("messages", []))
+    new_messages: list[dict[str, Any]] = []
     tool_results: list[dict[str, Any]] = list(state.get("tool_results", []))
     errors: list[str] = list(state.get("errors", []))
 
@@ -180,8 +180,9 @@ async def execute_step(  # noqa: PLR0912, PLR0913, PLR0915
 
     # Resolve placeholders in step inputs
     gathered: dict[str, Any] = state.get("gathered_requirements", {})
+    user_context: dict[str, Any] = state.get("user_context", {})
     step_inputs_raw: dict[str, Any] = step.get("inputs") or {}
-    step_inputs = _resolve_placeholders(step_inputs_raw, gathered, tool_results)
+    step_inputs = _resolve_placeholders(step_inputs_raw, gathered, tool_results, user_context)
 
     current_messages: list[dict[str, Any]] = [
         _openai_message("system", system_content),
@@ -198,7 +199,7 @@ async def execute_step(  # noqa: PLR0912, PLR0913, PLR0915
         [_tool_to_openai_schema(t) for t in tools] if tools else None
     )
 
-    while sub_iterations < _MAX_SUB_ITERATIONS:
+    while sub_iterations < settings.max_sub_iterations:
         sub_iterations += 1
 
         response = await llm.complete(
@@ -388,6 +389,8 @@ async def execute_step(  # noqa: PLR0912, PLR0913, PLR0915
                         tool_call_id=tc.get("id", ""),
                     )
                 )
+                new_messages.append(current_messages[-2])
+                new_messages.append(current_messages[-1])
 
                 if event_bus:
                     await event_bus.publish(
@@ -402,6 +405,7 @@ async def execute_step(  # noqa: PLR0912, PLR0913, PLR0915
             content: str = response.content or ""
             current_messages.append(_openai_message("assistant", content))
             messages.append(_openai_message("assistant", content))
+            new_messages.append(messages[-1])
             break
 
     step["status"] = "done" if not errors else "failed"
@@ -413,7 +417,7 @@ async def execute_step(  # noqa: PLR0912, PLR0913, PLR0915
     scratchpad += json.dumps(tool_results[-1] if tool_results else {"note": step["status"]})
 
     return {
-        "messages": messages,
+        "messages": new_messages,
         "plan": plan_list,
         "tool_results": tool_results,
         "errors": errors,

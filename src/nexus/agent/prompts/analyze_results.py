@@ -19,16 +19,24 @@ Expected outcome: {expected_outcome}
 Tool result: {tool_result}
 
 **Decision rules:**
-- If the result fully matches the expected outcome → "continue" to next step.
+- If the result fully matches the expected outcome and there are more steps → "continue".
+- If the result produced a user-visible artifact (draft, preview, generated content) and the plan has remaining steps → "preview" to surface it for user feedback before continuing.
 - If the result partially matches and a different approach might work → "revise".
 - If the result failed and you don't have enough info → "ask" the user.
-- If the result is ready for user review → "preview".
-- If the plan is complete → "finalize".
+- If the plan is complete or no more steps remain → "finalize".
+
+**Examples:**
+
+If the step was \"Draft an article about AI\" and the tool returned {{"title": "...", "content": "..."}} with more steps remaining:
+→ {{"outcome": "success", "next_action": "preview", "reasoning": "Draft created, show user before publishing"}}
+
+If the step was \"Publish article\" and succeeded with no more steps:
+→ {{"outcome": "success", "next_action": "finalize", "reasoning": "All steps complete"}}
 
 **Output format (JSON):**
 {{
   "outcome": "success" | "partial" | "failure",
-  "next_action": "continue" | "revise" | "clarify" | "finalize",
+  "next_action": "continue" | "revise" | "clarify" | "preview" | "finalize",
   "reasoning": "explanation of this decision"
 }}
 """
@@ -43,7 +51,7 @@ Actual: {tool_result}
 
 Return JSON with:
 - "outcome": "success" | "partial" | "failure"
-- "next_action": "continue" | "revise" | "clarify" | "finalize"
+- "next_action": "continue" | "revise" | "clarify" | "preview" | "finalize"
 - "reasoning": brief explanation
 """
 

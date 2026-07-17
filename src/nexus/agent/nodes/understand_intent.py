@@ -36,6 +36,7 @@ async def understand_intent(
         ``intent_analysis``, and ``_routing_decision`` updates.
     """
     messages: list[dict[str, Any]] = list(state.get("messages", []))
+    new_messages: list[dict[str, Any]] = []
     last_user = next(
         (m["content"] for m in reversed(messages) if m.get("role") == "user"),
         "",
@@ -117,7 +118,7 @@ async def understand_intent(
         "parameters": merged_params,
     }
 
-    messages.append(_openai_message("assistant", f"Parsed intent: {analysis.primary_goal}"))
+    new_messages.append(_openai_message("assistant", f"Parsed intent: {analysis.primary_goal}"))
 
     # Low-confidence routing
     if analysis.confidence < 0.5:
@@ -128,9 +129,9 @@ async def understand_intent(
             f"but I'm not confident (score: {analysis.confidence:.2f}). "
             f"Could you rephrase or clarify?"
         )
-        messages.append(_openai_message("assistant", meta_question))
+        new_messages.append(_openai_message("assistant", meta_question))
         return {
-            "messages": messages,
+            "messages": new_messages,
             "intent": intent_dict,
             "missing_info_slots": missing_slot_names,
             "intent_analysis": analysis.model_dump(mode="json"),
@@ -141,7 +142,7 @@ async def understand_intent(
         }
 
     return {
-        "messages": messages,
+        "messages": new_messages,
         "intent": intent_dict,
         "missing_info_slots": missing_slot_names,
         "intent_analysis": analysis.model_dump(mode="json"),

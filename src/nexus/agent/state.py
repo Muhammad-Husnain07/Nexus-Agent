@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, TypedDict
+from typing import Annotated, Any, Literal, TypedDict
 
+from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 
 
@@ -80,7 +81,7 @@ class AnalysisResult(BaseModel):
     outcome: Literal["success", "partial", "failure"] = Field(
         description="How well the step result matched expectations"
     )
-    next_action: Literal["continue", "revise", "clarify", "finalize", "escalate"] = Field(
+    next_action: Literal["continue", "revise", "clarify", "finalize", "escalate", "preview"] = Field(
         description="What to do next"
     )
     reasoning: str = Field(default="", description="Explanation of this decision")
@@ -93,10 +94,11 @@ class AgentState(TypedDict):
     checkpointing.  Messages use the ``add_messages`` reducer.
     """
 
-    messages: list[dict[str, Any]]
+    messages: Annotated[list[dict[str, Any]], add_messages]
     tenant_id: str
     session_id: str
     user_id: str
+    user_context: dict[str, Any]
     plan: list[dict[str, Any]] | None
     current_step_index: int
     gathered_requirements: dict[str, Any]

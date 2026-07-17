@@ -1,14 +1,29 @@
-"""AgentRunner — invoke the LangGraph graph and stream events."""
+"""AgentRunner — invoke the LangGraph graph and stream events.
+
+Compiled graphs are stateless and cheap to rebuild; all state lives in the
+Postgres checkpointer.  A fresh graph is built on every ``invoke()`` and
+``resume()`` call.
+
+Per-session concurrency is enforced via a Redis distributed lock with a
+background heartbeat that extends the TTL every ``ttl/3`` seconds.  The
+lock guards the ``astream`` execution window only — it is released when
+``astream`` returns (whether completed, interrupted, or errored).  The
+``resume()`` method acquires its own lock.
+"""
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import secrets
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
 
 import structlog
-from langgraph.graph.state import CompiledStateGraph
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.types import Command
 
 from nexus.agent.graph import build_agent_graph
 from nexus.agent.state import AgentState
@@ -34,6 +49,21 @@ AGENT_EVENT_TYPES = frozenset(
     }
 )
 
+# Lua: atomically renew lock TTL only if we still own it
+_RENEW_LUA = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('EXPIRE', KEYS[1], ARGV[2])
+end
+return 0
+"""
+
+_RELEASE_LUA = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('DEL', KEYS[1])
+end
+return 0
+"""
+
 
 class AgentEvent:
     """An event emitted during agent execution.
@@ -56,9 +86,6 @@ class AgentEvent:
 class AgentRunner:
     """Orchestrates a single agent run and streams events.
 
-    Caches compiled graphs per session to preserve conversation state
-    across turns (checkpointer state, plan continuity).
-
     Usage::
 
         runner = AgentRunner(llm_client, tool_selector, tool_executor, event_bus)
@@ -75,26 +102,67 @@ class AgentRunner:
         tool_executor: ToolExecutor | None = None,
         event_bus: EventBus | None = None,
         session_factory: Any = None,
+        checkpointer: BaseCheckpointSaver | None = None,
     ) -> None:
         self._llm = llm_client or LLMClient()
         self._selector = tool_selector
         self._executor = tool_executor
         self._event_bus = event_bus
         self._session_factory = session_factory
-        self._graphs: dict[str, CompiledStateGraph] = {}
+        self._checkpointer = checkpointer
 
-    def _get_or_create_graph(self, session_id: str) -> CompiledStateGraph:
-        """Return a cached compiled graph for the session, creating if needed."""
-        if session_id not in self._graphs:
-            graph = build_agent_graph(
-                llm_client=self._llm,
-                tool_selector=self._selector,
-                tool_executor=self._executor,
-                event_bus=self._event_bus,
-                session_factory=self._session_factory,
-            )
-            self._graphs[session_id] = graph
-        return self._graphs[session_id]
+    def _build_graph(self) -> Any:
+        """Build a fresh compiled graph (stateless — all state in checkpointer)."""
+        return build_agent_graph(
+            llm_client=self._llm,
+            tool_selector=self._selector,
+            tool_executor=self._executor,
+            event_bus=self._event_bus,
+            session_factory=self._session_factory,
+            checkpointer=self._checkpointer,
+        )
+
+    # ------------------------------------------------------------------
+    # Lock helpers
+    # ------------------------------------------------------------------
+
+    async def _try_acquire_lock(
+        self, redis: Any, lock_key: str, ttl_s: int
+    ) -> tuple[str, bool]:
+        """Try to acquire a distributed lock.
+
+        Returns (lock_token, acquired).
+        """
+        lock_token = secrets.token_hex(16)
+        acquired = await redis.set(lock_key, lock_token, nx=True, ex=ttl_s)
+        return lock_token, bool(acquired)
+
+    async def _renew_lock(self, redis: Any, key: str, token: str, ttl_s: int) -> None:
+        """Background heartbeat: extend lock TTL every ttl/3 seconds.
+
+        Cancelled by the caller when ``astream`` completes.
+        """
+        interval = max(1, ttl_s // 3)
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                renewed = await redis.eval(_RENEW_LUA, 1, key, token, str(ttl_s))
+                if not renewed:
+                    logger.warning("lock.renewal_failed", key=key, reason="stolen or expired")
+                    break
+        except asyncio.CancelledError:
+            pass
+
+    async def _release_lock(self, redis: Any, key: str, token: str) -> None:
+        """Atomically release the lock if we still own it."""
+        try:
+            await redis.eval(_RELEASE_LUA, 1, key, token)
+        except Exception:
+            logger.warning("lock.release_failed", key=key)
+
+    # ------------------------------------------------------------------
+    # Invoke
+    # ------------------------------------------------------------------
 
     async def invoke(
         self,
@@ -121,13 +189,14 @@ class AgentRunner:
         tid = str(tenant_id)
         uid = str(user_id)
 
-        graph = self._get_or_create_graph(sid)
+        graph = self._build_graph()
 
         initial_state: AgentState = {
             "messages": [{"role": "user", "content": user_message}],
             "tenant_id": tid,
             "session_id": sid,
             "user_id": uid,
+            "user_context": {"id": uid},
             "plan": None,
             "current_step_index": 0,
             "gathered_requirements": {},
@@ -150,20 +219,23 @@ class AgentRunner:
         lock_acquired = False
         lock_key = f"lock:agent_run:{sid}"
         lock_token = ""
+        heartbeat_task: asyncio.Task[None] | None = None
 
         if redis is not None:
-            import secrets
+            from nexus.config.settings import get_settings  # noqa: PLC0415
 
-            lock_token = secrets.token_hex(16)
-            acquired = await redis.set(lock_key, lock_token, nx=True, ex=120)
-            if not acquired:
+            ttl = get_settings().agent.run_lock_ttl_s
+            lock_token, lock_acquired = await self._try_acquire_lock(redis, lock_key, ttl)
+            if not lock_acquired:
                 error_event = AgentEvent(
                     "error",
                     {"message": "Another agent run is already in progress for this session"},
                 )
                 yield error_event
                 return
-            lock_acquired = True
+            heartbeat_task = asyncio.ensure_future(
+                self._renew_lock(redis, lock_key, lock_token, ttl)
+            )
 
         try:
             async for event in graph.astream(initial_state, run_config, stream_mode="updates"):
@@ -184,19 +256,96 @@ class AgentRunner:
                 await self._event_bus.publish(agent_channel(sid), error_event.to_dict())
             yield error_event
         finally:
+            if heartbeat_task is not None:
+                heartbeat_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await heartbeat_task
             if lock_acquired and redis is not None:
-                try:
-                    release_script = redis.register_script(
-                        "if redis.call('GET', KEYS[1]) == ARGV[1] then "
-                        "return redis.call('DEL', KEYS[1]) else return 0 end"
-                    )
-                    await release_script(keys=[lock_key], args=[lock_token])
-                except Exception:
-                    logger.warning("agent.lock_release_failed", session_id=sid)
+                await self._release_lock(redis, lock_key, lock_token)
 
-    def evict_session(self, session_id: str) -> None:
-        """Remove a cached graph for a session."""
-        self._graphs.pop(session_id, None)
+    # ------------------------------------------------------------------
+    # Resume
+    # ------------------------------------------------------------------
+
+    async def resume(
+        self,
+        session_id: str,
+        resume_value: dict[str, Any],
+    ) -> AsyncIterator[AgentEvent]:
+        """Resume an interrupted agent run and yield events.
+
+        Builds a fresh graph, checks the checkpointer for a paused state,
+        then streams the resume with its own lock + heartbeat.
+
+        Args:
+            session_id: The conversation session ID (thread_id).
+            resume_value: The LangGraph ``Command(resume=...)`` payload.
+
+        Yields:
+            ``AgentEvent`` instances as the graph resumes.
+        """
+        graph = self._build_graph()
+        config = {"configurable": {"thread_id": session_id}}
+
+        snapshot = await graph.aget_state(config)
+        if not snapshot.next:
+            yield AgentEvent("error", {"message": "No paused run to resume"})
+            return
+
+        redis = get_redis_client()
+        lock_acquired = False
+        lock_key = f"lock:agent_run:{session_id}"
+        lock_token = ""
+        heartbeat_task: asyncio.Task[None] | None = None
+
+        if redis is not None:
+            from nexus.config.settings import get_settings  # noqa: PLC0415
+
+            ttl = get_settings().agent.run_lock_ttl_s
+            lock_token, lock_acquired = await self._try_acquire_lock(redis, lock_key, ttl)
+            if not lock_acquired:
+                yield AgentEvent(
+                    "error",
+                    {"message": "Another agent run is already in progress for this session"},
+                )
+                return
+            heartbeat_task = asyncio.ensure_future(
+                self._renew_lock(redis, lock_key, lock_token, ttl)
+            )
+
+        try:
+            async for event in graph.astream(
+                Command(resume=resume_value),
+                config,
+                stream_mode="updates",
+            ):
+                node_name: str = next(iter(event))
+                state_update: dict[str, Any] = event[node_name]
+
+                for agent_event in self._translate(node_name, state_update):
+                    if self._event_bus:
+                        await self._event_bus.publish(
+                            agent_channel(session_id),
+                            agent_event.to_dict(),
+                        )
+                    yield agent_event
+        except Exception as exc:
+            logger.error("agent.resume.failed", session_id=session_id, exc_info=exc)
+            error_event = AgentEvent("error", {"message": str(exc)})
+            if self._event_bus:
+                await self._event_bus.publish(agent_channel(session_id), error_event.to_dict())
+            yield error_event
+        finally:
+            if heartbeat_task is not None:
+                heartbeat_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await heartbeat_task
+            if lock_acquired and redis is not None:
+                await self._release_lock(redis, lock_key, lock_token)
+
+    # ------------------------------------------------------------------
+    # Event translation
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _translate(node_name: str, state_update: dict[str, Any]) -> list[AgentEvent]:

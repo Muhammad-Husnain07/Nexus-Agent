@@ -82,11 +82,10 @@ async def gather_requirements(
     )
     question: str = response.content or "Could you please provide more details?"
 
-    messages: list[dict[str, Any]] = list(state.get("messages", []))
-    messages.append(_openai_message("assistant", question))
+    question_msg = _openai_message("assistant", question)
 
     return {
-        "messages": messages,
+        "messages": [question_msg],
         "final_response": question,
         "missing_info_slots": missing,  # keep until user answers
         "questions_asked": questions_asked + 1,
