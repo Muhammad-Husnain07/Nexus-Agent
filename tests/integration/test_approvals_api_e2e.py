@@ -19,6 +19,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+pytestmark = [pytest.mark.integration]
+
 from nexus.api.approvals import router as approvals_router
 
 

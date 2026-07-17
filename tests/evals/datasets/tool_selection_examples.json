@@ -1,0 +1,27 @@
+[
+  {
+    "user_message": "Send an email to john@example.com",
+    "expected_tools": ["send_email"],
+    "irrelevant_tools": ["search_docs", "delete_user", "create_report"]
+  },
+  {
+    "user_message": "What is the weather in London?",
+    "expected_tools": ["get_weather"],
+    "irrelevant_tools": ["send_email", "search_docs", "create_user"]
+  },
+  {
+    "user_message": "Find documents about deployment",
+    "expected_tools": ["search_docs"],
+    "irrelevant_tools": ["send_email", "delete_user", "get_weather"]
+  },
+  {
+    "user_message": "Delete the user account with ID 42",
+    "expected_tools": ["delete_user"],
+    "irrelevant_tools": ["send_email", "search_docs", "get_weather", "create_user"]
+  },
+  {
+    "user_message": "Show me all open support tickets",
+    "expected_tools": ["list_tickets"],
+    "irrelevant_tools": ["send_email", "delete_user", "get_weather"]
+  }
+]

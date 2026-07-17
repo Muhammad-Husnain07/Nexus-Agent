@@ -15,6 +15,8 @@ from nexus.db.models.session import Session as SessionModel
 from nexus.sessions.schemas import SessionRead
 from nexus.sessions.service import SessionService
 
+pytestmark = [pytest.mark.integration]
+
 
 def _make_session(
     sid: uuid.UUID | None = None,
