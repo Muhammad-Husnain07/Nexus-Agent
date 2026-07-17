@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import sys
 from collections.abc import AsyncIterator
 
@@ -38,7 +39,7 @@ async def stream_events(session_id: str, message: str, token: str, tenant_id: st
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     if tenant_id:
         headers["X-Tenant-ID"] = tenant_id
-    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=10.0)) as client:
         async with client.stream(
             "POST",
             f"{API}/api/v1/sessions/{session_id}/chat",
@@ -92,6 +93,8 @@ async def run(token: str) -> None:
             continue
         if user_input.strip().lower() in ("quit", "exit", "q"):
             break
+
+        print(color("  ⏳ Thinking...", "dim"), flush=True)
 
         async for event in stream_events(session_id, user_input, token, tenant_id):
             etype = event["event"]
@@ -182,18 +185,29 @@ async def run(token: str) -> None:
             elif etype == "done":
                 break
 
+        print(color("  ✅ Ready", "dim"), flush=True)
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Nexus Agent demo chat client")
-    parser.add_argument("--token", required=True, help="JWT or API key")
+    parser.add_argument("--token", required=True, help="JWT token or path to token file")
     args = parser.parse_args()
+
+    token = args.token
+    # If the token argument looks like a file path, read it
+    if os.path.isfile(token):
+        with open(token) as f:
+            token = f.read().strip()
+        token = token.strip()
+    # Strip whitespace/quotes that might be left over
+    token = token.strip().strip("'\"")
 
     print(color("Nexus Agent — Demo Chat Client", "cyan"))
     print(color("Type your request and press Enter. 'quit' to exit.", "dim"))
 
     import asyncio
 
-    asyncio.run(run(args.token))
+    asyncio.run(run(token))
 
 
 if __name__ == "__main__":
