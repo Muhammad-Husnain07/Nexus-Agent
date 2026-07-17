@@ -3,7 +3,10 @@
 #
 # Builder:   installs dependencies via uv
 # Runtime:   minimal python:3.12-slim with .venv copied from builder,
-#            runs as non-root nexus user, healthcheck, starts with migrations
+#            runs as non-root nexus user, healthcheck, starts uvicorn
+# Note:      Migrations are run separately (Job in K8s, dev.sh locally).
+#            The app starts without them; /readyz will show degraded until
+#            tables exist.
 # =============================================================================
 
 # ── Builder ──────────────────────────────────────────────────────────────────
@@ -56,4 +59,4 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
 
 USER nexus
 
-CMD ["sh", "-c", "python -m alembic upgrade head && exec python -m uvicorn nexus.main:app --host 0.0.0.0 --port 8000"]
+CMD ["uvicorn", "nexus.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,0 +1,36 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nexus-migration
+  labels:
+    app: nexus-agent
+    component: migration
+spec:
+  template:
+    metadata:
+      labels:
+        app: nexus-agent
+        component: migration
+    spec:
+      restartPolicy: Never
+      backoffLimit: 3
+      containers:
+        - name: migration
+          image: nexus-agent:latest
+          command:
+            - python
+            - -m
+            - alembic
+            - upgrade
+            - head
+          envFrom:
+            - configMapRef:
+                name: nexus-agent-config
+            - secretRef:
+                name: nexus-agent-secret
+          env:
+            - name: NEXUS_DATABASE__URL
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-agent-secret
+                  key: database-url

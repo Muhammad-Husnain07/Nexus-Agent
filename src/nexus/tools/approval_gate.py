@@ -7,7 +7,6 @@ supervisor catches this and calls ``interrupt()`` (wired in Phase 11).
 
 from __future__ import annotations
 
-import re
 import uuid
 from typing import Any
 
@@ -75,12 +74,8 @@ def check_approval_required(  # noqa: PLR0913
 ) -> ApprovalCheckResult:
     """Check whether a tool call needs human approval.
 
-    Approval is required if any of these are true:
-    1. The tool's ``requires_approval`` flag is True.
-    2. The plan step has ``is_destructive=True``.
-    3. The tool's ``risk_level`` is ``"medium"`` or ``"high"``.
-    4. ``settings.hitl_default`` is True (global default).
-    5. The tool name matches any regex in ``settings.hitl_tool_patterns``.
+    Delegates to ``nexus.agent.hitl.requires_approval()`` as the single
+    source of truth for the 5-condition approval rule.
 
     When approval is required, the caller should raise
     ``ApprovalRequiredInterrupt``.
@@ -92,46 +87,15 @@ def check_approval_required(  # noqa: PLR0913
         session_id: Current session.
         agent_run_id: Optional agent run identifier.
         settings: Agent settings. If None, uses defaults from ``get_settings()``.
-        plan_step: The current plan step (optional). Used to check
-            ``is_destructive``.
+        plan_step: The current plan step (optional).
 
     Returns:
         ``ApprovalCheckResult`` indicating whether approval is needed and why.
     """
-    if settings is None:
-        from nexus.config.settings import get_settings  # noqa: PLC0415
+    from nexus.agent.hitl import requires_approval  # noqa: PLC0415
 
-        settings = get_settings().agent
-
-    if tool.requires_approval:
-        return ApprovalCheckResult(
-            required=True,
-            reason=f"Tool '{tool.name}' has requires_approval=True",
-        )
-
-    if plan_step and plan_step.get("is_destructive", False):
-        return ApprovalCheckResult(
-            required=True,
-            reason=f"Plan step '{plan_step.get('id', '?')}' is destructive",
-        )
-
-    if tool.risk_level in ("medium", "high"):
-        return ApprovalCheckResult(
-            required=True,
-            reason=f"Tool '{tool.name}' risk_level is '{tool.risk_level}'",
-        )
-
-    if settings.hitl_default:
-        return ApprovalCheckResult(
-            required=True,
-            reason="Global HITL default is enabled",
-        )
-
-    for pattern in settings.hitl_tool_patterns:
-        if re.search(pattern, tool.name):
-            return ApprovalCheckResult(
-                required=True,
-                reason=f"Tool '{tool.name}' matches HITL pattern '{pattern}'",
-            )
-
-    return ApprovalCheckResult(required=False, reason=None)
+    needed = requires_approval(tool, plan_step, settings)
+    return ApprovalCheckResult(
+        required=needed,
+        reason="HITL approval required" if needed else None,
+    )

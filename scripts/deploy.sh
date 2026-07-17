@@ -25,6 +25,11 @@ docker build -f "$DIR/docker/Dockerfile" -t "$IMAGE" "$DIR"
 echo "==> Pushing image: $IMAGE"
 docker push "$IMAGE"
 
+echo "==> Running database migration Job"
+kubectl delete job nexus-migration --ignore-not-found
+kubectl apply -f "$DIR/deploy/k8s/migration-job.yaml"
+kubectl wait --for=condition=complete job/nexus-migration --timeout=120s
+
 echo "==> Updating k8s manifests with image tag"
 sed -i.bak "s|image: .*|image: $IMAGE|" "$DIR/deploy/k8s/deployment.yaml"
 rm -f "$DIR/deploy/k8s/deployment.yaml.bak"
