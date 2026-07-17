@@ -29,9 +29,9 @@ class SandboxBlockedError(Exception):
 class SandboxConfig(BaseModel):
     """Sandbox configuration derived from ``ToolSettings``."""
 
-    enabled: bool = Field(default=False, description="Enable sandboxed execution")
+    enabled: bool = Field(default=True, description="Enable sandboxed execution")
     allowed_hosts: list[str] = Field(
-        default_factory=lambda: ["*"], description="Allowed external hosts (glob patterns)"
+        default_factory=list, description="Allowed external hosts (empty = block all)"
     )
     max_request_bytes: int = Field(
         default=MAX_REQUEST_BYTES, ge=1, description="Max request body size in bytes"
@@ -41,13 +41,16 @@ class SandboxConfig(BaseModel):
 def check_allowed_host(url: str, allowed_hosts: list[str]) -> None:
     """Raise ``SandboxBlockedError`` if the URL host is not in the whitelist.
 
-    Supports glob patterns (``*``, ``?``) via ``fnmatch``. A single ``*``
-    allows all hosts.
+    Supports glob patterns (``*``, ``?``) via ``fnmatch``. An empty list
+    blocks all hosts.
     """
     from urllib.parse import urlparse  # noqa: PLC0415
 
     parsed = urlparse(url)
     host = parsed.hostname or url
+
+    if not allowed_hosts:
+        raise SandboxBlockedError(host, allowed_hosts)
 
     if "*" in allowed_hosts:
         return

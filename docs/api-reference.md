@@ -92,10 +92,7 @@ Direct agent graph access (advanced use cases).
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/v1/agent/invoke` | Run agent synchronously |
-| `POST` | `/api/v1/agent/stream` | Run agent with SSE streaming |
-| `POST` | `/api/v1/agent/{session_id}/resume` | Resume interrupted run |
-| `GET` | `/api/v1/agent/{session_id}/state` | Get current run state |
+| `GET` | `/api/v1/sessions/{session_id}/state` | Get current run state from checkpointer |
 
 ---
 

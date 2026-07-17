@@ -68,6 +68,7 @@ class ToolExecutor:
         secret_resolver: SecretResolver | None = None,
         event_bus: EventBus | None = None,
         sandbox_config: SandboxConfig | None = None,
+        http_client: httpx.AsyncClient | None = None,
     ) -> None:
         self._secret_resolver = secret_resolver or EnvSecretResolver()
         settings = get_settings()
@@ -84,20 +85,23 @@ class ToolExecutor:
         self._max_retries = settings.tools.max_retries
         self._retry_backoff_s = settings.tools.retry_backoff_s
 
-        client_kwargs: dict[str, Any] = {
-            "timeout": httpx.Timeout(self._tool_timeout_s),
-            "limits": httpx.Limits(max_keepalive_connections=20, max_connections=100),
-        }
-        if settings.tools.http2_enabled:
-            try:
-                import h2  # noqa: F401, PLC0415
+        if http_client is not None:
+            self._client = http_client
+        else:
+            client_kwargs: dict[str, Any] = {
+                "timeout": httpx.Timeout(self._tool_timeout_s),
+                "limits": httpx.Limits(max_keepalive_connections=20, max_connections=100),
+            }
+            if settings.tools.http2_enabled:
+                try:
+                    import h2  # noqa: F401, PLC0415
 
-                client_kwargs["http2"] = True
-            except ImportError:
-                logger.warning("http2_disabled", reason="h2 package not installed")
-        if settings.tools.proxy_url:
-            client_kwargs["proxies"] = settings.tools.proxy_url
-        self._client = httpx.AsyncClient(**client_kwargs)
+                    client_kwargs["http2"] = True
+                except ImportError:
+                    logger.warning("http2_disabled", reason="h2 package not installed")
+            if settings.tools.proxy_url:
+                client_kwargs["proxies"] = settings.tools.proxy_url
+            self._client = httpx.AsyncClient(**client_kwargs)
 
     async def execute(  # noqa: PLR0912, PLR0915
         self,

@@ -75,7 +75,7 @@ human review (e.g. a generated draft, computed output).
 ```
 Frontend                      Agent API
    │                             │
-   │  POST /api/v1/agent/stream  │
+    │  POST /api/v1/sessions/{session_id}/chat  │
    │────────────────────────────>│
    │                             ├── graph.astream()
    │                             │
@@ -180,7 +180,7 @@ historical pending rows, but only the most recent one is actionable.
 
 ## Frontend Integration Checklist
 
-1. Connect to ``POST /api/v1/agent/stream`` (SSE).
+1. Connect to ``POST /api/v1/sessions/{session_id}/chat`` (SSE).
 2. Listen for ``event: approval_required`` and ``event: interrupt``.
 3. Render an approval dialog with the ``payload.question``, tool name,
    inputs, and risk level.

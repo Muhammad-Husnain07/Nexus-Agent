@@ -74,23 +74,35 @@ docker compose -f docker/docker-compose.yml up -d
 uv run alembic upgrade head
 
 # Start the development server
-uv run uvicorn src.nexus.main:create_app --factory --reload
+uv run uvicorn nexus.main:create_app --factory --reload
 ```
 
 ### Environment Variables
 
+All variables use the `NEXUS_` prefix with `__` as the nested group delimiter.
+Example: `NEXUS_DATABASE__URL` sets `settings.database.url`.
+
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `DATABASE_URL` | Yes | — | PostgreSQL async connection string (`postgresql+asyncpg://...`) |
-| `REDIS_URL` | Yes | — | Redis connection string (`redis://...`) |
-| `LLM_API_KEY` | Yes | — | API key for default LLM provider |
-| `LLM_MODEL` | No | `gpt-4o` | Default LLM model identifier |
-| `LLM_PROVIDER` | No | `openai` | LiteLLM provider name |
-| `LANGCHAIN_API_KEY` | No | — | LangSmith API key (tracing) |
-| `NEXUS_LOG_LEVEL` | No | `INFO` | Log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
-| `NEXUS_MAX_TOOL_RETRY` | No | `3` | Max retries per tool call |
-| `NEXUS_HITL_DEFAULT` | No | `true` | Require human approval by default |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | No | — | OpenTelemetry collector endpoint |
+| `NEXUS_DATABASE__URL` | Yes | — | PostgreSQL async connection string (`postgresql+asyncpg://...`) |
+| `NEXUS_DATABASE__POOL_SIZE` | No | `10` | Connection pool size |
+| `NEXUS_REDIS__URL` | Yes | — | Redis connection string (`redis://...`) |
+| `NEXUS_LLM__DEFAULT_PROVIDER` | No | `openai` | LiteLLM provider name |
+| `NEXUS_LLM__DEFAULT_MODEL` | No | `gpt-4o` | Model identifier (e.g. `gpt-4o`, `claude-sonnet-4-20250514`, `deepseek/deepseek-chat`) |
+| `NEXUS_LLM__PROVIDERS` | No | — | JSON array of provider configs (see `.env.example`) |
+| `NEXUS_AUTH__JWT_SECRET` | Yes | — | 32+ char random secret |
+| `NEXUS_AGENT__HITL_DEFAULT` | No | `true` | Require human approval by default |
+| `NEXUS_AGENT__RUN_LOCK_TTL_S` | No | `600` | Per-session lock TTL in seconds |
+| `NEXUS_TOOLS__MAX_RETRIES` | No | `3` | Max retries per tool call |
+| `NEXUS_SERVER__WORKERS` | No | `4` | Number of uvicorn workers |
+| `NEXUS_OBSERVABILITY__LANGSMITH_API_KEY` | No | — | LangSmith API key for tracing |
+| `NEXUS_OBSERVABILITY__LOG_LEVEL` | No | `INFO` | Log level |
+| `NEXUS_OBSERVABILITY__OTEL_ENDPOINT` | No | — | OpenTelemetry collector endpoint |
+
+> **Using a non-OpenAI provider?** Set `NEXUS_LLM__DEFAULT_PROVIDER` to your provider
+> name and `NEXUS_LLM__DEFAULT_MODEL` to the model identifier. Export the
+> corresponding API key (e.g. `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`).
+> LiteLLM handles routing automatically. See [LiteLLM providers docs](https://docs.litellm.ai/docs/providers).
 
 ### Docker Compose
 

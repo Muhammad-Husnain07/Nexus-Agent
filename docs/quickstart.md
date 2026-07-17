@@ -9,6 +9,23 @@ This guide walks you through starting the platform, registering a tool, and chat
 - **Docker** & **docker compose** (v2.24+)
 - **curl** or **httpie**
 - **Python 3.12+** (for optional SDK usage)
+- An **LLM provider API key** (OpenAI, Anthropic, DeepSeek, Google Gemini, etc.)
+
+> **Provider setup:** Export your API key as an environment variable before starting:
+> ```bash
+> # OpenAI
+> export OPENAI_API_KEY=sk-...
+> # OR DeepSeek
+> export DEEPSEEK_API_KEY=sk-...
+> # OR Anthropic
+> export ANTHROPIC_API_KEY=sk-ant-...
+> ```
+> Then set the model in `.env`:
+> ```bash
+> echo "NEXUS_LLM__DEFAULT_MODEL=deepseek/deepseek-chat" >> .env
+> ```
+> LiteLLM handles routing to the correct provider based on the model prefix.
+> See [LiteLLM providers](https://docs.litellm.ai/docs/providers) for all supported providers.
 
 ---
 

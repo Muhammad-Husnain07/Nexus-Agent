@@ -35,7 +35,7 @@ and multi-turn conversations).
 
 ### Wiring
 
-The checkpointer is wired in ``src/nexus/agent/api.py``:
+The checkpointer is wired in ``src/nexus/agent/runner.py`` and ``src/nexus/api/main.py``:
 
 ```python
 if settings.memory.checkpointer_type == "postgres":
