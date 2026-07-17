@@ -6,7 +6,8 @@ import uuid
 from typing import Annotated, Any
 
 import structlog
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from starlette.requests import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexus.api.depends import TenantDep
@@ -39,10 +40,13 @@ async def register_tool(
     session: SessionDep,
     registry: RegistryDep,
     tenant_id: TenantDep,
-    tool_data: dict[str, Any] = Body(),  # noqa: B008
+    request: Request,
 ) -> ToolRead:
+    tool_data = await request.json()
     tool = ToolCreate(**tool_data)
-    return await registry.register(session, tenant_id, tool)
+    result = await registry.register(session, tenant_id, tool)
+    await session.commit()
+    return result
 
 
 @router.get("", response_model=ToolList)

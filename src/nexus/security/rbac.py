@@ -6,7 +6,6 @@ import uuid
 from enum import Enum
 
 from fastapi import Depends, Request
-from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import select
 
 from nexus.db.base import async_session
@@ -105,7 +104,6 @@ def _get_user_role(user: User) -> Role:
 
 async def get_current_user(  # noqa: B008
     request: Request,
-    credentials: HTTPAuthorizationCredentials | None = None,
 ) -> tuple[uuid.UUID, Role] | None:
     """Resolve the current user ID and role from request state or DB.
 

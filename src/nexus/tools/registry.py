@@ -102,8 +102,10 @@ class ToolRegistry:
         session.add(tool)
         await session.flush()
 
-        tool.embedding = await self._generate_embedding(_embedding_text(tool))
-        await session.flush()
+        emb = await self._generate_embedding(_embedding_text(tool))
+        if emb is not None:
+            tool.embedding = emb
+            await session.flush()
 
         logger.info("tool.registered", tool_id=str(tool.id), name=tool.name)
         return _tool_to_read(tool)
@@ -209,7 +211,7 @@ class ToolRegistry:
         query = query.order_by(Tool.created_at.desc())
         query = query.offset((page - 1) * page_size).limit(page_size)
         result = await session.execute(query)
-        tools = await result.scalars().all()
+        tools = result.scalars().all()
 
         return ToolList(
             items=[_tool_to_read(t) for t in tools],
@@ -259,7 +261,7 @@ class ToolRegistry:
             return []
 
         tools_result = await session.execute(select(Tool).where(Tool.id.in_(tool_ids)))
-        tools_map = {t.id: t for t in await tools_result.scalars().all()}
+        tools_map = {t.id: t for t in tools_result.scalars().all()}
 
         return [
             ToolSearchResult(tool=_tool_to_read(tools_map[tid]), score=scores[tid])
@@ -267,14 +269,14 @@ class ToolRegistry:
             if tid in tools_map
         ]
 
-    async def _generate_embedding(self, text: str) -> list[float]:
+    async def _generate_embedding(self, text: str) -> list[float] | None:
         try:
             embeddings = await self._llm.embed(EMBEDDING_MODEL, [text])
-            if embeddings:
+            if embeddings and embeddings[0]:
                 return embeddings[0]
         except Exception:
             logger.warning("embedding.failed", exc_info=True)
-        return []
+        return None
 
     @staticmethod
     async def _get_model(

@@ -55,8 +55,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 if user_id:
                     request.state.user_id = uuid.UUID(user_id)
                     request.state.user_role = payload.get("role")
-            except (JWTError, ValueError):
-                logger.warning("jwt_validation_failed")
+            except (JWTError, ValueError) as exc:
+                logger.warning("jwt_validation_failed", error=str(exc))
             return await call_next(request)
 
         # Fall back to API key
