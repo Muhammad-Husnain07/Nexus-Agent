@@ -251,7 +251,7 @@ class ToolRegistry:
 
         tool_ids = []
         scores: dict[uuid.UUID, float] = {}
-        async for row in rows:
+        for row in rows.fetchall():
             tid: uuid.UUID = row[0]
             distance: float = row[1]
             tool_ids.append(tid)

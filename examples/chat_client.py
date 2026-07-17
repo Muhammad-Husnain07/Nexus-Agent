@@ -12,6 +12,7 @@ Scenarios:
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import sys
 from collections.abc import AsyncIterator
@@ -21,13 +22,27 @@ import httpx
 API = "http://localhost:8000"
 
 
-async def stream_events(session_id: str, message: str, token: str) -> AsyncIterator[dict]:
+def _extract_tenant(token: str) -> str | None:
+    """Extract the tenant ID from the JWT payload (tid claim)."""
+    try:
+        payload_b64 = token.split(".")[1]
+        padded = payload_b64 + "=" * (4 - len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded))
+        return payload.get("tid")
+    except Exception:
+        return None
+
+
+async def stream_events(session_id: str, message: str, token: str, tenant_id: str | None) -> AsyncIterator[dict]:
     """SSE event streamer."""
-    async with httpx.AsyncClient() as client:
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    if tenant_id:
+        headers["X-Tenant-ID"] = tenant_id
+    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
         async with client.stream(
             "POST",
             f"{API}/api/v1/sessions/{session_id}/chat",
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            headers=headers,
             json={"message": message, "stream": True},
         ) as resp:
             buffer = ""
@@ -49,11 +64,16 @@ def color(text: str, code: str) -> str:
 
 
 async def run(token: str) -> None:
+    tenant_id = _extract_tenant(token)
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    if tenant_id:
+        headers["X-Tenant-ID"] = tenant_id
+
     # Create session
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
         resp = await client.post(
             f"{API}/api/v1/sessions",
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            headers=headers,
             json={"title": "Demo Chat"},
         )
         resp.raise_for_status()
@@ -73,7 +93,7 @@ async def run(token: str) -> None:
         if user_input.strip().lower() in ("quit", "exit", "q"):
             break
 
-        async for event in stream_events(session_id, user_input, token):
+        async for event in stream_events(session_id, user_input, token, tenant_id):
             etype = event["event"]
             payload = event["data"].get("payload", event["data"])
 
@@ -138,17 +158,17 @@ async def run(token: str) -> None:
 
                 # Fetch approval ID and decide
                 try:
-                    async with httpx.AsyncClient() as client:
+                    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
                         resp = await client.get(
                             f"{API}/api/v1/approvals/pending/{session_id}",
-                            headers={"Authorization": f"Bearer {token}"},
+                            headers=headers,
                         )
                         pending = resp.json()
                         if pending:
                             aid = pending[0]["id"]
                             await client.post(
                                 f"{API}/api/v1/approvals/{aid}/decide",
-                                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                                headers=headers,
                                 json=decision,
                             )
                             print(color(f"  → Decision sent: {decision['action']}", "green"))

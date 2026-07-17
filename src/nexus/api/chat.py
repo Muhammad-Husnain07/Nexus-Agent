@@ -102,7 +102,7 @@ async def chat(
     uid = _get_user_id(request)
     tid = _get_tenant_id(request)
 
-    runner: AgentRunner = get_agent_runner(request)
+    runner: AgentRunner = await get_agent_runner(request)
     app_state = request.app.state
 
     if body.stream:

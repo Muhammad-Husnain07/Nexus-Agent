@@ -44,9 +44,7 @@ async def register_tool(
 ) -> ToolRead:
     tool_data = await request.json()
     tool = ToolCreate(**tool_data)
-    result = await registry.register(session, tenant_id, tool)
-    await session.commit()
-    return result
+    return await registry.register(session, tenant_id, tool)
 
 
 @router.get("", response_model=ToolList)
