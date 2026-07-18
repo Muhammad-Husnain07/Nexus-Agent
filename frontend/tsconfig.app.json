@@ -16,6 +16,9 @@
     "noEmit": true,
     "jsx": "react-jsx",
 
+    /* TS 6 deprecation — silence until migration */
+    "ignoreDeprecations": "6.0",
+
     /* Path alias */
     "baseUrl": ".",
     "paths": {
@@ -28,5 +31,6 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/__tests__", "src/test"]
 }
