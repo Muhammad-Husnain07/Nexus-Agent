@@ -1,32 +1,79 @@
-# React + TypeScript + Vite
+# Nexus Console
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Management console for the Nexus Agent platform — a React + TypeScript + MUI single-page application.
 
-Currently, two official plugins are available:
+## Setup
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm install
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+## Development
+
+Start the backend (`http://localhost:8000`) first, then:
+
+```bash
+npm run dev
+```
+
+## API Type Generation
+
+Types in `src/lib/types.ts` are hand-written to match the backend. To auto-generate from the FastAPI OpenAPI schema:
+
+```bash
+npm run gen:api
+```
+
+This runs `openapi-typescript` against `http://localhost:8000/openapi.json` and writes to `src/api/schema.ts`. Requires the backend to be running.
+
+## Environment Variables
+
+Copy `.env.example` to `.env`:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VITE_API_BASE_URL` | `http://localhost:8000` | Backend API base URL |
+| `VITE_MUI_X_LICENSE_KEY` | _(optional)_ | MUI X Pro license key |
+| `VITE_SENTRY_DSN` | _(optional)_ | Sentry DSN for error tracking |
+
+## Build
+
+```bash
+npm run build
+```
+
+Output goes to `dist/`.
+
+## Tests
+
+```bash
+npm test          # single run
+npm run test:watch  # watch mode
+```
+
+## Docker
+
+```bash
+docker build -t nexus-console .
+docker run -p 3000:80 nexus-console
+```
+
+Or run via docker-compose from the `nexus-agent` directory:
+
+```bash
+docker compose up -d nexus-console
+```
+
+## Project Structure
+
+```
+src/
+├── api/           # API client and hooks
+├── components/    # Shared UI components (layout, skeletons)
+├── features/      # Feature modules (auth, chat, tools, sessions, etc.)
+├── routes/        # Route pages (admin, memory, cost)
+├── stores/        # Zustand stores (auth)
+├── theme/         # MUI theme (extendTheme, themeStore)
+├── lib/           # Utilities, types, API client
+└── main.tsx       # App entry point with providers
+```

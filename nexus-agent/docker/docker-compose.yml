@@ -13,6 +13,20 @@
 # =============================================================================
 
 services:
+  nexus-console:
+    build:
+      context: ../nexus-console
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    environment:
+      VITE_API_BASE_URL: http://nexus-agent:8000
+    networks:
+      - nexus-network
+    depends_on:
+      - nexus-agent
+    restart: unless-stopped
+
   nexus-agent:
     build:
       context: ..
