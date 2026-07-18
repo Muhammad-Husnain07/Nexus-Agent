@@ -64,6 +64,9 @@ class Tool(TenantMixin, Base):
     enabled: Mapped[bool] = mapped_column(
         Boolean, default=True, comment="Whether the tool is active"
     )
+    rate_limit_per_minute: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, default=None, comment="Max requests per minute (null = unlimited)"
+    )
     embedding: Mapped[list[float] | None] = mapped_column(
         VECTOR(768), nullable=True, comment="Semantic embedding for discovery"
     )

@@ -47,6 +47,9 @@ class ToolCreate(BaseModel):
     idempotent: bool = Field(
         default=False, description="Whether the tool supports idempotent execution (safe to retry)"
     )
+    rate_limit_per_minute: int | None = Field(
+        default=None, description="Max requests per minute (null = unlimited)"
+    )
 
 
 class ToolUpdate(BaseModel):
@@ -70,6 +73,9 @@ class ToolUpdate(BaseModel):
     requires_approval: bool | None = Field(default=None, description="Requires HITL approval")
     risk_level: str | None = Field(default=None, description="Risk level: low | medium | high")
     enabled: bool | None = Field(default=None, description="Whether the tool is active")
+    rate_limit_per_minute: int | None = Field(
+        default=None, description="Max requests per minute (null = unlimited)"
+    )
 
 
 class ToolRead(BaseModel):
@@ -95,6 +101,9 @@ class ToolRead(BaseModel):
     enabled: bool = Field(description="Whether the tool is active")
     tenant_public: bool = Field(default=False, description="Visible to all tenants")
     idempotent: bool = Field(default=False, description="Supports idempotent execution")
+    rate_limit_per_minute: int | None = Field(
+        default=None, description="Max requests per minute (null = unlimited)"
+    )
     version: int = Field(description="Tool definition version")
     created_at: datetime = Field(description="Creation timestamp")
     updated_at: datetime = Field(description="Last update timestamp")

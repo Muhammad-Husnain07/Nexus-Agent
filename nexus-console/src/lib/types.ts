@@ -89,6 +89,7 @@ export interface ToolRead {
   created_at: string
   updated_at: string
   embedding?: number[]
+  rate_limit_per_minute?: number | null
 }
 
 export interface ToolList {
@@ -204,6 +205,7 @@ export interface ToolCreate {
   enabled?: boolean
   tenant_public?: boolean
   idempotent?: boolean
+  rate_limit_per_minute?: number | null
 }
 
 export interface ToolUpdate {

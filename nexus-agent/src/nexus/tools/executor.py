@@ -23,6 +23,7 @@ from nexus.config.settings import get_settings
 from nexus.db.models.tool import ToolExecution
 from nexus.redis_client.client import get_redis_client
 from nexus.redis_client.pubsub import EventBus, tool_channel
+from nexus.redis_client.rate_limiter import RateLimitError, TokenBucketRateLimiter
 from nexus.tools.approval_gate import ApprovalRequiredInterrupt, check_approval_required
 from nexus.tools.result import ToolResult
 from nexus.tools.retries import http_retry_policy, is_retryable_status, parse_retry_after
@@ -209,7 +210,29 @@ class ToolExecutor:
         last_exc: Exception | None = None
         response: httpx.Response | None = None
 
-        # 6. HTTP call with retry
+        # 6. Rate limit check (Redis token bucket per tool)
+        if tool.rate_limit_per_minute is not None and tool.rate_limit_per_minute > 0:
+            redis = get_redis_client()
+            if redis is not None:
+                rl_key = f"tool:rl:{tool.id}"
+                limiter = TokenBucketRateLimiter(
+                    redis,
+                    rate=tool.rate_limit_per_minute / 60.0,
+                    capacity=float(tool.rate_limit_per_minute),
+                )
+                try:
+                    await limiter.acquire(rl_key, raise_on_limit=True)
+                except RateLimitError as exc:
+                    logger.warning("tool.rate_limited", tool=tool.name, key=rl_key)
+                    return ToolResult(
+                        tool_id=tool.id,
+                        tool_name=tool.name,
+                        status="rate_limited",
+                        error=str(exc),
+                        duration_ms=0,
+                    )
+
+        # 7. HTTP call with retry
         retry_policy = http_retry_policy(
             max_attempts=self._max_retries,
             backoff_base_s=self._retry_backoff_s,
