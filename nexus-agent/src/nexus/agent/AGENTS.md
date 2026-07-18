@@ -23,14 +23,12 @@ This module owns the LangGraph StateGraph that implements a hybrid ReAct + Plan-
 | `api.py` | FastAPI router `/agent` — invoke, stream (SSE), resume, approve/reject/edit, get state |
 | `errors.py` | Re-exports agent-specific exceptions from central error module |
 | `schemas.py` | Request/response models: `AgentInvokeRequest`, `AgentStreamEvent`, `ApprovalAction`, etc. |
-| `graph_cache.py` | In-memory cache for compiled graphs per session |
-
 ## Nodes (`nodes/`)
 
 | Node | File | Behaviour |
 |------|------|-----------|
 | understand_intent | `understand_intent.py` | LLM extracts `IntentAnalysis` with primary_goal, missing_info_slots, confidence; routes to clarification if confidence < 0.5 |
-| gather_requirements | `gather_requirements.py` | Generates at most 3 clarifying questions per turn referencing missing slots; merges answers into `gathered_requirements` |
+| gather_requirements | `gather_requirements.py` | Generates at most 3 clarifying questions per turn referencing missing slots; merges answers into `gathered_requirements`. Routes to `END` — the user replies with a new message, which re-enters at `understand_intent`. This is a multi-turn conversational pattern; the agent does not loop internally. |
 | discover_tools | `discover_tools.py` | Calls `DynamicToolSelector` to populate `available_tools` via semantic search + optional LLM re-rank |
 | plan | `plan.py` | LLM structured output `Plan` with steps, rationale, destructive flag; flags plan as needs_human_review if destructive |
 | select_and_bind_tools | `select_and_bind_tools.py` | Pre-filters tools for current plan step, converts to OpenAI tool-call schema |

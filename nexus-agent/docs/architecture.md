@@ -205,6 +205,20 @@ graph LR
 
 ---
 
+## Conversational Loop
+
+The agent is **multi-turn** by design. When it needs clarification, the `gather_requirements` node asks questions and the graph routes to `END`. The user responds with a new message, which re-enters the graph at `understand_intent`. This cycle repeats until all required information is gathered:
+
+```
+User message → understand_intent
+  ├─ Enough info? → discover_tools → plan → execute_step → ...
+  └─ Missing info? → gather_requirements → ask questions → END
+                                                    ↓
+                              User replies → understand_intent (merges answers) → ...
+```
+
+This avoids internal clarification loops and gives the user a natural back-and-forth experience. Each turn is a complete conversation round-trip.
+
 ## Architecture Decision Records
 
 | Decision | Choice | Rationale |
