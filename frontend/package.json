@@ -7,35 +7,46 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
     "@hookform/resolvers": "^5.4.0",
     "@monaco-editor/react": "^4.7.0",
+    "@mui/icons-material": "^9.2.0",
+    "@mui/material": "^9.2.0",
+    "@mui/x-charts": "^9.10.0",
+    "@mui/x-data-grid": "^9.10.0",
+    "@mui/x-date-pickers": "^9.10.0",
     "@tanstack/react-query": "^5.101.2",
     "axios": "^1.18.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.25.0",
+    "notistack": "^3.0.2",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-hook-form": "^7.82.0",
     "react-router-dom": "^7.18.1",
     "recharts": "^3.9.2",
-    "tailwind-merge": "^3.6.0",
+    "sonner": "^2.0.7",
     "zod": "^4.4.3",
     "zustand": "^5.0.14"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.3.3",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
-    "autoprefixer": "^10.5.4",
+    "jsdom": "^29.1.1",
     "oxlint": "^1.71.0",
-    "postcss": "^8.5.19",
-    "tailwindcss": "^4.3.3",
     "typescript": "~6.0.2",
-    "vite": "^8.1.1"
+    "vite": "^8.1.1",
+    "vitest": "^4.1.10"
   }
 }
