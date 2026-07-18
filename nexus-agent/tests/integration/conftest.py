@@ -1,20 +1,21 @@
 """Integration test fixtures using testcontainers for PostgreSQL+pgvector and Redis.
 
-Starts real Docker containers, runs Alembic migrations, and provides
+Starts real Docker containers, creates all tables, and provides
 session-scoped DB/Redis clients for all integration tests.
 """
 
 from __future__ import annotations
 
+import os
 import uuid
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import pytest
 import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from testcontainers.postgres import PostgresContainer
 from testcontainers.redis import RedisContainer
 
@@ -72,9 +73,15 @@ def redis_container() -> RedisContainer:
 @pytest.fixture(scope="session")
 def db_url(postgres_container: PostgresContainer) -> str:
     """Get the PostgreSQL connection URL with asyncpg driver."""
-    return postgres_container.get_connection_url().replace(
-        "postgresql://", "postgresql+asyncpg://"
-    )
+    url = postgres_container.get_connection_url()
+    if "+" in url and "://" in url:
+        prefix, rest = url.split("://", 1)
+        if "+" in prefix:
+            prefix = prefix.split("+")[0]
+        url = f"{prefix}+asyncpg://{rest}"
+    elif "postgresql://" in url:
+        url = url.replace("postgresql://", "postgresql+asyncpg://")
+    return url
 
 
 @pytest.fixture(scope="session")
@@ -90,38 +97,25 @@ def redis_url(redis_container: RedisContainer) -> str:
 
 @pytest_asyncio.fixture(scope="session")
 async def async_engine(db_url: str) -> AsyncGenerator[AsyncEngine, None]:
-    """Create a session-scoped async engine connected to the test DB."""
-    engine = create_async_engine(db_url, pool_size=5, max_overflow=10)
+    """Create a session-scoped async engine connected to the test DB.
+
+    Creates all tables from SQLAlchemy models at setup time.
+    """
+    os.environ["NEXUS_SKIP_AUTO_MIGRATE"] = "1"
+    import nexus.db.models  # noqa: E402, F401
+
+    engine = create_async_engine(db_url)
+    async with engine.begin() as conn:
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        await conn.execute(text('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"'))
+        await conn.run_sync(Base.metadata.create_all)
     yield engine
     await engine.dispose()
 
 
-@pytest_asyncio.fixture(scope="session")
-async def run_migrations(async_engine: AsyncEngine) -> AsyncGenerator[None, None]:
-    """Run Alembic migrations against the test database.
-
-    Creates the pgvector extension and applies all migrations before any
-    integration test runs.
-    """
-    async with async_engine.connect() as conn:
-        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        await conn.execute(text('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"'))
-        await conn.commit()
-
-    from alembic.config import Config
-    from alembic.command import upgrade
-
-    url = str(async_engine.url)
-    alembic_cfg = Config()
-    alembic_cfg.set_main_option("script_location", "alembic")
-    alembic_cfg.set_main_option("sqlalchemy.url", url)
-    upgrade(alembic_cfg, "head")
-    yield
-
-
 @pytest_asyncio.fixture
 async def db_session(
-    async_engine: AsyncEngine, run_migrations: None
+    async_engine: AsyncEngine,
 ) -> AsyncGenerator[AsyncSession, None]:
     """Provide a function-scoped async DB session with rollback on teardown."""
     connection = await async_engine.connect()
@@ -210,10 +204,6 @@ async def seed_tools(
 
 @pytest_asyncio.fixture
 async def async_client() -> AsyncGenerator[AsyncClient, None]:
-    """Provide a raw async HTTP client (not wired to the app).
-
-    Integration tests that need the full FastAPI stack should create
-    a TestClient with ASGITransport in the test itself.
-    """
+    """Provide a raw async HTTP client (not wired to the app)."""
     async with AsyncClient() as client:
         yield client

@@ -66,6 +66,7 @@ dev = [
     "bandit>=1.7",
     "pip-audit>=2.7",
     "locust>=2.32",
+    "psycopg2-binary>=2.9.12",
 ]
 
 [tool.ruff]
@@ -113,6 +114,8 @@ filterwarnings = ["ignore::pytest_cov.plugin.CovReportWarning"]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests that require real infrastructure (Docker containers)",
+    "security: marks security enforcement tests (no Docker, runs fast)",
+    "e2e: marks end-to-end workflow tests (requires Docker)",
     "contract: marks API contract tests for tool schemas and response shapes",
     "eval: marks LLM evaluation tests (may use LangSmith)",
     "load: marks load / performance tests (run separately via locust)",
