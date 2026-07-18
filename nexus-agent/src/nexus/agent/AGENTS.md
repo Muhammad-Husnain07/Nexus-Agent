@@ -20,9 +20,9 @@ This module owns the LangGraph StateGraph that implements a hybrid ReAct + Plan-
 | `hitl.py` | `interrupt_for_approval()` with 5 criteria (tool flag, destructiveness, risk level, global default, name patterns), `build_approval_payload()` |
 | `hitl_middleware.py` | Wraps `ToolExecutor` to intercept calls requiring HITL approval |
 | `feedback_interrupt.py` | `interrupt_for_feedback()` for intermediate preview approval (approve/edit/reject) |
-| `api.py` | FastAPI router `/agent` — invoke, stream (SSE), resume, approve/reject/edit, get state |
 | `errors.py` | Re-exports agent-specific exceptions from central error module |
 | `schemas.py` | Request/response models: `AgentInvokeRequest`, `AgentStreamEvent`, `ApprovalAction`, etc. |
+
 ## Nodes (`nodes/`)
 
 | Node | File | Behaviour |
