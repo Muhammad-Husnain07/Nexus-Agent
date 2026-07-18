@@ -12,6 +12,10 @@ import ToolsPage from "@/features/tools/ToolsPage"
 import ApprovalsPage from "@/features/approvals/ApprovalsPage"
 import ObservabilityPage from "@/features/observability/ObservabilityPage"
 import SettingsPage from "@/features/settings/SettingsPage"
+import MemoryPage from "@/routes/memory/index"
+import TenantsPage from "@/routes/admin/tenants/index"
+import AuditLogPage from "@/routes/admin/audit-log/index"
+import CostPage from "@/routes/cost/index"
 import "./index.css"
 
 const KEY = import.meta.env.VITE_MUI_X_LICENSE_KEY as string | undefined
@@ -45,6 +49,10 @@ createRoot(document.getElementById("root")!).render(
               <Route path="approvals" element={<ApprovalsPage />} />
               <Route path="observability" element={<ObservabilityPage />} />
               <Route path="settings" element={<SettingsPage />} />
+              <Route path="memory" element={<MemoryPage />} />
+              <Route path="admin/tenants" element={<TenantsPage />} />
+              <Route path="admin/audit-log" element={<AuditLogPage />} />
+              <Route path="cost" element={<CostPage />} />
             </Route>
           </Routes>
         </BrowserRouter>
