@@ -142,7 +142,7 @@ class MemoryStore:
             import re
             _VALID_KEY = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
             for idx, (k, v) in enumerate(metadata_filter.items()):
-                if not _VALID_KEY.match(str(k)):
+                if not _VALID_KEY.fullmatch(str(k)):
                     raise ValueError(f"Invalid metadata key: {k}")
                 kp = f"mfk_{idx}"
                 vp = f"mfv_{idx}"

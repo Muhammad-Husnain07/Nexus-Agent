@@ -186,3 +186,34 @@ class TestMemoryStore:
                 deleted = await store.delete(("tid", "memories", "fact"), uuid.uuid4())
 
         assert deleted is False
+
+
+class TestSearchSQLInjection:
+    """Verify that search() rejects malicious metadata filter keys."""
+
+    async def test_rejects_malicious_metadata_key(self) -> None:
+        """A metadata key with SQL injection attempt must raise ValueError."""
+        store = MemoryStore()
+        with pytest.raises(ValueError, match="Invalid metadata key"):
+            await store.search(
+                query_embedding=[0.1, 0.2],
+                top_k=10,
+                metadata_filter={"foo; DROP TABLE memory": "bar"},
+            )
+
+    async def test_accepts_valid_metadata_key(self) -> None:
+        """A valid metadata key must not raise ValueError (before DB)."""
+        store = MemoryStore()
+        # The validation happens before any DB call, so we just need to
+        # catch the subsequent DB error (since we're not actually connected).
+        try:
+            await store.search(
+                query_embedding=[0.1, 0.2],
+                top_k=5,
+                metadata_filter={"user_preference": "dark_mode"},
+            )
+        except (TypeError, AttributeError):
+            # DB connection error after validation — that's fine, validation passed
+            pass
+        except ValueError:
+            pytest.fail("Valid metadata key raised ValueError")

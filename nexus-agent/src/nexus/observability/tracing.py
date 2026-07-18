@@ -122,6 +122,6 @@ def _setup_auto_instrumentation() -> None:
         pass
 
     try:
-        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor  # noqa: F401
     except ImportError:
         pass
