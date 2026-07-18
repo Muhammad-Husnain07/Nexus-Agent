@@ -15,12 +15,13 @@
 services:
   nexus-console:
     build:
-      context: ../nexus-console
+      context: ../../frontend
       dockerfile: Dockerfile
     ports:
       - "3000:80"
     environment:
-      VITE_API_BASE_URL: http://nexus-agent:8000
+      VITE_API_URL: http://nexus-agent:8000
+      VITE_WS_URL: ws://nexus-agent:8000/ws
     networks:
       - nexus-network
     depends_on:
@@ -37,6 +38,9 @@ services:
       - ../.env
     environment:
       NEXUS_ENV: production
+      NEXUS_FRONTEND__API_URL: http://localhost:8000
+      NEXUS_EMBED__ENABLED: "true"
+      NEXUS_EMBED__ALLOWED_ORIGINS: "*"
     depends_on:
       postgres:
         condition: service_healthy

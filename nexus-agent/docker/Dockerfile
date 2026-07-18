@@ -7,7 +7,12 @@
 # Note:      Migrations are run separately (Job in K8s, dev.sh locally).
 #            The app starts without them; /readyz will show degraded until
 #            tables exist.
+#
+# Build args:
+#   NEXUS_FRONTEND__API_URL: Backend URL exposed to the frontend
 # =============================================================================
+
+ARG NEXUS_FRONTEND__API_URL="http://localhost:8000"
 
 # ── Builder ──────────────────────────────────────────────────────────────────
 FROM python:3.12-slim AS builder
@@ -32,7 +37,8 @@ FROM python:3.12-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PATH="/app/.venv/bin:$PATH"
+    PATH="/app/.venv/bin:$PATH" \
+    NEXUS_FRONTEND__API_URL=${NEXUS_FRONTEND__API_URL}
 
 # Install curl for healthcheck, nothing else
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -54,6 +60,7 @@ COPY alembic.ini /app/
 
 EXPOSE 8000
 
+# Health check — uses /healthz (liveness) and /readyz (readiness)
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8000/healthz || exit 1
 
