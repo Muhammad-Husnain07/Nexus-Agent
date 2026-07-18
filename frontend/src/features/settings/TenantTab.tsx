@@ -4,10 +4,11 @@ import Card from "@mui/material/Card"
 import CardContent from "@mui/material/CardContent"
 import Typography from "@mui/material/Typography"
 import TextField from "@mui/material/TextField"
+import InputAdornment from "@mui/material/InputAdornment"
 import Button from "@mui/material/Button"
 import CircularProgress from "@mui/material/CircularProgress"
 import Alert from "@mui/material/Alert"
-import { toast } from "sonner"
+import { useSnackbar } from "notistack"
 import { useAuthStore } from "@/features/auth/authStore"
 import { useGetTenant, useUpdateTenant } from "@/lib/api/settings"
 
@@ -17,7 +18,7 @@ export default function TenantTab() {
   const tenantId = user?.tenant_id
   const { data: tenant, isLoading, isError, error } = useGetTenant(tenantId)
   const updateTenant = useUpdateTenant()
-
+  const { enqueueSnackbar } = useSnackbar()
   const [name, setName] = useState("")
   const [maxTokens, setMaxTokens] = useState("")
 
@@ -37,10 +38,8 @@ export default function TenantTab() {
     if (!isNaN(parsed)) settings.max_tokens_per_day = parsed
     if (Object.keys(settings).length > 0) data.settings = settings
     if (Object.keys(data).length === 0) return
-    try {
-      await updateTenant.mutateAsync({ tenantId, data })
-      toast.success("Tenant settings updated")
-    } catch (err) { toast.error(err instanceof Error ? err.message : "Failed to update tenant") }
+    try { await updateTenant.mutateAsync({ tenantId, data }); enqueueSnackbar("Saved", { variant: "success" }) }
+    catch (err) { enqueueSnackbar(err instanceof Error ? err.message : "Failed", { variant: "error" }) }
   }
 
   if (isLoading) return <Box sx={{ display: "flex", justifyContent: "center", py: 6 }}><CircularProgress /></Box>
@@ -50,44 +49,27 @@ export default function TenantTab() {
   return (
     <Box sx={{ maxWidth: 480, display: "flex", flexDirection: "column", gap: 2 }}>
       <Card variant="outlined">
-        <CardContent sx={{ "&:last-child": { pb: 2 } }}>
-          <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            <div>
-              <Typography variant="caption" color="text.secondary">Tenant ID</Typography>
-              <Typography variant="caption" sx={{ fontFamily: "monospace", display: "block" }}>{tenant.id}</Typography>
-            </div>
-            <div>
-              <Typography variant="caption" color="text.secondary">Name</Typography>
-              {isAdmin ? (
-                <TextField size="small" value={name} onChange={(e) => setName(e.target.value)} fullWidth sx={{ mt: 0.5 }} />
-              ) : (
-                <Typography variant="body1" sx={{ fontWeight: 500 }}>{tenant.name}</Typography>
-              )}
-            </div>
-            <div>
-              <Typography variant="caption" color="text.secondary">Slug</Typography>
-              <Typography variant="body1" sx={{ fontWeight: 500 }}>{tenant.slug}</Typography>
-            </div>
-            <div>
-              <Typography variant="caption" color="text.secondary">Status</Typography>
-              <Typography variant="body1" sx={{ fontWeight: 500 }}>{tenant.status}</Typography>
-            </div>
-            {isAdmin && (
-              <div>
-                <Typography variant="caption" color="text.secondary">Max tokens per day</Typography>
-                <TextField size="small" type="number" value={maxTokens} onChange={(e) => setMaxTokens(e.target.value)}
-                  fullWidth sx={{ mt: 0.5 }} placeholder="e.g. 100000" />
-              </div>
-            )}
-          </Box>
+        <CardContent sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <Typography variant="caption" color="text.secondary">Tenant ID</Typography>
+          <Typography variant="caption" sx={{ fontFamily: "monospace" }}>{tenant.id}</Typography>
+          <Typography variant="caption" color="text.secondary">Name</Typography>
+          {isAdmin ? <TextField size="small" value={name} onChange={(e) => setName(e.target.value)} fullWidth /> : <Typography variant="body1">{tenant.name}</Typography>}
+          <Typography variant="caption" color="text.secondary">Slug</Typography>
+          <Typography variant="body1">{tenant.slug}</Typography>
+          <Typography variant="caption" color="text.secondary">Status</Typography>
+          <Typography variant="body1">{tenant.status}</Typography>
+          {isAdmin && (
+            <>
+              <Typography variant="caption" color="text.secondary">Max tokens per day</Typography>
+              <TextField size="small" type="number" value={maxTokens} onChange={(e) => setMaxTokens(e.target.value)}
+                slotProps={{ input: { startAdornment: <InputAdornment position="start">🔤</InputAdornment> } }} fullWidth placeholder="e.g. 100000" />
+            </>
+          )}
         </CardContent>
       </Card>
-
-      {isAdmin && (
-        <Button variant="contained" onClick={handleSave} disabled={updateTenant.isPending} sx={{ alignSelf: "flex-start" }}>
-          {updateTenant.isPending ? <CircularProgress size={18} /> : "Save Changes"}
-        </Button>
-      )}
+      {isAdmin && <Button variant="contained" onClick={handleSave} disabled={updateTenant.isPending} sx={{ alignSelf: "flex-start" }}>
+        {updateTenant.isPending ? <CircularProgress size={18} /> : "Save Changes"}
+      </Button>}
     </Box>
   )
 }
