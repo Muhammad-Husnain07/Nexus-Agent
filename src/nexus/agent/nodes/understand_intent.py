@@ -7,6 +7,7 @@ from typing import Any
 
 import structlog
 
+from nexus.agent.nodes import msg_content, msg_role
 from nexus.agent.prompts import prompt_manager
 from nexus.agent.state import AgentState, IntentAnalysis
 from nexus.llm.client import LLMClient
@@ -35,10 +36,10 @@ async def understand_intent(
         Dict with ``intent``, ``missing_info_slots``, ``messages``,
         ``intent_analysis``, and ``_routing_decision`` updates.
     """
-    messages: list[dict[str, Any]] = list(state.get("messages", []))
+    messages: list = list(state.get("messages", []))
     new_messages: list[dict[str, Any]] = []
     last_user = next(
-        (m["content"] for m in reversed(messages) if m.get("role") == "user"),
+        (msg_content(m) for m in reversed(messages) if msg_role(m) == "user"),
         "",
     )
     if not last_user:

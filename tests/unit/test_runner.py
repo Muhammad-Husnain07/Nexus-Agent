@@ -68,7 +68,10 @@ class TestAgentRunnerBasics:
         async def _mock_astream(*args: object, **kwargs: object):
             yield {"finalize": {"final_response": "Resumed."}}
 
-        with patch.object(runner, "_build_graph") as mock_build:
+        with (
+            patch.object(runner, "_build_graph") as mock_build,
+            patch("nexus.agent.runner.get_redis_client", return_value=None),
+        ):
             mock_graph = MagicMock()
             mock_graph.aget_state = AsyncMock(return_value=MagicMock(next=["execute_step"]))
             mock_graph.astream = _mock_astream
@@ -83,7 +86,10 @@ class TestAgentRunnerBasics:
 
     async def test_resume_no_paused_run(self, runner: AgentRunner) -> None:
         """Verify resume() yields error when no paused run exists."""
-        with patch.object(runner, "_build_graph") as mock_build:
+        with (
+            patch.object(runner, "_build_graph") as mock_build,
+            patch("nexus.agent.runner.get_redis_client", return_value=None),
+        ):
             mock_graph = MagicMock()
             mock_graph.aget_state = AsyncMock(return_value=MagicMock(next=[]))
             mock_build.return_value = mock_graph

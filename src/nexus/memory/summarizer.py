@@ -11,6 +11,7 @@ from typing import Any
 
 import structlog
 
+from nexus.agent.nodes import msg_content, msg_role
 from nexus.config.settings import get_settings
 from nexus.llm.client import LLMClient, LLMResponse
 
@@ -80,7 +81,7 @@ class EpisodicSummarizer:
 
         if messages:
             last_user = next(
-                (m["content"] for m in reversed(messages) if m.get("role") == "user"),
+                (msg_content(m) for m in reversed(messages) if msg_role(m) == "user"),
                 "",
             )
             parts.append(f"User message: {last_user[:500]}")

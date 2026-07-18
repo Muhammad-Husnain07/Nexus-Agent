@@ -94,7 +94,7 @@ class AgentState(TypedDict):
     checkpointing.  Messages use the ``add_messages`` reducer.
     """
 
-    messages: Annotated[list[dict[str, Any]], add_messages]
+    messages: Annotated[list, add_messages]
     tenant_id: str
     session_id: str
     user_id: str

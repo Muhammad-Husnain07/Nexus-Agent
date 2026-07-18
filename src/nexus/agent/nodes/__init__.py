@@ -1,4 +1,24 @@
-"""Extracted LangGraph node implementations — one module per node."""
+"""Extracted LangGraph node implementations — one module per node.
+
+Shared helpers for message handling across nodes.
+"""
+
+from typing import Any
+
+
+def msg_content(msg: Any) -> str:
+    """Extract content from either a dict message or a BaseMessage."""
+    if isinstance(msg, dict):
+        return str(msg.get("content", ""))
+    return str(getattr(msg, "content", "") or "")
+
+
+def msg_role(msg: Any) -> str:
+    """Extract role from either a dict message or a BaseMessage."""
+    if isinstance(msg, dict):
+        return str(msg.get("role", ""))
+    return str(getattr(msg, "type", ""))
+
 
 from nexus.agent.nodes.analyze_results import analyze_results
 from nexus.agent.nodes.discover_tools import discover_tools

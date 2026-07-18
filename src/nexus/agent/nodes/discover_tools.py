@@ -8,6 +8,7 @@ from typing import Any
 
 import structlog
 
+from nexus.agent.nodes import msg_content
 from nexus.agent.state import AgentState
 from nexus.tools.discovery import DynamicToolSelector
 
@@ -29,7 +30,7 @@ async def discover_tools(
     """
     tenant_id = uuid.UUID(state["tenant_id"])
     intent: dict[str, Any] = state.get("intent") or {}
-    query: str = intent.get("intent", "") or state.get("messages", [{}])[-1].get("content", "")
+    query: str = intent.get("intent", "") or msg_content(state.get("messages", [{}])[-1])
 
     session = session_factory() if session_factory else None
     tools = await selector.select(session, tenant_id=tenant_id, message=query)
