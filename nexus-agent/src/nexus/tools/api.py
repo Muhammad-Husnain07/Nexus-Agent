@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Annotated, Any
 
@@ -14,6 +15,7 @@ from nexus.api.depends import TenantDep
 from nexus.db.base import get_session
 from nexus.security.rbac import Permission, require_permission
 from nexus.tools.registry import ToolRegistry
+from nexus.tools.result import ToolResult
 from nexus.tools.schemas import ToolCreate, ToolList, ToolRead, ToolSearchResult, ToolUpdate
 
 logger = structlog.get_logger("nexus.tools.api")
@@ -128,14 +130,15 @@ async def delete_tool(
         raise HTTPException(status_code=404, detail="Tool not found")
 
 
-@router.post("/{tool_id}/test", response_model=dict[str, Any])
-async def test_tool(
+@router.post("/{tool_id}/test", response_model=ToolResult)
+async def test_tool(  # noqa: PLR0913
     tool_id: uuid.UUID,
     registry: RegistryDep,
     session: SessionDep,
     tenant_id: TenantDep,
     sample_input: dict[str, Any] | None = None,  # noqa: PT028
-) -> dict[str, Any]:
+    dry_run: bool = Query(True, description="If True, validate schema only without HTTP call"),  # noqa: PT028
+) -> ToolResult:
     tool = await registry.get(session, tenant_id, tool_id)
     if tool is None:
         raise HTTPException(status_code=404, detail="Tool not found")
@@ -150,13 +153,39 @@ async def test_tool(
                     detail=f"Missing required field: {field}",
                 )
 
-    return {
-        "tool": tool.name,
-        "endpoint": tool.endpoint_url,
-        "method": tool.http_method,
-        "input_validated": True,
-        "mock_output": tool.output_schema or {"type": "object", "properties": {}},
-    }
+    if dry_run:
+        logger.info(
+            "tool.test_dry_run",
+            tool=tool.name,
+            endpoint=tool.endpoint_url,
+            method=tool.http_method,
+        )
+        return ToolResult(
+            tool_id=tool.id,
+            tool_name=tool.name,
+            status="success",
+            data={"dry_run": True, "message": "Schema validation passed"},
+            duration_ms=0,
+        )
+
+    logger.info(
+        "tool.test_executing",
+        tool=tool.name,
+        endpoint=tool.endpoint_url,
+        method=tool.http_method,
+        input_size=len(json.dumps(payload)),
+    )
+
+    result = await registry.test_http_connection(tool, sample_input=payload)
+
+    logger.info(
+        "tool.test_completed",
+        tool=tool.name,
+        status=result.status,
+        http_status=result.http_status,
+        duration_ms=result.duration_ms,
+    )
+    return result
 
 
 @router.get("/{tool_id}/versions/diff")

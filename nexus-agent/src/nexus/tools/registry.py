@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import time
 import uuid
+from typing import Any
 
+import httpx
 import structlog
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,12 +16,24 @@ from nexus.config.settings import get_settings
 from nexus.db.models.tool import Tool
 from nexus.db.models.tool_version import ToolVersion
 from nexus.llm.client import LLMClient
+from nexus.redis_client.client import get_redis_client
+from nexus.redis_client.rate_limiter import RateLimitError, TokenBucketRateLimiter
+from nexus.tools.result import ToolResult
+from nexus.tools.sandbox import check_allowed_host
 from nexus.tools.schemas import (
     ToolCreate,
     ToolList,
     ToolRead,
     ToolSearchResult,
     ToolUpdate,
+)
+
+_PYTHON_CODE_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "code", "script", "python", "exec", "eval", "compile",
+        "subprocess", "__import__", "importlib", "run_python",
+        "exec_python", "sandbox_code",
+    }
 )
 
 logger = structlog.get_logger("nexus.tools.registry")
@@ -33,7 +48,9 @@ def _tool_to_read(tool: Tool) -> ToolRead:
         name=tool.name,
         description=tool.description or "",
         purpose=tool.purpose or "",
+        tool_type=getattr(tool, "tool_type", "http_api"),
         endpoint_url=tool.endpoint_url or "",
+        mcp_server_url=getattr(tool, "mcp_server_url", ""),
         http_method=tool.http_method or "GET",
         auth_type=tool.auth_type or "none",
         auth_ref=tool.auth_ref or "",
@@ -79,6 +96,8 @@ class ToolRegistry:
         data: ToolCreate,
     ) -> ToolRead:
         """Register a new tool, generate its embedding, and return it."""
+        self._validate_no_python_code(data)
+        self._validate_json_schema(data.input_schema)
         tool = Tool(
             tenant_id=tenant_id,
             name=data.name,
@@ -268,6 +287,146 @@ class ToolRegistry:
             for tid in tool_ids
             if tid in tools_map
         ]
+
+    @staticmethod
+    def _validate_no_python_code(data: ToolCreate) -> None:
+        """Reject tool definitions that contain Python code references."""
+        schemas_to_check = {
+            "input_schema": data.input_schema,
+            "output_schema": data.output_schema,
+            "validation_rules": data.validation_rules,
+        }
+        for field_name, schema in schemas_to_check.items():
+            if schema and isinstance(schema, dict):
+                for key in schema:
+                    if key.lower() in _PYTHON_CODE_KEYWORDS:
+                        raise ValueError(
+                            f"Tool '{data.name}' contains Python code reference "
+                            f"'{key}' in {field_name} — rejected"
+                        )
+                props = schema.get("properties", {})
+                if isinstance(props, dict):
+                    for prop_key in props:
+                        if prop_key.lower() in _PYTHON_CODE_KEYWORDS:
+                            raise ValueError(
+                                f"Tool '{data.name}' contains Python code reference "
+                                f"'{prop_key}' in {field_name}.properties — rejected"
+                            )
+
+    @staticmethod
+    def _validate_json_schema(schema: dict[str, Any]) -> None:
+        """Validate that the schema matches JSON Schema Draft 7 or later."""
+        if not schema:
+            return
+        schema_uri = schema.get("$schema", "")
+        if schema_uri and "draft-07" not in schema_uri and "draft-20" not in schema_uri:
+            logger.warning(
+                "tool.schema_version_unknown",
+                schema_uri=schema_uri,
+                hint="Expected JSON Schema Draft 7 or later",
+            )
+
+    async def test_http_connection(
+        self,
+        tool: ToolRead,
+        sample_input: dict[str, Any] | None = None,
+    ) -> ToolResult:
+        """Make a real HTTP call to validate tool connectivity.
+
+        Args:
+            tool: The tool definition to test.
+            sample_input: Optional input payload for the request.
+
+        Returns:
+            A ``ToolResult`` with the actual response or error.
+        """
+        settings = get_settings()
+        sandbox_config_allowed = settings.tools.allowed_hosts
+
+        # Rate limit check before testing
+        if tool.rate_limit_per_minute is not None and tool.rate_limit_per_minute > 0:
+            redis = get_redis_client()
+            if redis is not None:
+                rl_key = f"tool:rl:test:{tool.id}"
+                limiter = TokenBucketRateLimiter(
+                    redis,
+                    rate=tool.rate_limit_per_minute / 60.0,
+                    capacity=float(tool.rate_limit_per_minute),
+                )
+                try:
+                    await limiter.acquire(rl_key, raise_on_limit=True)
+                except RateLimitError as exc:
+                    return ToolResult(
+                        tool_id=tool.id,
+                        tool_name=tool.name,
+                        status="rate_limited",
+                        error=str(exc),
+                        duration_ms=0,
+                    )
+
+        # Sandbox check
+        try:
+            check_allowed_host(tool.endpoint_url, sandbox_config_allowed)
+        except Exception as exc:
+            return ToolResult(
+                tool_id=tool.id,
+                tool_name=tool.name,
+                status="error",
+                error=f"Sandbox blocked: {exc}",
+                duration_ms=0,
+            )
+
+        start = time.perf_counter()
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                method = tool.http_method.lower()
+                if method == "get":
+                    resp = await client.get(tool.endpoint_url, params=sample_input or {})
+                else:
+                    resp = await client.request(
+                        method, tool.endpoint_url, json=sample_input or {}
+                    )
+                resp.raise_for_status()
+                data = resp.json() if resp.text else None
+        except httpx.TimeoutException:
+            duration_ms = int((time.perf_counter() - start) * 1000)
+            return ToolResult(
+                tool_id=tool.id,
+                tool_name=tool.name,
+                status="timeout",
+                error="Test connection timed out",
+                duration_ms=duration_ms,
+            )
+        except httpx.ConnectError as exc:
+            duration_ms = int((time.perf_counter() - start) * 1000)
+            return ToolResult(
+                tool_id=tool.id,
+                tool_name=tool.name,
+                status="error",
+                error=f"Connection refused: {exc}",
+                duration_ms=duration_ms,
+            )
+        except Exception as exc:
+            duration_ms = int((time.perf_counter() - start) * 1000)
+            return ToolResult(
+                tool_id=tool.id,
+                tool_name=tool.name,
+                status="error",
+                error=f"Test connection failed: {exc}",
+                duration_ms=duration_ms,
+            )
+
+        duration_ms = int((time.perf_counter() - start) * 1000)
+        return ToolResult(
+            tool_id=tool.id,
+            tool_name=tool.name,
+            status="success",
+            http_status=resp.status_code,
+            data=data if isinstance(data, dict) else {"result": data},
+            duration_ms=duration_ms,
+            raw_response_excerpt=resp.text[:2000] if resp.text else None,
+            response_headers=dict(resp.headers),
+        )
 
     async def _generate_embedding(self, text: str) -> list[float] | None:
         try:

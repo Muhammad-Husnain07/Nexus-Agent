@@ -1,8 +1,8 @@
-"""ToolExecutor — performs outbound HTTP calls for tool invocations.
+"""ToolExecutor — performs outbound HTTP API calls or MCP server requests.
 
 The executor is the only component that touches external APIs. It enforces
 auth injection, input/output schema validation, retries, sandbox, approval
-gating, and persistence.
+gating, and persistence. Does NOT support Python code execution.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from nexus.redis_client.client import get_redis_client
 from nexus.redis_client.pubsub import EventBus, tool_channel
 from nexus.redis_client.rate_limiter import RateLimitError, TokenBucketRateLimiter
 from nexus.tools.approval_gate import ApprovalRequiredInterrupt, check_approval_required
+from nexus.tools.mcp_client import MCPClient
 from nexus.tools.result import ToolResult
 from nexus.tools.retries import http_retry_policy, is_retryable_status, parse_retry_after
 from nexus.tools.sandbox import (
@@ -43,6 +44,41 @@ AUTH_HEADERS: dict[str, str] = {
     "api_key": "X-API-Key",
     "oauth2": "Bearer",
 }
+
+_PYTHON_CODE_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "code", "script", "python", "exec", "eval", "compile",
+        "subprocess", "__import__", "importlib", "run_python",
+        "exec_python", "sandbox_code",
+    }
+)
+
+
+def _check_python_code_fields(tool: ToolRead) -> str | None:
+    """Return an error message if the tool contains Python code fields."""
+    schemas_to_check = {
+        "input_schema": tool.input_schema,
+        "output_schema": tool.output_schema,
+        "validation_rules": tool.validation_rules,
+    }
+    for field_name, schema in schemas_to_check.items():
+        if schema and isinstance(schema, dict):
+            for key in schema:
+                if key.lower() in _PYTHON_CODE_KEYWORDS:
+                    return (
+                        f"Tool '{tool.name}' contains Python code reference "
+                        f"'{key}' in {field_name} — rejected"
+                    )
+            # Recurse into nested properties
+            props = schema.get("properties", {})
+            if isinstance(props, dict):
+                for prop_key in props:
+                    if prop_key.lower() in _PYTHON_CODE_KEYWORDS:
+                        return (
+                            f"Tool '{tool.name}' contains Python code reference "
+                            f"'{prop_key}' in {field_name}.properties — rejected"
+                        )
+    return None
 
 
 class ExecutionContext:
@@ -81,6 +117,7 @@ class ToolExecutor:
             enabled=settings.tools.sandbox_enabled,
             allowed_hosts=settings.tools.allowed_hosts,
         )
+        self._mcp_client = MCPClient()
         self._agent_settings = settings.agent
         self._tool_timeout_s = settings.tools.execution_timeout_s
         self._max_retries = settings.tools.max_retries
@@ -104,7 +141,7 @@ class ToolExecutor:
                 client_kwargs["proxies"] = settings.tools.proxy_url
             self._client = httpx.AsyncClient(**client_kwargs)
 
-    async def execute(  # noqa: PLR0912, PLR0915
+    async def execute(  # noqa: PLR0911, PLR0912, PLR0915
         self,
         tool: ToolRead,
         inputs: dict[str, Any],
@@ -112,17 +149,20 @@ class ToolExecutor:
         session: AsyncSession,
         skip_approval: bool = False,
     ) -> ToolResult:
-        """Execute a tool and return the result.
+        """Execute an HTTP API call or MCP server request — no code execution.
 
         The full pipeline:
         1. Approval gate check (raises ``ApprovalRequiredInterrupt`` if needed)
         2. Input validation against ``tool.input_schema``
-        3. Sandbox host whitelist check
-        4. Auth header resolution
-        5. HTTP call with retry policy
-        6. Output validation against ``tool.output_schema``
-        7. Persist ``ToolExecution`` row
-        8. Publish tool event to Redis
+        3. Python code injection check (rejects tools with code fields)
+        4. Sandbox host whitelist check (HTTP tools only)
+        5. Auth header resolution
+        6. Body size limit check
+        7. Rate limit check (Redis token bucket)
+        8. HTTP call with retry (``http_api``) or MCP ``tools/call`` (``mcp``)
+        9. Output validation against ``tool.output_schema``
+       10. Persist ``ToolExecution`` row
+       11. Publish tool event to Redis
 
         Args:
             tool: The tool definition to execute.
@@ -167,7 +207,23 @@ class ToolExecutor:
                     duration_ms=0,
                 )
 
-        # 3. Sandbox
+        # 3. Python code injection check
+        code_err = _check_python_code_fields(tool)
+        if code_err:
+            logger.warning("tool.code_rejected", tool=tool.name, reason=code_err)
+            return ToolResult(
+                tool_id=tool.id,
+                tool_name=tool.name,
+                status="validation_error",
+                error=code_err,
+                duration_ms=0,
+            )
+
+        # 4. Route by tool_type
+        if tool.tool_type == "mcp":
+            return await self._execute_mcp(tool, inputs, context, session)
+
+        # 5. Sandbox (HTTP only)
         try:
             check_allowed_host(tool.endpoint_url, self._sandbox_config.allowed_hosts)
         except SandboxBlockedError as exc:
@@ -180,11 +236,11 @@ class ToolExecutor:
                 duration_ms=0,
             )
 
-        # 4. Auth resolution
+        # 6. Auth resolution
         headers = await self._resolve_auth(tool)
         masked_log_headers = mask_sensitive_fields(dict(headers))
 
-        # 5. Body size limit
+        # 7. Body size limit
         if self._sandbox_config.enabled:
             body_bytes = len(json.dumps(inputs).encode("utf-8"))
             if body_bytes > self._sandbox_config.max_request_bytes:
@@ -210,7 +266,7 @@ class ToolExecutor:
         last_exc: Exception | None = None
         response: httpx.Response | None = None
 
-        # 6. Rate limit check (Redis token bucket per tool)
+        # 8. Rate limit check (Redis token bucket per tool)
         if tool.rate_limit_per_minute is not None and tool.rate_limit_per_minute > 0:
             redis = get_redis_client()
             if redis is not None:
@@ -232,7 +288,7 @@ class ToolExecutor:
                         duration_ms=0,
                     )
 
-        # 7. HTTP call with retry
+        # 9. HTTP call with retry
         retry_policy = http_retry_policy(
             max_attempts=self._max_retries,
             backoff_base_s=self._retry_backoff_s,
@@ -324,6 +380,46 @@ class ToolExecutor:
 
         return {"Authorization": f"{header_name} {secret_value}"}
 
+    async def _execute_mcp(
+        self,
+        tool: ToolRead,
+        inputs: dict[str, Any],
+        context: ExecutionContext,
+        session: AsyncSession,
+    ) -> ToolResult:
+        """Execute a tool via an external MCP server — no code execution."""
+        result = await self._mcp_client.call_mcp_tool(
+            server_url=tool.mcp_server_url,
+            tool_name=tool.name,
+            arguments=inputs,
+        )
+
+        # Output validation (soft-fail)
+        if result.data is not None and tool.output_schema:
+            try:
+                jsonschema.validate(result.data, tool.output_schema)
+            except jsonschema.ValidationError as exc:
+                logger.info("tool.output_validation_failed", tool=tool.name, error=str(exc))
+                result.status = "validation_error"
+                result.error = (result.error or "") + f"; Output validation: {exc.message}"
+
+        # Persist
+        try:
+            await self._persist_execution(session, tool, context, result, inputs)
+        except Exception as persist_exc:
+            logger.warning("tool.persist_failed", tool=tool.name, error=str(persist_exc))
+
+        # Publish event
+        await self._publish_event(context, result)
+
+        logger.info(
+            "tool.mcp_executed",
+            tool=tool.name,
+            status=result.status,
+            duration_ms=result.duration_ms,
+        )
+        return result
+
     async def _execute_http(
         self,
         tool: ToolRead,
@@ -331,7 +427,7 @@ class ToolExecutor:
         headers: dict[str, str],
         retry_count: int = 0,
     ) -> httpx.Response:
-        """Perform a single HTTP call to the tool endpoint."""
+        """Perform a single outbound HTTP API call via httpx — no code execution."""
         method = tool.http_method.lower()
 
         if method == "get":

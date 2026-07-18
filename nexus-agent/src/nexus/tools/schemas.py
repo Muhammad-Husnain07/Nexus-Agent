@@ -1,10 +1,14 @@
-"""Pydantic schemas for tool registration, discovery, and search."""
+"""Pydantic schemas for tool registration, discovery, and search.
+
+This system supports HTTP API connections and MCP servers ONLY — no custom
+Python code execution.
+"""
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ToolExample(BaseModel):
@@ -21,12 +25,22 @@ class ToolExample(BaseModel):
 
 
 class ToolCreate(BaseModel):
-    """Request body for registering a new tool."""
+    """Request body for registering a new tool.
+
+    Supports HTTP API connections and MCP servers ONLY — no custom Python
+    code execution.
+    """
 
     name: str = Field(description="Unique tool name (per tenant)")
     description: str = Field(default="", description="Human-readable description")
     purpose: str = Field(default="", description="What the tool does and when to use it")
-    endpoint_url: str = Field(default="", description="API endpoint URL")
+    tool_type: Literal["http_api", "mcp"] = Field(
+        default="http_api", description="Type of tool: http_api or mcp"
+    )
+    endpoint_url: str = Field(default="", description="API endpoint URL (required for http_api)")
+    mcp_server_url: str | None = Field(
+        default=None, description="MCP server URL (required for mcp)"
+    )
     http_method: str = Field(default="GET", description="HTTP method")
     auth_type: str = Field(default="none", description="Authentication type")
     auth_ref: str = Field(default="", description="Reference to stored auth config")
@@ -51,6 +65,14 @@ class ToolCreate(BaseModel):
         default=None, description="Max requests per minute (null = unlimited)"
     )
 
+    @model_validator(mode="after")
+    def _validate_tool_type(self) -> "ToolCreate":
+        if self.tool_type == "http_api" and not self.endpoint_url:
+            raise ValueError("endpoint_url is required when tool_type is 'http_api'")
+        if self.tool_type == "mcp" and not self.mcp_server_url:
+            raise ValueError("mcp_server_url is required when tool_type is 'mcp'")
+        return self
+
 
 class ToolUpdate(BaseModel):
     """Request body for updating an existing tool. All fields optional."""
@@ -58,7 +80,13 @@ class ToolUpdate(BaseModel):
     name: str | None = Field(default=None, description="Unique tool name (per tenant)")
     description: str | None = Field(default=None, description="Human-readable description")
     purpose: str | None = Field(default=None, description="What the tool does and when to use it")
+    tool_type: Literal["http_api", "mcp"] | None = Field(
+        default=None, description="Type of tool: http_api or mcp"
+    )
     endpoint_url: str | None = Field(default=None, description="API endpoint URL")
+    mcp_server_url: str | None = Field(
+        default=None, description="MCP server URL (required for mcp)"
+    )
     http_method: str | None = Field(default=None, description="HTTP method")
     auth_type: str | None = Field(default=None, description="Authentication type")
     auth_ref: str | None = Field(default=None, description="Reference to stored auth config")
@@ -77,16 +105,34 @@ class ToolUpdate(BaseModel):
         default=None, description="Max requests per minute (null = unlimited)"
     )
 
+    @model_validator(mode="after")
+    def _validate_tool_type(self) -> "ToolUpdate":
+        if self.tool_type == "http_api" and self.endpoint_url is not None and not self.endpoint_url:
+            raise ValueError("endpoint_url is required when tool_type is 'http_api'")
+        if self.tool_type == "mcp" and self.mcp_server_url is not None and not self.mcp_server_url:
+            raise ValueError("mcp_server_url is required when tool_type is 'mcp'")
+        return self
+
 
 class ToolRead(BaseModel):
-    """Full tool definition returned by the API."""
+    """Full tool definition returned by the API.
+
+    Supports HTTP API connections and MCP servers ONLY — no custom Python
+    code execution.
+    """
 
     id: uuid.UUID = Field(description="Unique tool identifier")
     tenant_id: uuid.UUID = Field(description="Owning tenant")
     name: str = Field(description="Unique tool name (per tenant)")
     description: str = Field(description="Human-readable description")
     purpose: str = Field(description="What the tool does and when to use it")
-    endpoint_url: str = Field(description="API endpoint URL")
+    tool_type: Literal["http_api", "mcp"] = Field(
+        default="http_api", description="Type of tool: http_api or mcp"
+    )
+    endpoint_url: str = Field(description="API endpoint URL (required for http_api)")
+    mcp_server_url: str = Field(
+        default="", description="MCP server URL (required for mcp)"
+    )
     http_method: str = Field(description="HTTP method")
     auth_type: str = Field(description="Authentication type")
     auth_ref: str = Field(description="Reference to stored auth config")
