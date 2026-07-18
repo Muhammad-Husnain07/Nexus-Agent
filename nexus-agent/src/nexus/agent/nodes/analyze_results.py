@@ -156,7 +156,7 @@ def _map_next_action(next_action: str, next_idx: int, plan_len: int) -> str:
         "continue": "continue",
         "revise": "revise",
         "clarify": "ask",
-        "escalate": "ask",
+        "escalate": "finalize",
         "preview": "preview",
         "finalize": "finalize",
     }
