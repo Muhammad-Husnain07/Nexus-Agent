@@ -3,6 +3,7 @@
 from nexus.db.models.agent_run import AgentRun, Approval
 from nexus.db.models.audit import AuditLog
 from nexus.db.models.credential import ToolCredential
+from nexus.db.models.embed import EmbedConfig
 from nexus.db.models.enums import (
     AgentRunStatus,
     ApprovalStatus,
@@ -27,6 +28,7 @@ __all__ = [
     "Approval",
     "ApprovalStatus",
     "AuditLog",
+    "EmbedConfig",
     "ExecutionStatus",
     "Memory",
     "MemoryKind",
