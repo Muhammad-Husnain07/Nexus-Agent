@@ -272,6 +272,7 @@ class TestBodySizeLimit:
             event_bus=eb,
             sandbox_config=SandboxConfig(
                 enabled=True,
+                allowed_hosts=["*"],
                 max_request_bytes=10,  # very small limit
             ),
         )
