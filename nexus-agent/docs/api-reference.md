@@ -78,7 +78,8 @@ Human-in-the-loop decision management.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/v1/approvals/pending/{session_id}` | List pending approvals |
+| `GET` | `/api/v1/approvals/pending/{session_id}` | List pending approvals for a session |
+| `GET` | `/api/v1/approvals/pending` | List all pending approvals (current tenant) |
 | `GET` | `/api/v1/approvals/{id}` | Get approval status |
 | `POST` | `/api/v1/approvals/{id}/decide` | Approve/reject/edit |
 
@@ -108,19 +109,45 @@ Authentication and token management.
 
 ---
 
-### Admin API — `/api/v1/admin`
+### Memory API — `/api/v1/memory`
 
-Tenant and user management. Requires `tenant_admin` role.
+Long-term memory storage and semantic search.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/v1/admin/tenants` | List all tenants |
+| `GET` | `/api/v1/memory` | List/search memories (`?q=` for semantic, `?kind=` filter) |
+| `GET` | `/api/v1/memory/{id}` | Get memory by ID |
+| `DELETE` | `/api/v1/memory/{id}` | Delete a memory |
+
+---
+
+### WebSocket API — `/api/v1/sessions/{session_id}/ws`
+
+Bidirectional real-time chat over WebSocket.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `WS` | `/api/v1/sessions/{session_id}/ws` | Bidirectional real-time chat with pub/sub fan-out |
+
+---
+
+### Admin API — `/api/v1/admin`
+
+Tenant and user management. Requires `tenant_admin` or `platform_admin` role.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/admin/tenants` | List all tenants (platform admin only) |
+| `POST` | `/api/v1/admin/tenants` | Create tenant (platform admin only) |
 | `GET` | `/api/v1/admin/tenants/{id}` | Get tenant details |
 | `PATCH` | `/api/v1/admin/tenants/{id}` | Update tenant settings |
 | `GET` | `/api/v1/admin/tenants/{id}/users` | List users in tenant |
 | `POST` | `/api/v1/admin/tenants/{id}/users` | Create user |
+| `GET` | `/api/v1/admin/tenants/{id}/api-keys` | List API keys |
+| `POST` | `/api/v1/admin/tenants/{id}/api-keys` | Generate API key (plaintext returned once) |
+| `DELETE` | `/api/v1/admin/tenants/{id}/api-keys/{key_id}` | Revoke API key |
 | `PATCH` | `/api/v1/admin/users/{id}` | Update user |
-| `GET` | `/api/v1/admin/audit-log` | Audit log access |
+| `GET` | `/api/v1/admin/audit-log` | Audit log access (platform admin only) |
 
 ---
 

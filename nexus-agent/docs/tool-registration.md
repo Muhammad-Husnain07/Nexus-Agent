@@ -37,7 +37,7 @@ Every application capability is exposed to the agent as a **tool**. The agent ne
 | `endpoint_url` | string | **Yes** | Full URL including protocol. The executor calls this endpoint. |
 | `http_method` | string | No | `GET`, `POST`, `PUT`, `DELETE`, `PATCH`. Default: `GET`. |
 | `auth_type` | string | No | `none`, `bearer`, `basic`, `api_key`, `oauth2`, `custom`. Default: `none`. |
-| `auth_ref` | string | No | Reference to stored credential (encrypted at rest). Format: `env:VAR_NAME` or Vault path. |
+| `auth_ref` | string | No | Reference to stored credential (encrypted at rest). Format: `env:VAR_NAME`, `vault:path/to/secret`, or `literal:value`. Never commit actual credentials. |
 | `input_schema` | JSON Schema | **Yes** | Declares what parameters the tool expects. The agent uses this to validate arguments before calling. |
 | `output_schema` | JSON Schema | No | Declares the response shape. Used for validation (soft-fail on mismatch). |
 | `validation_rules` | JSON | No | Business rules beyond schema (e.g. `{"max_length": 1000}`). |
@@ -161,7 +161,26 @@ The LLM reads the `name`, `description`, and `purpose` fields to decide which to
 | `basic` | Base64-encoded user:password | `Authorization: Basic <base64>` | `env:MY_BASIC_CRED` |
 | `api_key` | Custom header for API key | `X-API-Key: <key>` | `env:MY_API_KEY` |
 | `oauth2` | OAuth2 bearer token | `Authorization: Bearer <token>` | `env:MY_OAUTH_TOKEN` |
-| `custom` | Custom auth logic | Configurable | Varies |
+| `custom` | Custom auth logic | Configurable by subclasses | Varies |
+
+For `oauth2`, the executor resolves the token via the configured auth store and
+injects it as a Bearer token. The token URL and client credentials are stored
+in the credential vault referenced by ``auth_ref``.
+
+For `custom`, subclass ``ToolExecutor`` and override ``_resolve_auth()`` to
+implement provider-specific logic (e.g., mTLS, custom signing, AWS SigV4).
+
+### Auth Reference Formats
+
+| Format | Example | Description |
+|--------|---------|-------------|
+| `env:VAR_NAME` | `env:EMAIL_SERVICE_API_KEY` | Read from environment variable at runtime |
+| `vault:path` | `vault:secret/tools/email-key` | Resolve via the configured secret manager |
+| `literal:value` | `literal:sk-...` | Inline value (for development only — never commit) |
+
+> **Warning**: Never commit actual credentials in tool definitions. Use
+> ``env:VAR_NAME`` or ``vault:path`` in the ``auth_ref`` field and set the
+> corresponding secret in your environment or vault.
 
 ### Examples with curl
 

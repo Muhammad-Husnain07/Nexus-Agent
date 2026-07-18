@@ -11,16 +11,21 @@ preview** feedback (approve / edit / reject a result before proceeding).
 
 ## SSE Event Schema
 
-### `approval_required` (tool approval)
+The chat SSE stream emits two event types related to human interaction:
+
+- ``approval_required`` — emitted **before** a tool call that requires approval (tool gating). The agent pauses and waits for a decision before executing the tool.
+- ``interrupt`` — emitted for generic pauses such as **intermediate preview** (``present_preview`` node). The agent presents a result and waits for feedback (approve/edit/reject) before proceeding.
+
+Both events have the same SSE wire format but different payload structures.
+
+### `approval_required` (tool gating)
 
 Emitted when the agent reaches a tool call that needs human authorisation
 (``hitl.requires_approval()`` returned ``True``).
 
-```json
-{
-  "event": "approval_required",
-  "data": "{\"type\": \"approval_required\", \"session_id\": \"<uuid>\", \"payload\": {...}}"
-}
+```
+event: approval_required
+data: {"type":"approval_required","session_id":"<uuid>","payload":{...}}
 ```
 
 The `payload` field inside ``data`` has this shape:
@@ -61,12 +66,25 @@ decide endpoint to resume.
 Emitted by the ``present_preview`` node when a step result is ready for
 human review (e.g. a generated draft, computed output).
 
-```json
-{
-  "event": "intermediate_preview",
-  "data": "{\"type\": \"intermediate_preview\", \"ts\": \"...\", \"payload\": {\"text\": \"...\"}}"
-}
 ```
+event: intermediate_preview
+data: {"type":"intermediate_preview","ts":"...","payload":{"text":"..."}}
+```
+
+### `interrupt` (SSE pause event)
+
+Both ``approval_required`` and ``intermediate_preview`` pause the SSE stream.
+The ``interrupt`` event is the internal LangGraph signal for these pauses.
+The frontend sees the specific event type (``approval_required`` or
+``intermediate_preview``) and responds accordingly.
+
+| Event | Trigger | Agent State | User Action Required |
+|-------|---------|-------------|---------------------|
+| ``approval_required`` | Tool call requires pre-execution approval | Paused before tool executes | Approve/Reject/Edit inputs |
+| ``intermediate_preview`` | Intermediate result ready for review | Paused after result generated | Approve/Edit/Reject result |
+
+Both events pause the SSE stream. The agent resumes when the frontend calls
+``POST /approvals/{id}/decide`` or the graph's ``Command(resume=...)``.
 
 ---
 

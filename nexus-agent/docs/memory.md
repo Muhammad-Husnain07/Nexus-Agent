@@ -48,12 +48,20 @@ graph falls back to ``MemorySaver()`` (in-memory, not persistent).
 
 ### Migration
 
-Alembic migration ``0003_checkpoint_tables.py`` creates the required
-checkpoint tables.  Run with:
+Alembic migrations are located in ``alembic/versions/``.  Run with:
 
 ```bash
 uv run alembic upgrade head
 ```
+
+| File | Purpose |
+|------|---------|
+| ``0001_init.py`` | Initial schema (tenants, users, sessions, tools, memories) |
+| ``0002_tool_version.py`` | Tool versioning support |
+| ``0003_checkpoint_tables.py`` | LangGraph checkpoint tables |
+| ``0004_resilience.py`` | Agent run tracking and error resilience |
+| ``0005_tool_credential.py`` | Tool credential encryption |
+| ``0006_rate_limit_per_minute.py`` | Rate limiting configuration |
 
 ---
 

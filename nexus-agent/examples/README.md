@@ -17,7 +17,9 @@ agent manages through natural language conversations.
 
 - Nexus Agent running on `http://localhost:8000` (see [quickstart.md](../../docs/quickstart.md))
 - A JWT or API key for authentication
-- Python 3.12+ with `httpx` installed
+- Python 3.12+ with `httpx` installed (`uv add httpx` or `pip install httpx`)
+- Tools must be registered — run `register_tools.py` or register via the REST API before chatting
+- JWT tokens expire after 30 minutes by default — re-login or use `/auth/refresh` to get a new token
 
 ## Setup
 

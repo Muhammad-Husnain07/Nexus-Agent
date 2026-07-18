@@ -143,3 +143,45 @@ This module owns the FastAPI application. Key responsibilities:
 - Middleware: tenant extraction, authn/authz, rate limiting, request ID, structured logging.
 - OpenAPI schema generation with all Pydantic models.
 - Webhook ingestion for tool callbacks.
+
+### `src/nexus/memory/AGENTS.md`
+
+This module owns the two-tier memory system. Key responsibilities:
+- `AsyncPostgresSaver` checkpointer for LangGraph session state persistence.
+- `MemoryStore` with pgvector for long-term cross-session memory (episodic, semantic, procedural).
+- `EpisodicSummarizer` that condenses conversation history via LLM.
+- Memory retrieval and importance scoring for relevant context injection.
+
+### `src/nexus/sessions/AGENTS.md`
+
+This module owns conversation session management. Key responsibilities:
+- Session CRUD — create, rename, fork, archive.
+- `ContextWindowManager` to track token usage and trigger summarization.
+- `SystemPromptBuilder` that assembles dynamic system prompts with memory context.
+- Message persistence with branching support (`parent_message_id`).
+
+### `src/nexus/llm/AGENTS.md`
+
+This module owns the LLM integration layer. Key responsibilities:
+- `LLMClient` — unified interface to 100+ providers via LiteLLM.
+- `ProviderRegistry` — loads provider configs from settings, resolves API keys.
+- `ModelRouter` — routes task types (chat, embedding) to the appropriate model.
+- `CostTracker` — tracks per-request token usage and cost.
+- Fallback chains and retry policies for provider resilience.
+
+### `src/nexus/security/AGENTS.md`
+
+This module owns authentication and authorization. Key responsibilities:
+- JWT issuance, refresh, and revocation via `python-jose`.
+- API key generation with argon2id hashing and SHA-256 lookup.
+- RBAC with role-to-permission mapping (tenant_admin, developer, end_user, viewer).
+- Credential encryption for tool auth secrets using AES-GCM.
+- Input guard, rate limiting, quota enforcement, and cost alerts.
+
+### `src/nexus/middleware/AGENTS.md`
+
+This module owns the ASGI middleware stack. Key responsibilities:
+- `AuthMiddleware` — JWT and API key authentication, sets `request.state.*`.
+- `TenantMiddleware` — extracts tenant ID from auth or header, enforces isolation.
+- `TieredRateLimitMiddleware` — per-tenant sliding window rate limiter.
+- `DrainMiddleware` — graceful shutdown, rejects new requests during drain.

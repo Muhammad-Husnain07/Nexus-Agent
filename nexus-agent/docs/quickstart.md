@@ -33,7 +33,9 @@ uv sync
 cp .env.example .env
 ```
 
-> **Linux advantage**: `AsyncPostgresSaver` works natively — agent state persists across restarts.
+> **Linux advantage**: `AsyncPostgresSaver` works natively — agent state persists across restarts. In WSL2 the checkpointer also works (unlike native Windows where it falls back to in-memory).
+>
+> **Ollama on WSL2**: Install Ollama inside WSL2 (`curl -fsSL https://ollama.com/install.sh | sh`). Windows can reach it at `http://localhost:11434` (WSL2 port forwarding is automatic). If connection is refused, run `ollama serve` in the WSL2 terminal. Check WSL2's IP with `wsl hostname -I` if needed.
 
 ### Windows (Native)
 
@@ -78,7 +80,7 @@ NEXUS_LLM__PROVIDERS=[]
 EOF
 ```
 
-> **WSL2 users**: Ollama runs inside WSL2. The app can run on Windows (`localhost:11434` is forwarded automatically) or inside WSL2.
+> **WSL2 users**: Ollama runs inside WSL2. The app can run on Windows (`localhost:11434` is forwarded automatically) or inside WSL2. If you see "connection refused", run `ollama serve` in WSL2 first. The `nomic-embed-text` model returns 768-dim vectors — `VECTOR(768)` columns are pre-configured to match.
 
 ### Provider B: OpenAI
 

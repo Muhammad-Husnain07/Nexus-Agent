@@ -100,17 +100,36 @@ string ``change-me``, or is shorter than 32 characters.
 
 ## Backups
 
-Use the provided scripts for consistent backup and restore operations:
+**Prerequisite**: Scripts require `DATABASE_URL` environment variable or a `.env` file.
+Backups are created as timestamped `.dump` files in the `backups/` directory.
 
 ```bash
 # Create a timestamped backup
 DATABASE_URL="postgresql://nexus:pass@localhost:5433/nexus" ./scripts/backup.sh
 
-# Restore from a backup (with --confirm flag)
+# Restore from a backup (--confirm flag is required for safety)
 DATABASE_URL="postgresql://nexus:pass@localhost:5433/nexus" ./scripts/restore.sh /path/to/backup.dump --confirm
 ```
 
+### Disaster Recovery Checklist
+
+1. Restore PostgreSQL from latest dump
+2. Verify `uv run alembic upgrade head` matches the backup schema
+3. Restore Redis from RDB/AOF if ephemeral data matters
+4. Restore `.env` and K8s secrets
+5. Restart the application
+
 ### Automated Backup Strategy
+
+Add to your crontab for scheduled backups:
+
+```bash
+# Hourly backup (retain 24 hours)
+0 * * * * cd /opt/nexus-agent && DATABASE_URL=... ./scripts/backup.sh
+
+# Daily backup (retain 30 days)
+0 2 * * * cd /opt/nexus-agent && DATABASE_URL=... ./scripts/backup.sh
+```
 
 | Data | Frequency | Retention | Tool |
 |------|-----------|-----------|------|

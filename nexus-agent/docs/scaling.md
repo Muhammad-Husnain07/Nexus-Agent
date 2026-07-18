@@ -73,13 +73,17 @@ Nexus Agent is **stateless at the application layer**. All durable state lives i
 
 ### Connection Pool Sizing
 
-Formula: `pool = replicas * 5`, `overflow = replicas * 10`
+Formula: ``pool_size = replicas × 5``, ``max_overflow = replicas × 10``.
+This ensures each pod has dedicated connections while allowing burst capacity.
 
 | Instances | PG pool_size | PG max_overflow | Redis max_connections |
 |-----------|-------------|-----------------|----------------------|
 | 2 | 10 | 20 | 20 |
 | 5 | 25 | 50 | 50 |
 | 10 | 50 | 100 | 100 |
+
+> **Recommendation**: For deployments with more than 10 replicas, use **PgBouncer**
+> as a connection pooler in front of PostgreSQL to reduce connection overhead.
 
 ---
 

@@ -86,15 +86,28 @@ Example: `NEXUS_DATABASE__URL` sets `settings.database.url`.
 |----------|----------|---------|-------------|
 | `NEXUS_DATABASE__URL` | Yes | — | PostgreSQL async connection string (`postgresql+asyncpg://...`) |
 | `NEXUS_DATABASE__POOL_SIZE` | No | `10` | Connection pool size |
+| `NEXUS_DATABASE__POOL_SIZE` | No | `10` | Connection pool size |
 | `NEXUS_REDIS__URL` | Yes | — | Redis connection string (`redis://...`) |
+| | | | |
+| **LLM** | | | |
 | `NEXUS_LLM__DEFAULT_PROVIDER` | No | `openai` | LiteLLM provider name |
 | `NEXUS_LLM__DEFAULT_MODEL` | No | `gpt-4o` | Model identifier (e.g. `gpt-4o`, `claude-sonnet-4-20250514`, `deepseek/deepseek-chat`) |
 | `NEXUS_LLM__PROVIDERS` | No | — | JSON array of provider configs (see `.env.example`) |
+| `NEXUS_LLM__EMBEDDING_MODEL` | No | `text-embedding-3-small` | Model for generating embeddings |
+| `NEXUS_LLM__EMBEDDING_DIMENSIONS` | No | `768` | Output dimension for embedding vectors (must match DB column) |
+| | | | |
+| **Memory** | | | |
+| `NEXUS_MEMORY__ENABLED` | No | `true` | Enable memory extraction |
+| `NEXUS_MEMORY__RETRIEVAL_TOP_K` | No | `5` | Memories per query |
+| | | | |
+| **Security** | | | |
 | `NEXUS_AUTH__JWT_SECRET` | Yes | — | 32+ char random secret |
 | `NEXUS_AGENT__HITL_DEFAULT` | No | `true` | Require human approval by default |
 | `NEXUS_AGENT__RUN_LOCK_TTL_S` | No | `600` | Per-session lock TTL in seconds |
 | `NEXUS_TOOLS__MAX_RETRIES` | No | `3` | Max retries per tool call |
 | `NEXUS_SERVER__WORKERS` | No | `4` | Number of uvicorn workers |
+| | | | |
+| **Observability** | | | |
 | `NEXUS_OBSERVABILITY__LANGSMITH_API_KEY` | No | — | LangSmith API key for tracing |
 | `NEXUS_OBSERVABILITY__LOG_LEVEL` | No | `INFO` | Log level |
 | `NEXUS_OBSERVABILITY__OTEL_ENDPOINT` | No | — | OpenTelemetry collector endpoint |

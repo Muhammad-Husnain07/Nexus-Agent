@@ -75,7 +75,7 @@ Claude Desktop will then discover all enabled tools and allow Claude to invoke t
 
 - Tool execution via MCP respects the `auth_type` and `auth_ref` configured on each tool.
 - The MCP server does **not** expose administrative operations (register, update, delete).
-- Authentication for the MCP server itself is configured via `AuthConfig` in `FastApiMCP`.
+- MCP endpoints are protected by the same **AuthMiddleware** and **TenantMiddleware** as REST APIs — authentication inherits from the main FastAPI app. API keys and JWT tokens are passed via SSE transport headers by the MCP client.
 - Sensitive operations still require HITL approval (`requires_approval` flag).
 
 ## Implementation Details
