@@ -99,10 +99,23 @@ Example: `NEXUS_DATABASE__URL` sets `settings.database.url`.
 | `NEXUS_OBSERVABILITY__LOG_LEVEL` | No | `INFO` | Log level |
 | `NEXUS_OBSERVABILITY__OTEL_ENDPOINT` | No | — | OpenTelemetry collector endpoint |
 
-> **Using a non-OpenAI provider?** Set `NEXUS_LLM__DEFAULT_PROVIDER` to your provider
-> name and `NEXUS_LLM__DEFAULT_MODEL` to the model identifier. Export the
-> corresponding API key (e.g. `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`).
-> LiteLLM handles routing automatically. See [LiteLLM providers docs](https://docs.litellm.ai/docs/providers).
+> **Using a non-OpenAI provider?** LiteLLM supports 100+ providers. Set
+> `NEXUS_LLM__DEFAULT_PROVIDER` and `NEXUS_LLM__DEFAULT_MODEL` with the
+> correct prefix for your provider:
+>
+> | Provider | Model prefix | Env Var |
+> |----------|-------------|---------|
+> | Ollama (local) | `ollama/qwen2.5:7b` | *(none)* |
+> | DeepSeek | `deepseek/deepseek-chat` | `DEEPSEEK_API_KEY` |
+> | Anthropic | `claude-sonnet-4-20250514` | `ANTHROPIC_API_KEY` |
+> | OpenRouter | `openrouter/...` | `OPENROUTER_API_KEY` |
+> | Groq | `groq/llama3-70b-8192` | `GROQ_API_KEY` |
+> | Google Gemini | `gemini/gemini-2.0-flash` | `GEMINI_API_KEY` |
+>
+> See [LiteLLM Providers](https://docs.litellm.ai/docs/providers) for the
+> full list of 100+ supported providers and their required env vars.
+>
+> For a complete setup guide, see [docs/quickstart.md](docs/quickstart.md).
 
 ### Docker Compose
 
