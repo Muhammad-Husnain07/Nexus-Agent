@@ -1,6 +1,6 @@
 """Admin API — tenant management, quotas, users, audit log.
 
-All endpoints require ``tenant_admin`` role.
+All endpoints require ``tenant_admin`` or ``platform_admin`` role.
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ import uuid
 from typing import Annotated, Any
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 
 from nexus.api.dependencies import SessionDep
@@ -28,26 +28,50 @@ logger = structlog.get_logger("nexus.api.admin")
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
-async def _require_admin(
+async def _require_platform_admin(
     current: tuple[uuid.UUID, Role] = Depends(require_user),
 ) -> None:
-    """Dependency: require tenant_admin role."""
+    """Dependency: require platform_admin role (cross-tenant operations)."""
     _uid, role = current
-    if role != Role.TENANT_ADMIN:
+    if role != Role.PLATFORM_ADMIN:
+        raise ForbiddenError("Platform admin access required")
+
+
+async def _require_tenant_admin(
+    current: tuple[uuid.UUID, Role] = Depends(require_user),
+) -> tuple[uuid.UUID, Role]:
+    """Dependency: require tenant_admin or platform_admin role."""
+    _uid, role = current
+    if role not in (Role.TENANT_ADMIN, Role.PLATFORM_ADMIN):
         raise ForbiddenError("Admin access required")
+    return current
+
+
+async def _ensure_same_tenant(
+    tenant_id: uuid.UUID,
+    current: tuple[uuid.UUID, Role] = Depends(_require_tenant_admin),
+    request: Request = None,
+) -> None:
+    """Ensure the caller manages their own tenant, unless platform_admin."""
+    _uid, role = current
+    if role == Role.PLATFORM_ADMIN:
+        return
+    caller_tenant_id = getattr(request.state, "tenant_id", None)
+    if caller_tenant_id is None or caller_tenant_id != tenant_id:
+        raise ForbiddenError("You can only access your own tenant's resources")
 
 
 # ── Tenants ─────────────────────────────────────────────────────────────────
 
 
-@router.get("/tenants", dependencies=[Depends(_require_admin)])
+@router.get("/tenants", dependencies=[Depends(_require_platform_admin)])
 async def list_tenants(
     session: SessionDep,
     status: str | None = Query(None, description="Filter by status"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ) -> list[dict[str, Any]]:
-    """List all tenants (admin only)."""
+    """List all tenants (platform admin only)."""
     stmt = select(Tenant).order_by(Tenant.created_at.desc())
     if status:
         stmt = stmt.where(Tenant.status == status)
@@ -57,7 +81,7 @@ async def list_tenants(
     return [_tenant_to_dict(t) for t in tenants]
 
 
-@router.get("/tenants/{tenant_id}", dependencies=[Depends(_require_admin)])
+@router.get("/tenants/{tenant_id}", dependencies=[Depends(_ensure_same_tenant)])
 async def get_tenant_detail(
     tenant_id: uuid.UUID,
     session: SessionDep,
@@ -76,7 +100,7 @@ async def get_tenant_detail(
     return result
 
 
-@router.patch("/tenants/{tenant_id}", dependencies=[Depends(_require_admin)])
+@router.patch("/tenants/{tenant_id}", dependencies=[Depends(_ensure_same_tenant)])
 async def update_tenant(
     tenant_id: uuid.UUID,
     body: dict[str, Any],
@@ -105,7 +129,7 @@ async def update_tenant(
 # ── Users ───────────────────────────────────────────────────────────────────
 
 
-@router.get("/tenants/{tenant_id}/users", dependencies=[Depends(_require_admin)])
+@router.get("/tenants/{tenant_id}/users", dependencies=[Depends(_ensure_same_tenant)])
 async def list_users(
     tenant_id: uuid.UUID,
     session: SessionDep,
@@ -123,7 +147,7 @@ async def list_users(
     return [_user_to_dict(u) for u in users]
 
 
-@router.post("/tenants/{tenant_id}/users", status_code=201, dependencies=[Depends(_require_admin)])
+@router.post("/tenants/{tenant_id}/users", status_code=201, dependencies=[Depends(_ensure_same_tenant)])
 async def create_user(
     tenant_id: uuid.UUID,
     body: dict[str, Any],
@@ -141,17 +165,23 @@ async def create_user(
     return _user_to_dict(user)
 
 
-@router.patch("/users/{user_id}", dependencies=[Depends(_require_admin)])
+@router.patch("/users/{user_id}", dependencies=[Depends(_require_tenant_admin)])
 async def update_user(
     user_id: uuid.UUID,
     body: dict[str, Any],
     session: SessionDep,
+    request: Request,
 ) -> dict[str, Any]:
     """Update a user's role or other fields."""
     repo = GenericRepository(session, User)
     user = await repo.get(user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
+
+    # Ensure caller can update users in this tenant
+    caller_tenant = getattr(request.state, "tenant_id", None)
+    if caller_tenant is not None and user.tenant_id != caller_tenant:
+        raise ForbiddenError("You can only update users in your own tenant")
 
     if "role" in body:
         try:
@@ -170,7 +200,7 @@ async def update_user(
 # ── Audit Log ───────────────────────────────────────────────────────────────
 
 
-@router.get("/audit-log", dependencies=[Depends(_require_admin)])
+@router.get("/audit-log", dependencies=[Depends(_require_platform_admin)])
 async def list_audit_log(
     session: SessionDep,
     tenant_id: Annotated[uuid.UUID | None, Query(description="Filter by tenant")] = None,
@@ -178,7 +208,7 @@ async def list_audit_log(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> list[dict[str, Any]]:
-    """List audit log entries."""
+    """List audit log entries (platform admin only — cross-tenant)."""
     stmt = select(AuditLog).order_by(AuditLog.created_at.desc())
     if tenant_id:
         stmt = stmt.where(AuditLog.tenant_id == tenant_id)

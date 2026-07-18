@@ -29,7 +29,7 @@ class TestMemoryStore:
         mock_repo.create = AsyncMock()
 
         with patch("nexus.memory.store.async_session"):
-            with patch("nexus.memory.store.GenericRepository", return_value=mock_repo):
+            with patch("nexus.memory.store.TenantScopedRepository", return_value=mock_repo):
                 mid = await store.put(
                     namespace=namespace,
                     content="User prefers dark mode",
@@ -49,7 +49,7 @@ class TestMemoryStore:
         mock_repo.create = MagicMock()
 
         with patch("nexus.memory.store.async_session"):
-            with patch("nexus.memory.store.GenericRepository", return_value=mock_repo):
+            with patch("nexus.memory.store.TenantScopedRepository", return_value=mock_repo):
                 mid = await store.put(
                     namespace=namespace,
                     memory_id=existing_id,
@@ -66,7 +66,7 @@ class TestMemoryStore:
         mock_repo.get = AsyncMock(return_value=None)
 
         with patch("nexus.memory.store.async_session"):
-            with patch("nexus.memory.store.GenericRepository", return_value=mock_repo):
+            with patch("nexus.memory.store.TenantScopedRepository", return_value=mock_repo):
                 result = await store.get(("tid", "memories", "fact"), uuid.uuid4())
 
         assert result is None
@@ -88,7 +88,7 @@ class TestMemoryStore:
         mock_repo.get = AsyncMock(return_value=mock_mem)
 
         with patch("nexus.memory.store.async_session"):
-            with patch("nexus.memory.store.GenericRepository", return_value=mock_repo):
+            with patch("nexus.memory.store.TenantScopedRepository", return_value=mock_repo):
                 result = await store.get(("tid", "memories", "preference"), mem_id)
 
         assert result is not None
@@ -172,7 +172,7 @@ class TestMemoryStore:
         mock_repo.delete = AsyncMock(return_value=True)
 
         with patch("nexus.memory.store.async_session"):
-            with patch("nexus.memory.store.GenericRepository", return_value=mock_repo):
+            with patch("nexus.memory.store.TenantScopedRepository", return_value=mock_repo):
                 deleted = await store.delete(("tid", "memories", "fact"), uuid.uuid4())
 
         assert deleted is True
@@ -182,7 +182,7 @@ class TestMemoryStore:
         mock_repo.delete = AsyncMock(return_value=False)
 
         with patch("nexus.memory.store.async_session"):
-            with patch("nexus.memory.store.GenericRepository", return_value=mock_repo):
+            with patch("nexus.memory.store.TenantScopedRepository", return_value=mock_repo):
                 deleted = await store.delete(("tid", "memories", "fact"), uuid.uuid4())
 
         assert deleted is False

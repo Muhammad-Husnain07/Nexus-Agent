@@ -25,15 +25,19 @@ BYPASS_PATHS = {"/healthz", "/readyz", "/docs", "/redoc", "/openapi.json"}
 class AuthMiddleware(BaseHTTPMiddleware):
     """Authenticate requests via ``Authorization: Bearer <JWT>`` or ``X-API-Key``.
 
-    Sets ``request.state.user_id`` and ``request.state.user_role`` from the
-    resolved identity.  Invalid credentials and expired keys are logged but
-    do not block the request — enforcement is handled per-endpoint via
-    ``require_permission()``.
+    Sets ``request.state.user_id``, ``request.state.user_role``, and
+    ``request.state.tenant_id`` from the resolved identity.  Invalid
+    credentials and expired keys are logged but do not block the request —
+    enforcement is handled per-endpoint via ``require_permission()``.
+    The tenant_id is used downstream by ``TenantMiddleware`` so that
+    authenticated callers never have their tenant overridden by a client-
+    supplied ``X-Tenant-ID`` header.
     """
 
     async def dispatch(self, request: Request, call_next: callable) -> Response:
         request.state.user_id = None
         request.state.user_role = None
+        request.state.tenant_id = None
 
         # Skip auth for public endpoints
         if request.url.path in BYPASS_PATHS:
@@ -55,6 +59,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 if user_id:
                     request.state.user_id = uuid.UUID(user_id)
                     request.state.user_role = payload.get("role")
+                    tid = payload.get("tid")
+                    if tid:
+                        request.state.tenant_id = uuid.UUID(tid)
             except (JWTError, ValueError) as exc:
                 logger.warning("jwt_validation_failed", error=str(exc))
             return await call_next(request)
@@ -79,6 +86,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                         request.state.user_id = api_key.user_id
                         request.state.user_role = api_key.role_hint
                         request.state.api_key_scopes = api_key.scopes
+                        request.state.tenant_id = api_key.tenant_id
                     else:
                         logger.warning("invalid_api_key")
             except Exception:

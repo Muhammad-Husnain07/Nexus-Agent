@@ -18,7 +18,7 @@ from sqlalchemy import text
 from nexus.config.settings import get_settings
 from nexus.db.base import async_session
 from nexus.db.models.memory import Memory
-from nexus.db.repositories.base import GenericRepository
+from nexus.db.repositories.base import TenantScopedRepository
 from nexus.llm.client import LLMClient, LLMResponse
 from nexus.memory.store import MemoryStore
 from nexus.memory.summarizer import EpisodicSummarizer
@@ -270,7 +270,7 @@ class MemoryManager:
         archived = 0
 
         async with async_session() as session:
-            repo = GenericRepository(session, Memory)
+            repo = TenantScopedRepository(session, Memory)
             stmt = "SELECT id, importance, last_accessed_at, metadata_ FROM memory"
             result = await session.execute(text(stmt))
             rows = result.all()

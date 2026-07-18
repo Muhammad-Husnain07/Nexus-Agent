@@ -12,18 +12,20 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from langgraph.types import Command
 
 from nexus.agent.graph import build_agent_graph
 from nexus.agent.schemas import ApprovalAction
 from nexus.config.settings import get_settings
 from nexus.db.base import async_session
+from nexus.db.context import get_tenant
 from nexus.db.models.agent_run import Approval
-from nexus.db.repositories.base import GenericRepository
+from nexus.db.repositories.base import GenericRepository, TenantScopedRepository
 from nexus.llm.client import LLMClient
 from nexus.redis_client.client import get_redis_client
 from nexus.redis_client.pubsub import EventBus
+from nexus.security.rbac import Permission, require_permission
 from nexus.tools.discovery import DynamicToolSelector
 from nexus.tools.executor import ToolExecutor
 from nexus.tools.registry import ToolRegistry
@@ -76,7 +78,7 @@ async def list_pending_approvals(
     cutoff = datetime.now(UTC) - timedelta(hours=timeout_hours)
 
     async with async_session() as session:
-        repo = GenericRepository(session, Approval)
+        repo = TenantScopedRepository(session, Approval)
         all_pending: list[Approval] = await repo.find(status="pending")
 
     # Filter by session_id (the Approval model doesn't have a direct FK to
@@ -118,16 +120,25 @@ async def list_pending_approvals(
     return session_pending
 
 
-@router.get("/{approval_id}")
+@router.get(
+    "/{approval_id}",
+    dependencies=[require_permission(Permission.APPROVALS_DECIDE)],
+)
 async def get_approval(
     approval_id: uuid.UUID,
 ) -> dict[str, Any]:
     """Get the current status of a single approval."""
     async with async_session() as session:
-        repo = GenericRepository(session, Approval)
+        repo = TenantScopedRepository(session, Approval)
         approval = await repo.get(approval_id)
 
     if approval is None:
+        raise HTTPException(status_code=404, detail="Approval not found")
+
+    # Defense-in-depth: verify tenant_id even though TenantScopedRepository
+    # already scoped the query
+    tenant_id = get_tenant()
+    if tenant_id is not None and approval.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Approval not found")
 
     return {
@@ -141,7 +152,10 @@ async def get_approval(
     }
 
 
-@router.post("/{approval_id}/decide")
+@router.post(
+    "/{approval_id}/decide",
+    dependencies=[require_permission(Permission.APPROVALS_DECIDE)],
+)
 async def decide_approval(
     approval_id: uuid.UUID,
     decision: ApprovalAction,
@@ -170,7 +184,7 @@ async def decide_approval(
 
     # Load and verify the approval record
     async with async_session() as session:
-        repo = GenericRepository(session, Approval)
+        repo = TenantScopedRepository(session, Approval)
         approval = await repo.get(approval_id)
 
         if approval is None:
@@ -180,6 +194,14 @@ async def decide_approval(
             raise HTTPException(
                 status_code=409,
                 detail=f"Approval is already {approval.status}",
+            )
+
+        # Explicit tenant check — do not rely solely on TenantScopedRepository
+        tenant_id = get_tenant()
+        if tenant_id is not None and approval.tenant_id != tenant_id:
+            raise HTTPException(
+                status_code=403,
+                detail="This approval does not belong to your tenant",
             )
 
         # Extract session_id from approval tool_call payload

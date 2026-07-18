@@ -18,6 +18,7 @@ from nexus.errors import ForbiddenError, UnauthorizedError
 class Role(str, Enum):  # noqa: UP042
     """RBAC roles available in the system."""
 
+    PLATFORM_ADMIN = "platform_admin"
     TENANT_ADMIN = "tenant_admin"
     DEVELOPER = "developer"
     END_USER = "end_user"
@@ -55,6 +56,20 @@ class Permission(str, Enum):  # noqa: UP042
 # ── Role → Permission mapping ───────────────────────────────────────────────
 
 ROLE_PERMISSIONS: dict[Role, list[Permission]] = {
+    Role.PLATFORM_ADMIN: [
+        Permission.TOOLS_REGISTER,
+        Permission.TOOLS_DELETE,
+        Permission.TOOLS_READ,
+        Permission.SESSIONS_READ_ANY,
+        Permission.SESSIONS_DELETE,
+        Permission.APPROVALS_DECIDE,
+        Permission.AGENTS_INVOKE,
+        Permission.MEMORY_READ,
+        Permission.MEMORY_DELETE,
+        Permission.AUDIT_READ,
+        Permission.ADMIN_ACCESS,
+        Permission.USER_MANAGE,
+    ],
     Role.TENANT_ADMIN: [
         Permission.TOOLS_REGISTER,
         Permission.TOOLS_DELETE,
