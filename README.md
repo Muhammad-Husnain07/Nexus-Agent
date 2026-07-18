@@ -3,7 +3,7 @@
 | Component | Location | Tech |
 |-----------|----------|------|
 | **Backend** | [`nexus-agent/`](nexus-agent/) | Python 3.12, FastAPI, LangGraph, PostgreSQL |
-| **Frontend** | [`frontend/`](frontend/) | React 18, Vite, TypeScript, shadcn/ui |
+| **Frontend** | [`nexus-console/`](nexus-console/) | React 19, TypeScript, MUI v9, Vite |
 
 ## Quickstart
 
@@ -19,9 +19,14 @@ uv run uvicorn nexus.main:create_app --factory --reload
 
 ### Frontend
 ```bash
-cd frontend
+cd nexus-console
 npm install
 npm run dev
+```
+
+### Docker (full stack)
+```bash
+docker compose -f nexus-agent/docker/docker-compose.yml up -d
 ```
 
 See [`nexus-agent/README.md`](nexus-agent/README.md) for detailed backend docs.
