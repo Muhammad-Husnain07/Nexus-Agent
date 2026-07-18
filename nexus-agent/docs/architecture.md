@@ -42,6 +42,10 @@ graph TB
 | **Auth** | `src/nexus/security/` | JWT, API keys, RBAC, credential vault |
 | **Multi-Tenant** | `src/nexus/db/context.py` | contextvar-based tenant isolation |
 | **Observability** | `src/nexus/observability/` | OpenTelemetry, structlog, Prometheus metrics |
+| **Error Handling & Resilience** | `src/nexus/errors/` | Circuit breakers, retry policies, dead letter queue, graceful degradation |
+| **Configuration** | `src/nexus/config/` | Pydantic BaseSettings, secret management |
+| **Utilities** | `src/nexus/utils/` | Scheduled jobs, constants |
+| **Python SDK** | `src/nexus_sdk/` | Client library for external integrations |
 
 ---
 
