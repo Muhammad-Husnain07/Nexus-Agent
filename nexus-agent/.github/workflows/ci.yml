@@ -6,7 +6,11 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    - cron: "0 6 * * *"  # daily at 6am UTC for integration + contract tests
+    - cron: "0 6 * * *"
+
+defaults:
+  run:
+    working-directory: ./nexus-agent
 
 jobs:
   lint:

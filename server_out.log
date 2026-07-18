@@ -1,0 +1,133 @@
+[2m2026-07-17T05:54:41.072549Z[0m [[32m[1minfo     [0m] [1mLogging configured            [0m [[0m[1m[34mnexus.observability.logging[0m][0m [36mlog_format[0m=[35mconsole[0m [36mlog_level[0m=[35mINFO[0m
+[2m2026-07-17T05:54:41.442709Z[0m [[32m[1minfo     [0m] [1mmcp.server.attached           [0m [[0m[1m[34mnexus.tools.mcp[0m][0m [36mbase_url[0m=[35m/mcp[0m
+[2m2026-07-17T05:54:41.445707Z[0m [[32m[1minfo     [0m] [1mscheduler.started             [0m [[0m[1m[34mnexus.scheduler[0m][0m [36minterval_s[0m=[35m3600[0m
+[2m2026-07-17T05:55:10.016438Z[0m [[32m[1minfo     [0m] [1mrequest.started               [0m [[0m[1m[34mnexus.api[0m][0m [36mmethod[0m=[35mGET[0m [36mpath[0m=[35m/healthz[0m [36mreq_id[0m=[35mNone[0m
+[2m2026-07-17T05:55:10.093860Z[0m [[32m[1minfo     [0m] [1mrequest.completed             [0m [[0m[1m[34mnexus.api[0m][0m [36mmethod[0m=[35mGET[0m [36mpath[0m=[35m/healthz[0m [36mreq_id[0m=[35mNone[0m [36mstatus[0m=[35m200[0m
+[2m2026-07-17T05:55:18.032998Z[0m [[32m[1minfo     [0m] [1mrequest.started               [0m [[0m[1m[34mnexus.api[0m][0m [36mmethod[0m=[35mGET[0m [36mpath[0m=[35m/readyz[0m [36mreq_id[0m=[35mNone[0m
+[2m2026-07-17T05:55:18.210901Z[0m [[32m[1minfo     [0m] [1mrequest.completed             [0m [[0m[1m[34mnexus.api[0m][0m [36mmethod[0m=[35mGET[0m [36mpath[0m=[35m/readyz[0m [36mreq_id[0m=[35mNone[0m [36mstatus[0m=[35m200[0m
+[2m2026-07-17T05:55:18.722741Z[0m [[32m[1minfo     [0m] [1mrequest.started               [0m [[0m[1m[34mnexus.api[0m][0m [36mmethod[0m=[35mGET[0m [36mpath[0m=[35m/docs[0m [36mreq_id[0m=[35mNone[0m
+[2m2026-07-17T05:55:18.725267Z[0m [[32m[1minfo     [0m] [1mrequest.completed             [0m [[0m[1m[34mnexus.api[0m][0m [36mmethod[0m=[35mGET[0m [36mpath[0m=[35m/docs[0m [36mreq_id[0m=[35mNone[0m [36mstatus[0m=[35m200[0m
+[2m2026-07-17T05:55:19.426154Z[0m [[31m[1merror    [0m] [1mrequest.error                 [0m [[0m[1m[34mnexus.errors.base[0m][0m [36mdetails[0m=[35m{}[0m [36merror_code[0m=[35mINTERNAL_ERROR[0m [36mrequest_id[0m=[35mf3881bd2-cc77-464e-9e61-bb4e0252b164[0m [36mstatus[0m=[35m500[0m
+Traceback (most recent call last):
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\redis\asyncio\connection.py", line 1607, in get_available_connection
+    connection = self._available_connections.pop()
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+IndexError: pop from empty list
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\src\nexus\errors\base.py", line 193, in dispatch
+    response = await call_next(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\starlette\middleware\base.py", line 168, in call_next
+    raise app_exc from app_exc.__cause__ or app_exc.__context__
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\starlette\middleware\base.py", line 144, in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\starlette\middleware\base.py", line 193, in __call__
+    response = await self.dispatch_func(request, call_next)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\src\nexus\middleware\auth.py", line 87, in dispatch
+    return await call_next(request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\starlette\middleware\base.py", line 168, in call_next
+    raise app_exc from app_exc.__cause__ or app_exc.__context__
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\starlette\middleware\base.py", line 144, in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\starlette\middleware\base.py", line 193, in __call__
+    response = await self.dispatch_func(request, call_next)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\src\nexus\security\rate_limit.py", line 87, in dispatch
+    allowed = await limiter.acquire(key, max_requests=max_r, window_s=win, raise_on_limit=False)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\src\nexus\redis_client\rate_limiter.py", line 122, in acquire
+    allowed = await self._script(keys=[key], args=[now_ms, window_s * 1000, max_requests])
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\redis\commands\core.py", line 10595, in __call__
+    return await client.evalsha(self.sha, len(keys), *args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\redis\asyncio\client.py", line 823, in execute_command
+    conn = self.connection or await pool.get_connection()
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\redis\utils.py", line 249, in async_wrapper
+    return await func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\redis\asyncio\connection.py", line 1560, in get_connection
+    connection = self.get_available_connection()
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\redis\asyncio\connection.py", line 1611, in get_available_connection
+    connection = self.make_connection()
+                 ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\redis\asyncio\connection.py", line 1628, in make_connection
+    return self.connection_class(**self.connection_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\redis\asyncio\connection.py", line 960, in __init__
+    super().__init__(**kwargs)
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\redis\utils.py", line 258, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+TypeError: AbstractConnection.__init__() got an unexpected keyword argument 'ssl'
+[2m2026-07-17T05:55:32.210990Z[0m [[32m[1minfo     [0m] [1mrequest.started               [0m [[0m[1m[34mnexus.api[0m][0m [36mmethod[0m=[35mGET[0m [36mpath[0m=[35m/docs[0m [36mreq_id[0m=[35mNone[0m
+[2m2026-07-17T05:55:32.213368Z[0m [[32m[1minfo     [0m] [1mrequest.completed             [0m [[0m[1m[34mnexus.api[0m][0m [36mmethod[0m=[35mGET[0m [36mpath[0m=[35m/docs[0m [36mreq_id[0m=[35mNone[0m [36mstatus[0m=[35m200[0m
+[2m2026-07-17T05:55:55.993709Z[0m [[32m[1minfo     [0m] [1mrequest.started               [0m [[0m[1m[34mnexus.api[0m][0m [36mmethod[0m=[35mGET[0m [36mpath[0m=[35m/readyz[0m [36mreq_id[0m=[35mNone[0m
+[2m2026-07-17T05:55:56.069724Z[0m [[32m[1minfo     [0m] [1mrequest.completed             [0m [[0m[1m[34mnexus.api[0m][0m [36mmethod[0m=[35mGET[0m [36mpath[0m=[35m/readyz[0m [36mreq_id[0m=[35mNone[0m [36mstatus[0m=[35m200[0m
+[2m2026-07-17T05:55:56.529667Z[0m [[31m[1merror    [0m] [1mrequest.error                 [0m [[0m[1m[34mnexus.errors.base[0m][0m [36mdetails[0m=[35m{}[0m [36merror_code[0m=[35mINTERNAL_ERROR[0m [36mrequest_id[0m=[35m2472bdcd-308a-441d-83c0-bb5d4b783958[0m [36mstatus[0m=[35m500[0m
+Traceback (most recent call last):
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\redis\asyncio\connection.py", line 1607, in get_available_connection
+    connection = self._available_connections.pop()
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+IndexError: pop from empty list
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\src\nexus\errors\base.py", line 193, in dispatch
+    response = await call_next(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\starlette\middleware\base.py", line 168, in call_next
+    raise app_exc from app_exc.__cause__ or app_exc.__context__
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\starlette\middleware\base.py", line 144, in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\starlette\middleware\base.py", line 193, in __call__
+    response = await self.dispatch_func(request, call_next)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\src\nexus\middleware\auth.py", line 87, in dispatch
+    return await call_next(request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\starlette\middleware\base.py", line 168, in call_next
+    raise app_exc from app_exc.__cause__ or app_exc.__context__
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\starlette\middleware\base.py", line 144, in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\starlette\middleware\base.py", line 193, in __call__
+    response = await self.dispatch_func(request, call_next)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\src\nexus\security\rate_limit.py", line 87, in dispatch
+    allowed = await limiter.acquire(key, max_requests=max_r, window_s=win, raise_on_limit=False)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\src\nexus\redis_client\rate_limiter.py", line 122, in acquire
+    allowed = await self._script(keys=[key], args=[now_ms, window_s * 1000, max_requests])
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\redis\commands\core.py", line 10595, in __call__
+    return await client.evalsha(self.sha, len(keys), *args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\redis\asyncio\client.py", line 823, in execute_command
+    conn = self.connection or await pool.get_connection()
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\redis\utils.py", line 249, in async_wrapper
+    return await func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\redis\asyncio\connection.py", line 1560, in get_connection
+    connection = self.get_available_connection()
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\redis\asyncio\connection.py", line 1611, in get_available_connection
+    connection = self.make_connection()
+                 ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\redis\asyncio\connection.py", line 1628, in make_connection
+    return self.connection_class(**self.connection_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\redis\asyncio\connection.py", line 960, in __init__
+    super().__init__(**kwargs)
+  File "C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI\.venv\Lib\site-packages\redis\utils.py", line 258, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+TypeError: AbstractConnection.__init__() got an unexpected keyword argument 'ssl'
