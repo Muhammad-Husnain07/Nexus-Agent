@@ -113,6 +113,8 @@ async def analyze_results(
                 logger.warning("analyze.parse_failed", error=str(exc))
                 # Fallback: auto-advance if done, finalize otherwise
                 if step_status == "done" and next_idx < len(plan):
+                    step["status"] = "done"
+                    plan[idx] = step
                     decision = "continue"
                     return {
                         "plan": plan,
