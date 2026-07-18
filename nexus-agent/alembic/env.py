@@ -1,6 +1,7 @@
 """Alembic migration environment configuration with async engine support."""
 
 import asyncio
+import os
 from logging.config import fileConfig
 
 from sqlalchemy import Connection, text
@@ -61,11 +62,21 @@ async def run_async_migrations() -> None:
 
 
 def run_migrations_online() -> None:
-    """Run migrations in 'online' mode via async engine."""
-    asyncio.run(run_async_migrations())
+    """Run migrations in 'online' mode via async engine.
+
+    Detects whether an event loop is already running (e.g. inside
+    pytest-asyncio) and uses ``run_until_complete`` to avoid nesting
+    ``asyncio.run()`` calls, which raises ``RuntimeError``.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+        loop.run_until_complete(run_async_migrations())
+    except RuntimeError:
+        # No running loop — safe to call asyncio.run()
+        asyncio.run(run_async_migrations())
 
 
 if context.is_offline_mode():
     run_migrations_offline()
-else:
+elif not os.environ.get("NEXUS_SKIP_AUTO_MIGRATE"):
     run_migrations_online()
