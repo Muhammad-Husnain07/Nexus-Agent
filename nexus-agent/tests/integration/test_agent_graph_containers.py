@@ -39,7 +39,7 @@ class TestAgentGraphWithTestContainers:
     @pytest.fixture
     def mock_llm(self) -> MagicMock:
         llm = MagicMock(spec=LLMClient)
-        llm.embed = AsyncMock(return_value=[[0.1] * 1536])
+        llm.embed = AsyncMock(return_value=[[0.1] * 768])
         responses: list[LLMResponse] = [
             LLMResponse(
                 content=json.dumps({

@@ -174,9 +174,16 @@ class LLMClient:
 
         Returns:
             List of embedding vectors, one per input text.
+
+        Raises:
+            ValueError: If the returned embedding dimension does not match
+                the configured ``embedding_dimensions``.
         """
         from litellm import aembedding  # noqa: PLC0415
 
+        from nexus.config.settings import get_settings  # noqa: PLC0415
+
+        settings = get_settings()
         provider, _ = self.registry.resolve_provider(model)
         kwargs: dict[str, Any] = {
             "model": model,
@@ -186,8 +193,26 @@ class LLMClient:
         if api_key_val:
             kwargs["api_key"] = api_key_val
 
+        # Pass output dimensions if the provider supports it
+        if provider.config.supports_output_dimensions:
+            kwargs["dimensions"] = settings.llm.embedding_dimensions
+
         response = await aembedding(**kwargs)
-        return [item["embedding"] for item in response.data]
+        embeddings = [item["embedding"] for item in response.data]
+
+        # Validate dimension matches the configured column size
+        expected = settings.llm.embedding_dimensions
+        for i, vec in enumerate(embeddings):
+            actual = len(vec)
+            if actual != expected:
+                raise ValueError(
+                    f"Embedding model '{model}' returned a {actual}-dim vector "
+                    f"but NEXUS_LLM__EMBEDDING_DIMENSIONS={expected}. "
+                    f"Either change the embedding model or update the setting "
+                    f"and run: uv run python scripts/rebuild_embedding_dim.py {actual}"
+                )
+
+        return embeddings
 
     def _build_response(
         self,

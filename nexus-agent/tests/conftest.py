@@ -160,7 +160,7 @@ def mocked_llm_client() -> MagicMock:
     """Return a MagicMock LLMClient with a canned response."""
     client = create_autospec(LLMClient, instance=True)
     client.complete = AsyncMock(return_value=_LLM_RESPONSE)
-    client.embed = AsyncMock(return_value=[[0.1] * 1536])
+    client.embed = AsyncMock(return_value=[[0.1] * 768])
     return client
 
 

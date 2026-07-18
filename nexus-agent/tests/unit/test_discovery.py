@@ -24,7 +24,7 @@ class TestDynamicToolSelector:
     @pytest.fixture
     def mock_llm(self) -> MagicMock:
         llm = MagicMock()
-        llm.embed = AsyncMock(return_value=[[0.1] * 1536])
+        llm.embed = AsyncMock(return_value=[[0.1] * 768])
         llm.complete = AsyncMock()
         return llm
 

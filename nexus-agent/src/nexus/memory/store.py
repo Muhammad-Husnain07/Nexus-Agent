@@ -28,9 +28,9 @@ class MemoryStore:
 
     Namespace convention: ``(tenant_id, "memories", memory_kind)``.
 
-    All methods operate within the ``Memory`` table which has a ``VECTOR(1536)``
-    column for embeddings and an ``ivfflat`` index for approximate nearest
-    neighbour search.
+    All methods operate within the ``Memory`` table which has a ``VECTOR(n)``
+    column for embeddings (dimension configured via ``embedding_dimensions``)
+    and an ``ivfflat`` index for approximate nearest neighbour search.
     """
 
     def __init__(self) -> None:
@@ -51,7 +51,7 @@ class MemoryStore:
             namespace: ``(tenant_id, "memories", memory_kind)``.
             memory_id: Optional UUID (auto-generated if ``None``).
             content: The memory text.
-            embedding: 1536-dim vector for semantic search.
+            embedding: Vector of dimension ``embedding_dimensions`` for semantic search.
             metadata: Arbitrary JSON-serialisable metadata.
             importance: Salience score 0-1.
 
@@ -115,7 +115,7 @@ class MemoryStore:
         ``embedding`` column.  Results are ordered by similarity descending.
 
         Args:
-            query_embedding: 1536-dim query vector.
+            query_embedding: Query vector of dimension ``embedding_dimensions``.
             namespace: Optional ``(tenant_id, "memories", kind)`` filter.
             top_k: Max results.
             metadata_filter: Optional JSONB key-value filter.

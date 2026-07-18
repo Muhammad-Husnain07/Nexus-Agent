@@ -78,6 +78,9 @@ class ProviderConfig(BaseModel):
     supports_structured_output: bool = Field(
         default=False, description="Supports JSON structured output"
     )
+    supports_output_dimensions: bool = Field(
+        default=False, description="Supports setting output vector dimensions (OpenAI text-embedding-3-*)"
+    )
     default_headers: dict[str, str] = Field(
         default_factory=dict, description="Default HTTP headers for API requests"
     )
@@ -102,6 +105,9 @@ class LLMSettings(BaseModel):
     max_tokens: int = Field(default=4096, ge=1, description="Max tokens per response")
     embedding_model: str = Field(
         default="text-embedding-3-small", description="Default embedding model"
+    )
+    embedding_dimensions: int = Field(
+        default=768, ge=1, description="Output dimensions for the embedding column (must match DB VECTOR(n))"
     )
     timeout_s: int = Field(default=60, ge=1, description="Request timeout in seconds")
     max_retries: int = Field(default=3, ge=0, description="Max retries on failure")
