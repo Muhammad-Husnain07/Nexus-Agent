@@ -15,9 +15,10 @@ from sqlalchemy import select
 from nexus.api.dependencies import SessionDep
 from nexus.db.models.audit import AuditLog
 from nexus.db.models.tenant import Tenant
-from nexus.db.models.user import User
+from nexus.db.models.user import ApiKey, User
 from nexus.db.repositories.base import GenericRepository
 from nexus.errors import ForbiddenError
+from nexus.security.auth import generate_api_key, hash_api_key
 from nexus.security.rbac import (
     Role,
     require_user,
@@ -124,6 +125,93 @@ async def update_tenant(
     await session.flush()
     await session.commit()
     return _tenant_to_dict(tenant)
+
+
+@router.post("/tenants", status_code=201, dependencies=[Depends(_require_platform_admin)])
+async def create_tenant(
+    body: dict[str, Any],
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Create a new tenant (platform admin only). Validates unique slug."""
+    slug = body.get("slug", "")
+    if not slug:
+        raise HTTPException(status_code=400, detail="slug is required")
+    existing = await session.execute(select(Tenant).where(Tenant.slug == slug))
+    if existing.scalar_one_or_none() is not None:
+        raise HTTPException(status_code=409, detail=f"Tenant with slug '{slug}' already exists")
+
+    repo = GenericRepository(session, Tenant)
+    tenant = await repo.create(
+        name=body.get("name", slug),
+        slug=slug,
+        status=body.get("status", "active"),
+        settings=body.get("settings", {}),
+    )
+    await session.commit()
+    return _tenant_to_dict(tenant)
+
+
+# ── API Keys ─────────────────────────────────────────────────────────────
+
+
+@router.get("/tenants/{tenant_id}/api-keys", dependencies=[Depends(_ensure_same_tenant)])
+async def list_api_keys(
+    tenant_id: uuid.UUID,
+    session: SessionDep,
+) -> list[dict[str, Any]]:
+    """List API keys for a tenant."""
+    stmt = select(ApiKey).where(ApiKey.tenant_id == tenant_id)
+    result = await session.execute(stmt)
+    keys = result.scalars().all()
+    return [
+        {
+            "id": str(k.id),
+            "label": k.label,
+            "scopes": k.scopes,
+            "created_at": k.created_at.isoformat() if k.created_at else None,
+            "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None,
+            "expires_at": k.expires_at.isoformat() if k.expires_at else None,
+        }
+        for k in keys
+    ]
+
+
+@router.post("/tenants/{tenant_id}/api-keys", status_code=201, dependencies=[Depends(_ensure_same_tenant)])
+async def create_api_key(
+    tenant_id: uuid.UUID,
+    body: dict[str, Any],
+    session: SessionDep,
+) -> dict[str, str]:
+    """Generate a new API key. Returns the plaintext key ONCE."""
+    raw_key = generate_api_key()
+    key_hash = await hash_api_key(raw_key)
+    repo = GenericRepository(session, ApiKey)
+    api_key = await repo.create(
+        tenant_id=tenant_id,
+        key_hash=key_hash,
+        label=body.get("label", ""),
+        scopes=body.get("scopes", []),
+        role_hint=body.get("role_hint", "end_user"),
+    )
+    await session.commit()
+    return {
+        "id": str(api_key.id),
+        "plaintext_key": raw_key,
+        "label": api_key.label or "",
+    }
+
+
+@router.delete("/tenants/{tenant_id}/api-keys/{key_id}", status_code=204, dependencies=[Depends(_ensure_same_tenant)])
+async def delete_api_key(
+    tenant_id: uuid.UUID,
+    key_id: uuid.UUID,
+    session: SessionDep,
+) -> None:
+    """Revoke (delete) an API key."""
+    repo = GenericRepository(session, ApiKey)
+    deleted = await repo.delete(key_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="API key not found")
 
 
 # ── Users ───────────────────────────────────────────────────────────────────

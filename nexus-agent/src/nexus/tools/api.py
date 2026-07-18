@@ -7,8 +7,8 @@ from typing import Annotated, Any
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
-from starlette.requests import Request
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.requests import Request
 
 from nexus.api.depends import TenantDep
 from nexus.db.base import get_session

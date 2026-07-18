@@ -139,9 +139,16 @@ class MemoryStore:
                 params["kind"] = kind
 
         if metadata_filter:
-            for k, v in metadata_filter.items():
-                sql += f"AND metadata_ ->> '{k}' = :mf_{k} "
-                params[f"mf_{k}"] = str(v)
+            import re
+            _VALID_KEY = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+            for idx, (k, v) in enumerate(metadata_filter.items()):
+                if not _VALID_KEY.match(str(k)):
+                    raise ValueError(f"Invalid metadata key: {k}")
+                kp = f"mfk_{idx}"
+                vp = f"mfv_{idx}"
+                sql += f"AND metadata_ ->> :{kp} = :{vp} "
+                params[kp] = k
+                params[vp] = str(v)
 
         sql += "ORDER BY similarity DESC LIMIT :top_k"
         params["top_k"] = top_k

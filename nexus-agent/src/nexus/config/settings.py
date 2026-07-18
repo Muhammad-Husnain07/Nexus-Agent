@@ -1,6 +1,5 @@
 """Application settings via Pydantic BaseSettings with nested groups."""
 
-import os
 from functools import lru_cache
 from typing import Literal
 

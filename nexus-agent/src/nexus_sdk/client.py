@@ -5,7 +5,6 @@ Provides synchronous and async methods for all major API endpoints.
 
 from __future__ import annotations
 
-import json
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any

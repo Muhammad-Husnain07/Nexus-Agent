@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from langgraph.types import Command
 
 from nexus.agent.graph import build_agent_graph
@@ -118,6 +118,37 @@ async def list_pending_approvals(
         logger.info("approvals.auto_rejected", count=len(auto_rejected), ids=auto_rejected)
 
     return session_pending
+
+
+@router.get(
+    "/pending",
+    dependencies=[require_permission(Permission.APPROVALS_DECIDE)],
+)
+async def list_global_pending_approvals() -> list[dict[str, Any]]:
+    """List ALL pending approvals for the caller's tenant, newest first."""
+    tenant_id = get_tenant()
+    if tenant_id is None:
+        raise HTTPException(status_code=403, detail="No tenant context")
+
+    async with async_session() as session:
+        repo = TenantScopedRepository(session, Approval)
+        all_pending = await repo.find(status="pending")
+
+    result: list[dict[str, Any]] = []
+    for approval in all_pending:
+        if approval.tenant_id != tenant_id:
+            continue
+        tc = approval.tool_call or {}
+        result.append({
+            "id": str(approval.id),
+            "agent_run_id": str(approval.agent_run_id),
+            "tool_call": tc,
+            "status": approval.status,
+            "created_at": approval.created_at.isoformat() if approval.created_at else None,
+        })
+
+    result.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+    return result
 
 
 @router.get(
