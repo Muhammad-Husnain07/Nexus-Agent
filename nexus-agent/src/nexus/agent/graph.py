@@ -39,6 +39,7 @@ from nexus.agent.state import AgentState
 from nexus.config.settings import get_settings
 from nexus.llm.client import LLMClient
 from nexus.redis_client.pubsub import EventBus
+from nexus.security.cost_control import CostController
 from nexus.tools.discovery import DynamicToolSelector
 from nexus.tools.executor import ToolExecutor
 
@@ -106,6 +107,7 @@ def build_agent_graph(  # noqa: PLR0913
     settings = get_settings()
     _model = model or settings.llm.default_model
     _settings = settings.agent
+    _cost_ctrl = CostController()
 
     graph = StateGraph(AgentState)
 
@@ -116,7 +118,7 @@ def build_agent_graph(  # noqa: PLR0913
     graph.add_node("select_and_bind_tools", _node(select_and_bind_tools))
     graph.add_node(
         "execute_step",
-        _node(execute_step, _llm, tool_executor, _model, _settings, event_bus, session_factory),
+        _node(execute_step, _llm, tool_executor, _model, _settings, event_bus, session_factory, cost_controller=_cost_ctrl),
     )
     graph.add_node("present_preview", _node(present_preview))
     graph.add_node("analyze_results", _node(analyze_results, _llm, _model))

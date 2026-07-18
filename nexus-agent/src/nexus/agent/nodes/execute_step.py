@@ -123,6 +123,7 @@ async def execute_step(  # noqa: PLR0912, PLR0913, PLR0915
     settings: AgentSettings,
     event_bus: EventBus | None = None,
     session_factory: Callable[[], Any] | None = None,
+    cost_controller: CostController | None = None,
 ) -> dict[str, Any]:
     """ReAct micro-loop for the current plan step with full production features.
 
@@ -144,7 +145,7 @@ async def execute_step(  # noqa: PLR0912, PLR0913, PLR0915
     tool_map: dict[str, dict[str, Any]] = {t["name"]: t for t in tools}
 
     # Check for cost-based model degradation
-    _cost_ctrl = CostController()
+    _cost_ctrl = cost_controller or CostController()
     _tenant_id_str: str | None = state.get("tenant_id")
     if _tenant_id_str:
         try:
