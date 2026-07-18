@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react"
 import Box from "@mui/material/Box"
 import Typography from "@mui/material/Typography"
+import Skeleton from "@mui/material/Skeleton"
 import { useChatStore } from "./chatStore"
 import MessageBubble from "./MessageBubble"
 import ApprovalCard from "./ApprovalCard"
@@ -21,7 +22,7 @@ export default function MessageList() {
       <Box sx={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "text.secondary" }}>
         <Box sx={{ textAlign: "center" }}>
           <Typography variant="h5" sx={{ fontWeight: 700, mb: 1 }}>Nexus Agent</Typography>
-          <Typography variant="body2">Send a message to start the conversation.</Typography>
+          <Typography variant="body2">Say hello to start the conversation.</Typography>
         </Box>
       </Box>
     )
@@ -29,33 +30,16 @@ export default function MessageList() {
 
   return (
     <Box sx={{ flex: 1, overflowY: "auto", p: 2, display: "flex", flexDirection: "column", gap: 2 }}>
-      {messages.map((msg) => (
-        <MessageBubble key={msg.id} message={msg} />
-      ))}
-
+      {messages.map((msg) => <MessageBubble key={msg.id} message={msg} />)}
       {approvalData && <ApprovalCard data={approvalData} onDone={clearApprovalData} />}
-
       {status === "thinking" && (
-        <Box sx={{ display: "flex", justifyContent: "flex-start" }}>
-          <Box sx={{ bgcolor: "grey.100", borderRadius: 2, px: 2, py: 1.5, display: "flex", alignItems: "center", gap: 0.5 }}>
-            {[0, 150, 300].map((delay) => (
-              <Box
-                key={delay}
-                sx={{
-                  width: 8,
-                  height: 8,
-                  bgcolor: "text.disabled",
-                  borderRadius: "50%",
-                  animation: "bounce 1s infinite",
-                  animationDelay: `${delay}ms`,
-                  "@keyframes bounce": { "0%, 100%": { opacity: 0.4 }, "50%": { opacity: 1 } },
-                }}
-              />
-            ))}
-          </Box>
+        <Box sx={{ display: "flex", justifyContent: "flex-start", gap: 0.5 }}>
+          {[0, 0.15, 0.3].map((delay) => (
+            <Skeleton key={delay} variant="circular" width={8} height={8}
+              sx={{ animation: "pulse 1s infinite", animationDelay: `${delay}s`, bgcolor: "text.disabled" }} />
+          ))}
         </Box>
       )}
-
       <div ref={bottomRef} />
     </Box>
   )

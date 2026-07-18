@@ -3,14 +3,23 @@ import Box from "@mui/material/Box"
 import Typography from "@mui/material/Typography"
 import Button from "@mui/material/Button"
 import Chip from "@mui/material/Chip"
+import Card from "@mui/material/Card"
+import CardActions from "@mui/material/CardActions"
+import CardContent from "@mui/material/CardContent"
 import CircularProgress from "@mui/material/CircularProgress"
 import Dialog from "@mui/material/Dialog"
 import DialogTitle from "@mui/material/DialogTitle"
 import DialogContent from "@mui/material/DialogContent"
 import DialogActions from "@mui/material/DialogActions"
 import TextField from "@mui/material/TextField"
+import SecurityIcon from "@mui/icons-material/Security"
+import CheckIcon from "@mui/icons-material/Check"
+import CloseIcon from "@mui/icons-material/Close"
+import EditIcon from "@mui/icons-material/Edit"
 import Editor from "@monaco-editor/react"
+import { useSnackbar } from "notistack"
 import { useDecideApproval } from "@/lib/api/approvals"
+import { useThemeStore } from "@/theme/themeStore"
 import type { ApprovalData } from "./chatStore"
 
 interface ApprovalCardProps {
@@ -20,10 +29,6 @@ interface ApprovalCardProps {
 
 type Decision = "pending" | "approved" | "rejected" | "edited"
 
-const riskColors: Record<string, "success" | "warning" | "error"> = {
-  low: "success", medium: "warning", high: "error",
-}
-
 export default function ApprovalCard({ data, onDone }: ApprovalCardProps) {
   const [decision, setDecision] = useState<Decision>("pending")
   const [rejectOpen, setRejectOpen] = useState(false)
@@ -31,85 +36,81 @@ export default function ApprovalCard({ data, onDone }: ApprovalCardProps) {
   const [rejectComment, setRejectComment] = useState("")
   const [editedInputs, setEditedInputs] = useState(JSON.stringify(data.inputs, null, 2))
   const decideMutation = useDecideApproval()
+  const { enqueueSnackbar } = useSnackbar()
+  const mode = useThemeStore((s) => s.mode)
 
   const handleApprove = async () => {
     try {
       await decideMutation.mutateAsync({ approvalId: data.approval_id, data: { action: "approve" } })
-      setDecision("approved")
-      onDone()
-    } catch { /* handled by interceptor */ }
+      setDecision("approved"); enqueueSnackbar("Approved", { variant: "success" }); onDone()
+    } catch (err) { enqueueSnackbar(err instanceof Error ? err.message : "Failed", { variant: "error" }) }
   }
 
   const handleReject = async () => {
     try {
       await decideMutation.mutateAsync({ approvalId: data.approval_id, data: { action: "reject", comment: rejectComment || undefined } })
-      setDecision("rejected")
-      setRejectOpen(false)
-      onDone()
-    } catch { /* handled */ }
+      setDecision("rejected"); setRejectOpen(false); enqueueSnackbar("Rejected", { variant: "info" }); onDone()
+    } catch (err) { enqueueSnackbar(err instanceof Error ? err.message : "Failed", { variant: "error" }) }
   }
 
   const handleEdit = async () => {
-    let parsed: Record<string, unknown>
-    try { parsed = JSON.parse(editedInputs) } catch { return }
     try {
+      const parsed = JSON.parse(editedInputs)
       await decideMutation.mutateAsync({ approvalId: data.approval_id, data: { action: "edit", edited_inputs: parsed } })
-      setDecision("edited")
-      setEditOpen(false)
-      onDone()
-    } catch { /* handled */ }
+      setDecision("edited"); setEditOpen(false); enqueueSnackbar("Edited and approved", { variant: "success" }); onDone()
+    } catch { enqueueSnackbar("Invalid JSON", { variant: "error" }) }
   }
 
   if (decision !== "pending") {
     return (
       <Box sx={{ display: "flex", justifyContent: "flex-start" }}>
-        <Box sx={{
-          borderRadius: 2, border: 1, px: 2, py: 1.5, maxWidth: "80%",
-          ...(decision === "approved" || decision === "edited"
-            ? { borderColor: "success.light", bgcolor: "success.light", color: "success.dark" }
-            : { borderColor: "error.light", bgcolor: "error.light", color: "error.dark" }),
+        <Card variant="outlined" sx={{
+          borderLeft: 4, borderColor: decision === "rejected" ? "error.main" : "success.main",
+          bgcolor: decision === "rejected" ? "error.light" : "success.light", opacity: 0.8, maxWidth: "80%",
         }}>
-          <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5 }}>
-            {decision === "approved" && "✅ Approved"}
-            {decision === "edited" && "✅ Approved (edited)"}
-            {decision === "rejected" && "❌ Rejected"}
-          </Typography>
-          <Typography variant="caption" sx={{ opacity: 0.8 }}>Tool: {data.tool_name}</Typography>
-          {rejectComment && decision === "rejected" && (
-            <Typography variant="caption" sx={{ opacity: 0.8, display: "block", mt: 0.5 }}>
-              Comment: {rejectComment}
+          <CardContent>
+            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+              {decision === "approved" && "✅ Approved"}
+              {decision === "edited" && "✅ Approved (edited)"}
+              {decision === "rejected" && "❌ Rejected"}
             </Typography>
-          )}
-        </Box>
+            <Typography variant="caption">Tool: {data.tool_name}</Typography>
+          </CardContent>
+        </Card>
       </Box>
     )
   }
 
   return (
     <Box sx={{ display: "flex", justifyContent: "flex-start" }}>
-      <Box sx={{ borderRadius: 2, border: 1, borderColor: "warning.main", bgcolor: "warning.light", px: 2, py: 1.5, maxWidth: "80%" }}>
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
-          <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>⚠️ Approval Required</Typography>
-          <Chip label={data.risk_level} size="small" color={riskColors[data.risk_level] ?? "default"} />
-        </Box>
-        <Typography variant="body2" sx={{ mb: 0.5 }}><strong>Tool:</strong> {data.tool_name}</Typography>
-        {data.description && <Typography variant="body2" sx={{ mb: 0.5, opacity: 0.8 }}>{data.description}</Typography>}
-        <Typography variant="body2" sx={{ mb: 1 }}><strong>Inputs:</strong></Typography>
-        <Box component="pre" sx={{ bgcolor: "background.default", p: 1, borderRadius: 1, overflowX: "auto", typography: "caption", mb: 1.5 }}>
-          {JSON.stringify(data.inputs, null, 2)}
-        </Box>
-        <Box sx={{ display: "flex", gap: 1 }}>
-          <Button variant="contained" color="success" size="small" onClick={handleApprove} disabled={decideMutation.isPending}>
+      <Card variant="outlined" sx={{ borderLeft: 4, borderColor: "warning.main", maxWidth: "80%", width: "100%" }}>
+        <CardContent>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
+            <SecurityIcon color="warning" />
+            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Approval Required</Typography>
+            <Chip label={data.risk_level} size="small" color={data.risk_level === "high" ? "error" : data.risk_level === "medium" ? "warning" : "success"} />
+          </Box>
+          <Typography variant="body2" sx={{ fontWeight: 500 }}>Tool: {data.tool_name}</Typography>
+          {data.description && <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{data.description}</Typography>}
+          <Box sx={{ mt: 1 }}>
+            <Typography variant="caption" color="text.secondary">Inputs:</Typography>
+            <Box component="pre" sx={{ bgcolor: "grey.100", p: 1, borderRadius: 1, overflowX: "auto", typography: "caption" }}>
+              {JSON.stringify(data.inputs, null, 2)}
+            </Box>
+          </Box>
+        </CardContent>
+        <CardActions>
+          <Button variant="contained" color="success" size="small" startIcon={<CheckIcon />} onClick={handleApprove} disabled={decideMutation.isPending}>
             {decideMutation.isPending ? <CircularProgress size={16} /> : "Approve"}
           </Button>
-          <Button variant="outlined" color="error" size="small" onClick={() => setRejectOpen(true)} disabled={decideMutation.isPending}>
+          <Button variant="outlined" color="error" size="small" startIcon={<CloseIcon />} onClick={() => setRejectOpen(true)} disabled={decideMutation.isPending}>
             Reject
           </Button>
-          <Button variant="outlined" size="small" onClick={() => setEditOpen(true)} disabled={decideMutation.isPending}>
+          <Button variant="text" size="small" startIcon={<EditIcon />} onClick={() => setEditOpen(true)} disabled={decideMutation.isPending}>
             Edit Inputs
           </Button>
-        </Box>
-      </Box>
+        </CardActions>
+      </Card>
 
       <Dialog open={rejectOpen} onClose={() => setRejectOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Reject Approval</DialogTitle>
@@ -129,7 +130,9 @@ export default function ApprovalCard({ data, onDone }: ApprovalCardProps) {
         <DialogTitle>Edit Inputs</DialogTitle>
         <DialogContent sx={{ pt: "8px !important" }}>
           <Editor height={300} defaultLanguage="json" value={editedInputs}
-            onChange={(v) => setEditedInputs(v ?? "{}")} options={{ minimap: { enabled: false }, fontSize: 13 }} />
+            onChange={(v) => setEditedInputs(v ?? "{}")}
+            theme={mode === "dark" ? "vs-dark" : "light"}
+            options={{ minimap: { enabled: false }, fontSize: 13 }} />
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setEditOpen(false)}>Cancel</Button>

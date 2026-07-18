@@ -1,8 +1,11 @@
 import { useRef, useCallback } from "react"
 import Box from "@mui/material/Box"
-import Typography from "@mui/material/Typography"
 import TextField from "@mui/material/TextField"
-import Button from "@mui/material/Button"
+import IconButton from "@mui/material/IconButton"
+import SendIcon from "@mui/icons-material/Send"
+import AttachFileIcon from "@mui/icons-material/AttachFile"
+import StopIcon from "@mui/icons-material/Stop"
+import Typography from "@mui/material/Typography"
 import { useChatStore } from "./chatStore"
 
 interface ChatInputProps {
@@ -16,21 +19,7 @@ export default function ChatInput({ onSend, onStop, disabled }: ChatInputProps) 
   const textRef = useRef<HTMLTextAreaElement>(null)
   const isRunning = status !== "idle" && status !== "error"
 
-  const handleInput = useCallback(() => {
-    const el = textRef.current
-    if (!el) return
-    el.style.height = "auto"
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`
-  }, [])
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault()
-      handleSend()
-    }
-  }
-
-  const handleSend = () => {
+  const handleSend = useCallback(() => {
     const el = textRef.current
     if (!el) return
     const value = el.value.trim()
@@ -38,16 +27,17 @@ export default function ChatInput({ onSend, onStop, disabled }: ChatInputProps) 
     el.value = ""
     el.style.height = "auto"
     onSend(value)
+  }, [onSend, isRunning, disabled])
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend() }
   }
 
   if (status === "awaiting_approval") {
     return (
       <Box sx={{ borderTop: 1, borderColor: "divider", p: 2, bgcolor: "background.default" }}>
-        <Box sx={{ maxWidth: 800, mx: "auto" }}>
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1, bgcolor: "warning.light", color: "warning.dark", border: 1, borderColor: "warning.main", borderRadius: 1, px: 2, py: 1.5 }}>
-            <Typography sx={{ fontSize: "1.25rem" }}>⏳</Typography>
-            <Typography variant="body2">Agent is awaiting approval...</Typography>
-          </Box>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, maxWidth: 800, mx: "auto" }}>
+          <Typography variant="body2" color="warning.main">⏳ Agent is awaiting approval...</Typography>
         </Box>
       </Box>
     )
@@ -56,27 +46,21 @@ export default function ChatInput({ onSend, onStop, disabled }: ChatInputProps) 
   return (
     <Box sx={{ borderTop: 1, borderColor: "divider", p: 2, bgcolor: "background.default" }}>
       <Box sx={{ display: "flex", alignItems: "flex-end", gap: 1, maxWidth: 800, mx: "auto" }}>
+        <IconButton size="small" sx={{ mb: 0.5 }} aria-label="attach file"><AttachFileIcon /></IconButton>
         <TextField
           inputRef={textRef}
           multiline
-          maxRows={8}
+          maxRows={6}
           placeholder="Type a message..."
-          onInput={handleInput}
           onKeyDown={handleKeyDown}
           disabled={isRunning || disabled}
           size="small"
           sx={{ flex: 1, "& textarea": { resize: "none" } }}
-          slotProps={{ htmlInput: { sx: { minHeight: 20 } as React.CSSProperties } }}
         />
-
         {isRunning ? (
-          <Button variant="contained" color="error" onClick={onStop} sx={{ flexShrink: 0 }}>
-            Stop
-          </Button>
+          <IconButton color="error" onClick={onStop} aria-label="stop"><StopIcon /></IconButton>
         ) : (
-          <Button variant="contained" onClick={handleSend} disabled={disabled} sx={{ flexShrink: 0 }}>
-            Send
-          </Button>
+          <IconButton color="primary" onClick={handleSend} disabled={disabled} aria-label="send"><SendIcon /></IconButton>
         )}
       </Box>
     </Box>
