@@ -1,6 +1,13 @@
 # Tool Registration Guide
 
-Every application capability is exposed to the agent as a **tool**. The agent never calls APIs directly — it selects and invokes tools through the `ToolRegistry` and `ToolExecutor`.
+> **⚠️ Security Warning**
+> This system supports **HTTP API** and **MCP connections ONLY**.
+> Custom Python code execution is **NOT supported** for security reasons.
+
+Every application capability is exposed to the agent as a **tool**. The agent
+never calls APIs directly — it selects and invokes tools through the
+`ToolRegistry` and `ToolExecutor`. All tools communicate over HTTP to external
+services; there is no mechanism for executing arbitrary code on the server.
 
 ---
 
@@ -36,7 +43,7 @@ Every application capability is exposed to the agent as a **tool**. The agent ne
 | `purpose` | string | No | When to use this tool. Helps the LLM understand context. |
 | `endpoint_url` | string | **Yes** | Full URL including protocol. The executor calls this endpoint. |
 | `http_method` | string | No | `GET`, `POST`, `PUT`, `DELETE`, `PATCH`. Default: `GET`. |
-| `auth_type` | string | No | `none`, `bearer`, `basic`, `api_key`, `oauth2`, `custom`. Default: `none`. |
+| `auth_type` | string | No | `none`, `bearer`, `basic`, `api_key`, `oauth2`. Default: `none`. |
 | `auth_ref` | string | No | Reference to stored credential (encrypted at rest). Format: `env:VAR_NAME`, `vault:path/to/secret`, or `literal:value`. Never commit actual credentials. |
 | `input_schema` | JSON Schema | **Yes** | Declares what parameters the tool expects. The agent uses this to validate arguments before calling. |
 | `output_schema` | JSON Schema | No | Declares the response shape. Used for validation (soft-fail on mismatch). |
@@ -157,18 +164,17 @@ The LLM reads the `name`, `description`, and `purpose` fields to decide which to
 | `auth_type` | Description | Header | Example `auth_ref` |
 |-------------|-------------|--------|-------------------|
 | `none` | No authentication | — | `""` |
-| `bearer` | Bearer token in Authorization header | `Authorization: Bearer <token>` | `env:MY_API_TOKEN` |
+| `bearer` | Bearer token (OAuth2, JWT, PAT) | `Authorization: Bearer <token>` | `env:MY_API_TOKEN` |
 | `basic` | Base64-encoded user:password | `Authorization: Basic <base64>` | `env:MY_BASIC_CRED` |
-| `api_key` | Custom header for API key | `X-API-Key: <key>` | `env:MY_API_KEY` |
+| `api_key` | API key in configurable header | `X-API-Key: <key>` | `env:MY_API_KEY` |
 | `oauth2` | OAuth2 bearer token | `Authorization: Bearer <token>` | `env:MY_OAUTH_TOKEN` |
-| `custom` | Custom auth logic | Configurable by subclasses | Varies |
 
 For `oauth2`, the executor resolves the token via the configured auth store and
 injects it as a Bearer token. The token URL and client credentials are stored
 in the credential vault referenced by ``auth_ref``.
 
-For `custom`, subclass ``ToolExecutor`` and override ``_resolve_auth()`` to
-implement provider-specific logic (e.g., mTLS, custom signing, AWS SigV4).
+Credentials are **encrypted at rest** using AES-256-GCM and are never exposed
+in logs or error messages.
 
 ### Auth Reference Formats
 
@@ -181,6 +187,123 @@ implement provider-specific logic (e.g., mTLS, custom signing, AWS SigV4).
 > **Warning**: Never commit actual credentials in tool definitions. Use
 > ``env:VAR_NAME`` or ``vault:path`` in the ``auth_ref`` field and set the
 > corresponding secret in your environment or vault.
+
+---
+
+## Connecting to External APIs
+
+Follow this step-by-step guide to connect your API to the agent.
+
+### Step 1: Choose Your Endpoint
+
+Identify the HTTP endpoint the agent will call. It must be reachable from
+the Nexus Agent server (not the client browser).
+
+### Step 2: Determine Authentication
+
+Choose one of the supported auth types from the table above. Most APIs use
+either `bearer` (OAuth2, JWT) or `api_key`. Store the credential in your
+environment or vault:
+
+```bash
+export MY_API_TOKEN="sk-abc123..."
+```
+
+### Step 3: Design the Input / Output Schemas
+
+Define what the agent should send (input) and what it will receive (output).
+See the [Input / Output Schema Examples](#input--output-schema-examples)
+section for reference. Schemas must conform to JSON Schema Draft 7.
+
+### Step 4: Register the Tool
+
+Use the **Tool Builder** UI or the API directly:
+
+```bash
+curl -X POST https://your-api.com/api/v1/tools \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "search_products",
+    "endpoint_url": "https://api.example.com/v1/products/search",
+    "http_method": "GET",
+    "auth_type": "bearer",
+    "auth_ref": "env:PRODUCTS_API_KEY",
+    "tool_type": "http_api",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "q": {"type": "string", "description": "Search keyword"}
+      },
+      "required": ["q"]
+    }
+  }'
+```
+
+### Step 5: Test the Tool
+
+Use the **Test Playground** or the test endpoint:
+
+```bash
+curl -X POST https://your-api.com/api/v1/tools/$TOOL_ID/test?dry_run=false \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"q": "wireless headphones"}'
+```
+
+---
+
+## Connecting to MCP Servers
+
+The Model Context Protocol (MCP) is an open standard for connecting AI
+applications with external tools and data sources. Nexus Agent supports
+connecting to **external MCP servers** as tool providers.
+
+### What is MCP?
+
+MCP defines a JSON-RPC-based protocol over HTTP with two primary methods:
+
+| Method | Purpose |
+|--------|---------|
+| `tools/list` | Returns available tools with schemas |
+| `tools/call` | Invokes a specific tool with arguments |
+
+### Registering an MCP Tool
+
+Set `tool_type` to `"mcp"` and provide the server URL:
+
+```json
+{
+  "name": "mcp_docs_search",
+  "description": "Searches internal documentation via the MCP knowledge server.",
+  "tool_type": "mcp",
+  "mcp_server_url": "https://mcp.internal.example.com",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "query": {"type": "string", "description": "Search query"},
+      "max_results": {"type": "integer", "default": 5}
+    },
+    "required": ["query"]
+  }
+}
+```
+
+### How Discovery Works
+
+When the agent selects an MCP tool, the executor calls
+`MCPClient.list_mcp_tools(server_url)` to discover available tools. The
+discovered definitions are cached per server URL.
+
+### MCP vs HTTP API Tools
+
+| Aspect | HTTP API (`http_api`) | MCP (`mcp`) |
+|--------|----------------------|-------------|
+| Protocol | REST / GraphQL / any HTTP | JSON-RPC 2.0 |
+| Discovery | Manual registration | Automatic via `tools/list` |
+| Auth | Per-token (bearer, api_key, etc.) | Per-server token passed as header |
+| Schema | Defined in `input_schema` | Provided by server response |
+| Use case | Any HTTP endpoint | MCP-compatible servers |
 
 ### Examples with curl
 
@@ -365,3 +488,80 @@ Examples are the closest thing to few-shot learning for the LLM:
 | `low` | Read-only, non-destructive | No (unless `requires_approval=true`) |
 | `medium` | Modifies data, side effects | **Yes** (by default) |
 | `high` | Destructive, data deletion, billing | **Yes** (always) |
+
+---
+
+## Troubleshooting
+
+### CORS Errors
+
+**Symptom**: Browser console shows CORS errors when testing via the UI.
+
+**Causes & solutions**:
+1. The backend's `cors_origins` setting doesn't include your frontend origin
+   → Update `NEXUS_SERVER__CORS_ORIGINS` in your `.env` file
+2. For embed widgets: the domain is not in `allowed_domains`
+   → Update the embed config via `PUT /api/v1/embeds/{embed_id}`
+
+### Authentication Failures
+
+**Symptom**: Tool returns 401 Unauthorized or 403 Forbidden.
+
+**Causes & solutions**:
+1. `auth_ref` points to a missing environment variable
+   → Check that `env:VAR_NAME` is set and accessible
+2. The credential has expired or been rotated
+   → Update the secret in your vault and verify the `auth_ref`
+3. `auth_type` doesn't match what the API expects
+   → Verify the API's auth scheme (Bearer vs Basic vs API Key)
+
+### Timeouts
+
+**Symptom**: Tool consistently returns timeout errors.
+
+**Causes & solutions**:
+1. The endpoint is too slow for the default 30s timeout
+   → Increase `NEXUS_TOOLS__EXECUTION_TIMEOUT_S` in settings
+2. Network latency between server and endpoint
+   → Check connectivity, firewall rules, DNS resolution
+3. The endpoint requires a warm-up period
+   → Consider a health-check endpoint or keep-alive mechanism
+
+### Schema Validation Errors
+
+**Symptom**: Tool returns "Input validation failed" or "Output validation failed".
+
+**Causes & solutions**:
+1. `input_schema` doesn't match the API's actual parameters
+   → Review API documentation and update the schema
+2. The agent generated arguments that don't conform to the schema
+   → Add more descriptive field descriptions and examples
+3. Schema uses Draft 4 or Draft 2020-12 features not supported by
+   the validator
+   → Ensure schema conforms to **JSON Schema Draft 7**
+
+### Rate Limiting
+
+**Symptom**: Tool returns 429 Too Many Requests or "Rate limit exceeded".
+
+**Causes & solutions**:
+1. The tool's `rate_limit_per_minute` is set too low
+   → Increase the value via `PUT /api/v1/tools/{tool_id}`
+2. Redis token bucket has been exhausted
+   → Wait for the refill period (capacity / rate seconds)
+3. Multiple concurrent agent runs are consuming tokens
+   → Increase the rate limit or reduce agent parallelism
+
+### Connection Refused
+
+**Symptom**: Tool returns "Connection refused" when executing.
+
+**Causes & solutions**:
+1. The endpoint URL is incorrect
+   → Verify the URL in the tool definition
+2. The external service is down
+   → Check the service status and restart if needed
+3. A firewall or network policy is blocking the connection
+   → Check network ACLs, security groups, and DNS resolution
+4. The host is not in the sandbox whitelist
+   → Add the host to `NEXUS_TOOLS__ALLOWED_HOSTS`
