@@ -117,8 +117,9 @@ class LLMClient:
             "model": model,
             "messages": messages,
         }
-        if provider.api_key:
-            kwargs["api_key"] = provider.api_key.get_secret_value()
+        api_key_val = provider.api_key.get_secret_value()
+        if api_key_val:
+            kwargs["api_key"] = api_key_val
         if tools:
             kwargs["tools"] = tools
         if response_format:
@@ -181,8 +182,9 @@ class LLMClient:
             "model": model,
             "input": texts,
         }
-        if provider.api_key:
-            kwargs["api_key"] = provider.api_key.get_secret_value()
+        api_key_val = provider.api_key.get_secret_value()
+        if api_key_val:
+            kwargs["api_key"] = api_key_val
 
         response = await aembedding(**kwargs)
         return [item["embedding"] for item in response.data]

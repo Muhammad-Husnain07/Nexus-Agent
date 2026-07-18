@@ -41,6 +41,7 @@ class ProviderRegistry:
     def get_instance(cls) -> ProviderRegistry:
         if cls._instance is None:
             cls._instance = cls()
+            cls._instance._load()
         return cls._instance
 
     @classmethod
@@ -60,6 +61,21 @@ class ProviderRegistry:
             self._providers[cfg.name] = instance
             for model in cfg.models:
                 self._model_to_provider[model] = cfg.name
+        # Register a default "litellm" provider that delegates routing to LiteLLM's
+        # built-in model prefix routing (ollama/qwen2.5:7b, deepseek/deepseek-chat, etc.)
+        if not self._providers:
+            from nexus.config.settings import ProviderConfig  # noqa: PLC0415
+            self._providers["litellm"] = ProviderInstance(
+                config=ProviderConfig(
+                    name="litellm",
+                    base_url="",
+                    api_key_ref="",
+                    models=["*"],
+                    supports_streaming=True,
+                    supports_tools=True,
+                    supports_structured_output=True,
+                ),
+            )
 
     def get_provider(self, name: str) -> ProviderInstance | None:
         return self._providers.get(name)
@@ -78,6 +94,10 @@ class ProviderRegistry:
         provider = self.get_provider(settings.llm.default_provider)
         if provider is not None:
             return provider, settings.llm.default_provider
+        # Fallback: use the catch-all "litellm" provider (built-in routing)
+        litellm_provider = self.get_provider("litellm")
+        if litellm_provider is not None:
+            return litellm_provider, "litellm"
         msg = f"No provider found for model '{model}' and no default provider configured"
         raise ValueError(msg)
 
