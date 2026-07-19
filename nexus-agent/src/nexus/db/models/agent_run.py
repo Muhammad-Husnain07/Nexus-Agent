@@ -75,7 +75,6 @@ class Approval(TenantMixin, Base):
     )
     reviewer_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("user.id", ondelete="SET NULL"),
         nullable=True,
         comment="User who reviewed the request",
     )

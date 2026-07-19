@@ -345,14 +345,9 @@ def create_app() -> FastAPI:
                     "bearerFormat": "JWT",
                     "description": "JWT token from the auth endpoint",
                 },
-                "ApiKeyAuth": {
-                    "type": "apiKey",
-                    "in": "header",
-                    "name": "X-API-Key",
-                    "description": "API key from the developer dashboard",
-                },
+
             }
-            schema["security"] = [{"BearerAuth": []}, {"ApiKeyAuth": []}]
+            schema["security"] = [{"BearerAuth": []}]
         app.openapi_schema = schema
         return app.openapi_schema
 

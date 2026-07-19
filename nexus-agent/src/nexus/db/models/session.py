@@ -19,7 +19,6 @@ class Session(TenantMixin, Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("user.id", ondelete="CASCADE"),
         nullable=False,
     )
     title: Mapped[str] = mapped_column(String(512), default="New Session", comment="Session title")
@@ -41,7 +40,6 @@ class Session(TenantMixin, Base):
     __table_args__ = tenant_table_args("session")
 
     tenant = relationship("Tenant", back_populates="sessions", passive_deletes=True)
-    user = relationship("User", back_populates="sessions", passive_deletes=True)
     messages = relationship("Message", back_populates="session", passive_deletes=True)
     agent_runs = relationship("AgentRun", back_populates="session", passive_deletes=True)
 
