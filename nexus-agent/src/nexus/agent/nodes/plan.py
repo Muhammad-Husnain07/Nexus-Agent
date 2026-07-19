@@ -55,7 +55,6 @@ async def plan(
         indent=2,
     )
     intent: dict[str, Any] = state.get("intent") or {}
-    logger.warning("plan.DEBUG_VERIFY", tool_count=len(tools), intent_got=bool(intent.get("intent")))
     if not intent.get("intent"):
         msgs = state.get("messages", [])
         if msgs:
@@ -69,7 +68,7 @@ async def plan(
             "intent": intent,
             "gathered_requirements": gathered,
             "available_tools": tool_descriptions,
-            "max_steps": 10,
+            "max_steps": settings.max_plan_steps,
         },
         indent=2,
     )
@@ -81,7 +80,6 @@ async def plan(
         tool_descriptions=tool_descriptions,
     )
 
-    logger.warning("plan.state_keys", keys=list(state.keys()), intent_type=type(state.get("intent")).__name__, intent_val=str(state.get("intent"))[:200])
     response = await llm.complete(
         model=model,
         messages=[

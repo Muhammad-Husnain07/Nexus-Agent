@@ -2,6 +2,24 @@
 *.log
 out.txt
 .coverage
+fe.log
+
+# Build outputs
+dist/
+.vite/
+
+# Python
+__pycache__/
+*.pyc
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
+
+# Test scripts (not part of the project)
+test_*.py
+check_*.py
+tmp/
 
 # IDE
 .idea/
