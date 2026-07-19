@@ -1,27 +1,70 @@
-import axios from "axios"
-
-// Demo JWT token for the tenant_admin user (expires in 30 min)
-const DEMO_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwMDIiLCJyb2xlIjoidGVuYW50X2FkbWluIiwiaXNzIjoibmV4dXMtYWdlbnQiLCJhdWQiOiJuZXh1cy1hcGkiLCJpYXQiOjE3ODQ0MTU3OTcsImV4cCI6MTc4NzAwNzc5NywidHlwZSI6ImFjY2VzcyIsInRpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDAwMSJ9.YWUIUeTiM9elY-Yl-JS-SysIzxOEBTirO2xpGPvw9iU"
-
-const DEMO_TENANT_ID = "00000000-0000-0000-0000-000000000001"
+import axios from "axios";
+import { enqueueSnackbar } from "notistack";
+import { useAuthStore } from "../stores/auth-store";
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || "/api",
-  headers: {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${DEMO_TOKEN}`,
-    "X-Tenant-ID": DEMO_TENANT_ID,
-  },
-})
+  baseURL: "/api/v1",
+  headers: { "Content-Type": "application/json" },
+});
+
+api.interceptors.request.use((config) => {
+  const { access_token, selectedTenantId } = useAuthStore.getState();
+  if (access_token) config.headers.Authorization = `Bearer ${access_token}`;
+  if (selectedTenantId) config.headers["X-Tenant-ID"] = selectedTenantId;
+  return config;
+});
+
+let isRefreshing = false;
+let failedQueue: Array<{
+  resolve: (token: string) => void;
+  reject: (err: unknown) => void;
+}> = [];
+
+const processQueue = (error: unknown, token: string | null) => {
+  failedQueue.forEach((p) => (token ? p.resolve(token) : p.reject(error)));
+  failedQueue = [];
+};
 
 api.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
-      useAuthStore.getState().logout()
+  (res) => res,
+  async (error) => {
+    const originalRequest = error.config;
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      if (isRefreshing) {
+        return new Promise((resolve, reject) => {
+          failedQueue.push({ resolve, reject });
+        }).then((token) => {
+          originalRequest.headers.Authorization = `Bearer ${token}`;
+          return api(originalRequest);
+        });
+      }
+      originalRequest._retry = true;
+      isRefreshing = true;
+      try {
+        const { refresh_token } = useAuthStore.getState();
+        if (!refresh_token) throw new Error("No refresh token");
+        const res = await axios.post("/api/v1/auth/refresh", { refresh_token });
+        const { access_token, refresh_token: newRefresh } = res.data;
+        useAuthStore.getState().setTokens(access_token, newRefresh);
+        processQueue(null, access_token);
+        originalRequest.headers.Authorization = `Bearer ${access_token}`;
+        return api(originalRequest);
+      } catch (err) {
+        processQueue(err, null);
+        useAuthStore.getState().logout();
+        window.location.href = "/login";
+        return Promise.reject(err);
+      } finally {
+        isRefreshing = false;
+      }
     }
-    return Promise.reject(error)
-  },
-)
+    if (error.response?.status === 403) {
+      enqueueSnackbar("Access denied. You do not have permission.", {
+        variant: "error",
+      });
+    }
+    return Promise.reject(error);
+  }
+);
 
-export default api
+export default api;
