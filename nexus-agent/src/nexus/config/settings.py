@@ -142,10 +142,6 @@ class AuthSettings(BaseModel):
     )
     refresh_token_ttl_days: int = Field(default=7, ge=1, description="Refresh token TTL in days")
     api_key_header_name: str = Field(default="X-API-Key", description="API key header name")
-    credential_master_key_ref: str = Field(
-        default="env:NEXUS_CREDENTIAL_MASTER_KEY",
-        description="Env var or Vault path for the credential master key",
-    )
 
     @model_validator(mode="after")
     def _validate_jwt_secret(self) -> "AuthSettings":

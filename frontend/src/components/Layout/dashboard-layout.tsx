@@ -1,7 +1,7 @@
 import { useState } from "react"
 import { Outlet } from "react-router-dom"
-import Sidebar from "@/components/layout/sidebar"
-import TopNav from "@/components/layout/top-nav"
+import Sidebar from "@/components/Layout/Sidebar"
+import TopNav from "@/components/Layout/top-nav"
 
 interface Props { dark: boolean; onToggle: () => void }
 

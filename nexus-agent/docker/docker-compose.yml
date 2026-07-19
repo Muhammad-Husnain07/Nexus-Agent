@@ -42,8 +42,7 @@ services:
     environment:
       NEXUS_ENV: production
       NEXUS_FRONTEND__API_URL: http://localhost:8000
-      NEXUS_EMBED__ENABLED: "true"
-      NEXUS_EMBED__ALLOWED_ORIGINS: "*"
+
     depends_on:
       postgres:
         condition: service_healthy
