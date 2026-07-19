@@ -1,189 +1,50 @@
-import { useLocation, useNavigate } from "react-router-dom";
-import {
-  Box,
-  Drawer,
-  List,
-  ListItem,
-  ListItemButton,
-  ListItemIcon,
-  ListItemText,
-  Toolbar,
-  Typography,
-  Collapse,
-  Badge,
-  useMediaQuery,
-  useTheme,
-} from "@mui/material";
-import DashboardIcon from "@mui/icons-material/Dashboard";
-import ChatIcon from "@mui/icons-material/Chat";
-import BuildIcon from "@mui/icons-material/Build";
-import FolderIcon from "@mui/icons-material/Folder";
-import CheckCircleIcon from "@mui/icons-material/CheckCircle";
-import PsychologyIcon from "@mui/icons-material/Psychology";
-import BarChartIcon from "@mui/icons-material/BarChart";
-import ShieldIcon from "@mui/icons-material/Shield";
-import CodeIcon from "@mui/icons-material/Code";
-import ExpandLess from "@mui/icons-material/ExpandLess";
-import ExpandMore from "@mui/icons-material/ExpandMore";
-import { useState } from "react";
-import { useSidebarStore } from "../../stores/sidebar-store";
+import { NavLink } from "react-router-dom"
+import { cn } from "@/lib/utils"
+import { LayoutDashboard, MessageSquare, Wrench, FolderOpen, CheckCircle, BrainCircuit, Play, Code2, X } from "lucide-react"
 
-const DRAWER_WIDTH = 260;
+const items = [
+  { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { to: "/chat", label: "Chat", icon: MessageSquare },
+  { to: "/tools", label: "Tools", icon: Wrench },
+  { to: "/sessions", label: "Sessions", icon: FolderOpen },
+  { to: "/approvals", label: "Approvals", icon: CheckCircle },
+  { to: "/memory", label: "Memory", icon: BrainCircuit },
+  { to: "/test", label: "Playground", icon: Play },
+  { to: "/embed", label: "Embed", icon: Code2 },
+]
 
-interface NavItem {
-  label: string;
-  icon: React.ReactNode;
-  path?: string;
-  badge?: number;
-  children?: { label: string; path: string }[];
-}
+interface Props { open: boolean; onClose: () => void }
 
-const navItems: NavItem[] = [
-  { label: "Dashboard", icon: <DashboardIcon />, path: "/dashboard" },
-  { label: "Chat", icon: <ChatIcon />, path: "/chat" },
-  {
-    label: "Tools",
-    icon: <BuildIcon />,
-    children: [
-      { label: "All Tools", path: "/tools" },
-      { label: "Create Tool", path: "/tools/new" },
-    ],
-  },
-  { label: "Sessions", icon: <FolderIcon />, path: "/sessions" },
-  { label: "Approvals", icon: <CheckCircleIcon />, path: "/approvals" },
-  { label: "Memory", icon: <PsychologyIcon />, path: "/memory" },
-  { label: "Cost Analytics", icon: <BarChartIcon />, path: "/cost-analytics" },
-  {
-    label: "Admin",
-    icon: <ShieldIcon />,
-    children: [
-      { label: "Tenants", path: "/admin/tenants" },
-      { label: "Users", path: "/admin/users" },
-      { label: "API Keys", path: "/admin/api-keys" },
-      { label: "Audit Log", path: "/admin/audit-log" },
-    ],
-  },
-  { label: "Embed Widget", icon: <CodeIcon />, path: "/embed" },
-];
-
-export default function Sidebar() {
-  const { open, mobileOpen, setMobileOpen, toggle } = useSidebarStore();
-  const location = useLocation();
-  const navigate = useNavigate();
-  const theme = useTheme();
-  const isMobile = useMediaQuery(theme.breakpoints.down("md"));
-  const [expanded, setExpanded] = useState<string[]>([]);
-
-  const toggleExpand = (label: string) => {
-    setExpanded((prev) =>
-      prev.includes(label) ? prev.filter((l) => l !== label) : [...prev, label]
-    );
-  };
-
-  const isActive = (path?: string) => location.pathname === path;
-  const isChildActive = (children?: { path: string }[]) =>
-    children?.some((c) => location.pathname.startsWith(c.path));
-
-  const content = (
-    <Box>
-      <Toolbar sx={{ px: 2 }}>
-        <Typography variant="h6" fontWeight={700} noWrap>
-          Nexus
-        </Typography>
-      </Toolbar>
-      <List sx={{ px: 1 }}>
-        {navItems.map((item) => {
-          if (item.children) {
-            const open = expanded.includes(item.label) || isChildActive(item.children);
-            return (
-              <Box key={item.label}>
-                <ListItem disablePadding>
-                  <ListItemButton
-                    selected={isChildActive(item.children)}
-                    onClick={() => toggleExpand(item.label)}
-                    sx={{ borderRadius: 2, mb: 0.5 }}
-                  >
-                    <ListItemIcon sx={{ minWidth: 40 }}>{item.icon}</ListItemIcon>
-                    <ListItemText primary={item.label} />
-                    {open ? <ExpandLess /> : <ExpandMore />}
-                  </ListItemButton>
-                </ListItem>
-                <Collapse in={open}>
-                  <List disablePadding>
-                    {item.children.map((child) => (
-                      <ListItem key={child.path} disablePadding>
-                        <ListItemButton
-                          selected={isActive(child.path)}
-                          onClick={() => {
-                            navigate(child.path);
-                            if (isMobile) setMobileOpen(false);
-                          }}
-                          sx={{ pl: 4, borderRadius: 2, mb: 0.5 }}
-                        >
-                          <ListItemText primary={child.label} />
-                        </ListItemButton>
-                      </ListItem>
-                    ))}
-                  </List>
-                </Collapse>
-              </Box>
-            );
-          }
-          return (
-            <ListItem key={item.path} disablePadding>
-              <ListItemButton
-                selected={isActive(item.path)}
-                onClick={() => {
-                  navigate(item.path!);
-                  if (isMobile) setMobileOpen(false);
-                }}
-                sx={{ borderRadius: 2, mb: 0.5 }}
-              >
-                <ListItemIcon sx={{ minWidth: 40 }}>
-                  {item.badge ? (
-                    <Badge badgeContent={item.badge} color="error">
-                      {item.icon}
-                    </Badge>
-                  ) : (
-                    item.icon
-                  )}
-                </ListItemIcon>
-                <ListItemText primary={item.label} />
-              </ListItemButton>
-            </ListItem>
-          );
-        })}
-      </List>
-    </Box>
-  );
-
-  if (isMobile) {
-    return (
-      <Drawer
-        variant="temporary"
-        open={mobileOpen}
-        onClose={() => setMobileOpen(false)}
-        sx={{ "& .MuiDrawer-paper": { width: DRAWER_WIDTH } }}
-      >
-        {content}
-      </Drawer>
-    );
-  }
-
+export default function Sidebar({ open, onClose }: Props) {
   return (
-    <Drawer
-      variant="persistent"
-      open={open}
-      sx={{
-        width: open ? DRAWER_WIDTH : 0,
-        flexShrink: 0,
-        "& .MuiDrawer-paper": {
-          width: DRAWER_WIDTH,
-          transition: theme.transitions.create("width"),
-        },
-      }}
-    >
-      {content}
-    </Drawer>
-  );
+    <>
+      {open && <div className="fixed inset-0 bg-black/50 z-40 md:hidden" onClick={onClose} />}
+      <aside className={cn(
+        "fixed md:sticky top-0 left-0 z-50 h-screen w-64 bg-sidebar text-sidebar-foreground flex flex-col transition-transform duration-200",
+        open ? "translate-x-0" : "-translate-x-full md:translate-x-0 md:w-16"
+      )}>
+        <div className="flex items-center justify-between p-4 border-b border-sidebar-accent">
+          <span className="font-bold text-lg">Nexus</span>
+          <button onClick={onClose} className="md:hidden p-1 hover:bg-sidebar-accent rounded"><X size={18} /></button>
+        </div>
+        <nav className="flex-1 p-2 space-y-1">
+          {items.map((item) => (
+            <NavLink key={item.to} to={item.to} end={item.to === "/dashboard"}
+              onClick={onClose}
+              className={({ isActive }) => cn(
+                "flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors",
+                isActive ? "bg-sidebar-accent text-white" : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+              )}
+            >
+              <item.icon size={18} />
+              <span className={cn("transition-opacity", open ? "opacity-100" : "md:hidden")}>{item.label}</span>
+            </NavLink>
+          ))}
+        </nav>
+        <div className="p-4 border-t border-sidebar-accent text-xs text-sidebar-foreground/50">
+          Nexus Agent v0.1.0
+        </div>
+      </aside>
+    </>
+  )
 }
