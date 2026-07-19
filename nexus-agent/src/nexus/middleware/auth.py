@@ -54,6 +54,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     token,
                     settings.auth.jwt_secret.get_secret_value(),
                     algorithms=[settings.auth.jwt_algorithm],
+                    audience=settings.auth.jwt_audience,
                 )
                 user_id = payload.get("sub")
                 if user_id:

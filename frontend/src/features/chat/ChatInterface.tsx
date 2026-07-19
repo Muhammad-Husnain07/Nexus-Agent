@@ -135,21 +135,44 @@ function TypingIndicator() {
 }
 
 export default function ChatInterface() {
-  const [messages, setMessages] = useState<ChatMessage[]>(sampleMessages)
+  const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState("")
   const [isGenerating, setIsGenerating] = useState(false)
-  const [sessionId, setSessionId] = useState("session-1")
+  const [sessionId, setSessionId] = useState<string>("")
   const [showTimeline, setShowTimeline] = useState(true)
   const [timelineFilter, setTimelineFilter] = useState("all")
+  const [abortController, setAbortController] = useState<AbortController | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const ws = useWebSocket(sessionId)
+
+  // Demo auth token and tenant for backend requests
+  const DEMO_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwMDIiLCJyb2xlIjoidGVuYW50X2FkbWluIiwiaXNzIjoibmV4dXMtYWdlbnQiLCJhdWQiOiJuZXh1cy1hcGkiLCJpYXQiOjE3ODQ0MTU3OTcsImV4cCI6MTc4NzAwNzc5NywidHlwZSI6ImFjY2VzcyIsInRpZCI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDAwMSJ9.YWUIUeTiM9elY-Yl-JS-SysIzxOEBTirO2xpGPvw9iU"
+  const DEMO_TENANT = "00000000-0000-0000-0000-000000000001"
+
+  // Create session on mount
+  useEffect(() => {
+    if (!sessionId) {
+      fetch("/api/v1/sessions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${DEMO_TOKEN}`,
+          "X-Tenant-ID": DEMO_TENANT,
+        },
+        body: JSON.stringify({ title: "Demo Chat" }),
+      })
+        .then((r) => r.json())
+        .then((data) => setSessionId(data.id || crypto.randomUUID()))
+        .catch(() => setSessionId(crypto.randomUUID()))
+    }
+  }, [sessionId])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
 
-  const handleSend = useCallback(() => {
-    if (!input.trim() || isGenerating) return
+  const handleSend = useCallback(async () => {
+    if (!input.trim() || isGenerating || !sessionId) return
+
     const userMsg: ChatMessage = {
       id: crypto.randomUUID(),
       session_id: sessionId,
@@ -161,18 +184,92 @@ export default function ChatInterface() {
     setInput("")
     setIsGenerating(true)
 
-    // Simulate agent response after delay
-    setTimeout(() => {
-      const agentMsg: ChatMessage = {
-        id: crypto.randomUUID(),
-        session_id: sessionId,
-        role: "agent",
-        content: `I've processed your request. Let me check the available tools to help with "${input.trim()}".`,
-        created_at: new Date().toISOString(),
+    const controller = new AbortController()
+    setAbortController(controller)
+
+    try {
+      const authHeaders = { "Authorization": `Bearer ${DEMO_TOKEN}`, "X-Tenant-ID": DEMO_TENANT, "Content-Type": "application/json" }
+      const resp = await fetch(`/api/v1/sessions/${sessionId}/chat`, {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({ message: userMsg.content, stream: false }),
+        signal: controller.signal,
+      })
+
+      const data = await resp.json()
+      const events = data.events || []
+      let finalText = data.final_response || ""
+
+      // Collect tool results for summary generation
+      const toolResults: string[] = []
+
+      for (const event of events) {
+        const type = event.type || ""
+        const payload = event.payload || {}
+
+        if (type === "tool_call_completed") {
+          // Build a human-readable summary
+          const toolName = payload.tool_name || "unknown"
+          const status = payload.status || "error"
+          const resultData = payload.data
+
+          if (status === "success" && resultData) {
+            // Extract text from various API response formats
+            let summary = ""
+            if (resultData.joke) summary = resultData.joke
+            else if (resultData.response) summary = resultData.response
+            else if (resultData.content) summary = resultData.content
+            else if (resultData.text) summary = resultData.text
+            else if (resultData.setup && resultData.delivery) summary = `${resultData.setup}\n\n${resultData.delivery}`
+            else if (typeof resultData === "string") summary = resultData
+            else summary = JSON.stringify(resultData, null, 2)
+
+            toolResults.push(summary)
+          }
+
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              session_id: sessionId,
+              role: "tool",
+              content: "",
+              tool_call: {
+                tool_name: toolName,
+                arguments: payload.inputs || {},
+                status: status === "error" ? "error" : "success",
+                result: resultData || null,
+                duration_ms: payload.duration_ms || 0,
+                error: payload.error || null,
+              },
+              created_at: new Date().toISOString(),
+            },
+          ])
+        }
       }
-      setMessages((prev) => [...prev, agentMsg])
+
+      // If no final_response from agent, build one from tool results
+      if (!finalText && toolResults.length > 0) {
+        finalText = toolResults.join("\n\n")
+      }
+
+      if (finalText) {
+        setMessages((prev) => [
+          ...prev,
+          { id: crypto.randomUUID(), session_id: sessionId, role: "agent" as const, content: finalText, created_at: new Date().toISOString() },
+        ])
+      }
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name !== "AbortError") {
+        setMessages((prev) => [
+          ...prev,
+          { id: crypto.randomUUID(), session_id: sessionId, role: "agent" as const, content: `Connection error: ${err.message}`, created_at: new Date().toISOString() },
+        ])
+      }
+    } finally {
       setIsGenerating(false)
-    }, 1500)
+      setAbortController(null)
+    }
   }, [input, isGenerating, sessionId])
 
   const handleStop = useCallback(() => {
@@ -255,8 +352,8 @@ export default function ChatInterface() {
             <Button onClick={handleSend} disabled={!input.trim() || isGenerating}>
               <Send className="h-4 w-4" />
             </Button>
-            <Button variant="outline" size="icon" onClick={handleRegenerate} disabled={messages.length === 0} title="Regenerate">
-              <RotateCcw className="h-4 w-4" />
+            <Button variant="outline" size="icon" onClick={handleStop} disabled={!isGenerating} title="Stop">
+              <Square className="h-4 w-4" />
             </Button>
           </div>
         </div>
@@ -316,32 +413,4 @@ export default function ChatInterface() {
 
 import { Terminal } from "lucide-react"
 
-const sampleMessages: ChatMessage[] = [
-  {
-    id: "1", session_id: "session-1", role: "user",
-    content: "Can you search for products with the keyword 'wireless headphones'?",
-    created_at: new Date(Date.now() - 60000).toISOString(),
-  },
-  {
-    id: "2", session_id: "session-1", role: "agent",
-    content: "I'll search for wireless headphones using the product search tool.",
-    created_at: new Date(Date.now() - 55000).toISOString(),
-  },
-  {
-    id: "3", session_id: "session-1", role: "tool",
-    content: "",
-    tool_call: {
-      tool_name: "search-products",
-      arguments: { query: "wireless headphones", limit: 10 },
-      status: "success",
-      result: { items: [{ name: "Sony WH-1000XM5", price: 349.99 }, { name: "AirPods Pro", price: 249.99 }] },
-      duration_ms: 423,
-    },
-    created_at: new Date(Date.now() - 54000).toISOString(),
-  },
-  {
-    id: "4", session_id: "session-1", role: "agent",
-    content: "Here are the results for **wireless headphones**:\n\n1. **Sony WH-1000XM5** — $349.99\n2. **AirPods Pro** — $249.99\n\nWould you like more details on any of these?",
-    created_at: new Date(Date.now() - 53000).toISOString(),
-  },
-]
+
