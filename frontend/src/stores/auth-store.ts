@@ -38,6 +38,29 @@ function persistState(partial: Record<string, unknown>) {
   } catch { /* ignore */ }
 }
 
+function decodeJWT(token: string): Record<string, unknown> {
+  try {
+    const payload = token.split(".")[1];
+    return JSON.parse(atob(payload));
+  } catch {
+    return {};
+  }
+}
+
+function userFromToken(token: string): User | null {
+  const claims = decodeJWT(token);
+  const sub = claims.sub as string;
+  const role = claims.role as string;
+  const tid = claims.tid as string;
+  if (!sub || !role || !tid) return null;
+  return {
+    id: sub,
+    email: claims.email as string || sub,
+    role: role as User["role"],
+    tenant_id: tid,
+  };
+}
+
 const persisted = loadPersisted();
 
 export const useAuthStore = create<AuthState>()((set, get) => ({
@@ -58,12 +81,14 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       });
       if (!res.ok) throw new Error("Login failed");
       const data = await res.json();
+      const token = data.access_token;
+      const user = userFromToken(token);
       const partial = {
-        user: data.user,
-        access_token: data.access_token,
+        user,
+        access_token: token,
         refresh_token: data.refresh_token,
         isAuthenticated: true,
-        selectedTenantId: data.user.tenant_id,
+        selectedTenantId: user?.tenant_id || null,
       };
       set({ ...partial, isLoading: false });
       persistState(partial);
@@ -89,10 +114,9 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     const { refresh_token } = get();
     if (!refresh_token) return;
     try {
-      const res = await fetch("/api/v1/auth/refresh", {
+      const res = await fetch(`/api/v1/auth/refresh?refresh_token=${encodeURIComponent(refresh_token)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refresh_token }),
       });
       if (res.ok) {
         const data = await res.json();
