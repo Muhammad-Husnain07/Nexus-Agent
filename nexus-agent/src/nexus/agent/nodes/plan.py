@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import structlog
@@ -54,6 +55,13 @@ async def plan(
         indent=2,
     )
     intent: dict[str, Any] = state.get("intent") or {}
+    logger.warning("plan.DEBUG_VERIFY", tool_count=len(tools), intent_got=bool(intent.get("intent")))
+    if not intent.get("intent"):
+        msgs = state.get("messages", [])
+        if msgs:
+            last = msgs[-1]
+            content = last.content if hasattr(last, "content") else str(last)
+            intent = {"intent": content, "parameters": {}}
     gathered: dict[str, Any] = state.get("gathered_requirements", {})
 
     user_context = json.dumps(
@@ -61,10 +69,11 @@ async def plan(
             "intent": intent,
             "gathered_requirements": gathered,
             "available_tools": tool_descriptions,
-            "max_steps": settings.max_plan_steps,
+            "max_steps": 10,
         },
         indent=2,
     )
+
 
     system_prompt = prompt_manager.render(
         "plan",
@@ -72,20 +81,39 @@ async def plan(
         tool_descriptions=tool_descriptions,
     )
 
+    logger.warning("plan.state_keys", keys=list(state.keys()), intent_type=type(state.get("intent")).__name__, intent_val=str(state.get("intent"))[:200])
     response = await llm.complete(
         model=model,
         messages=[
             _openai_message("system", system_prompt),
             _openai_message("user", user_context),
         ],
-        response_format={"type": "json_object"},
         temperature=0,
+
     )
 
+    content = (response.content or "").strip()
+    # Strip markdown code fences if present
+    if content.startswith("```"):
+        content = re.sub(r"^```[a-zA-Z]*\n?", "", content)
+        content = re.sub(r"\n```$", "", content)
+        content = content.strip()
     try:
-        parsed: dict[str, Any] = json.loads(response.content or "{}")
+        parsed: dict[str, Any] = json.loads(content)
     except (json.JSONDecodeError, TypeError) as exc:
-        raise PlanningError(f"Failed to parse plan from LLM output: {exc}") from None
+        logger.warning("plan.parse_fallback", error=str(exc), content_len=len(content))
+        # Fallback: use intent directly as a single-step plan
+        goal = intent.get("intent", "") or "Execute the user's request"
+        fallback_steps = [{
+            "id": "step_1",
+            "description": goal,
+            "tool_name": None,
+            "inputs": {},
+            "expected_outcome": goal,
+            "is_destructive": False,
+            "depends_on": [],
+        }]
+        return {"plan": fallback_steps, "current_step_index": 0, "needs_human_review": False}
 
     steps_raw: list[dict[str, Any]] = parsed.get("steps", [])
     if not steps_raw:
@@ -94,10 +122,13 @@ async def plan(
     steps: list[dict[str, Any]] = []
     has_destructive = False
     for s in steps_raw:
+        raw_tool_name = s.get("tool_name")
+        if isinstance(raw_tool_name, str) and raw_tool_name.lower() in ("null", "none", ""):
+            raw_tool_name = None
         step_dict = {
             "id": s.get("id", f"step_{len(steps) + 1}"),
             "description": s.get("description", ""),
-            "tool_name": s.get("tool_name"),
+            "tool_name": raw_tool_name,
             "inputs": s.get("inputs"),
             "status": "pending",
             "depends_on": s.get("depends_on", []),
@@ -132,6 +163,7 @@ async def plan(
         step_count=len(steps),
         needs_human_review=needs_review,
         rationale=parsed.get("rationale", "")[:100],
+        response_length=len(content),
     )
     return {
         "plan": steps,

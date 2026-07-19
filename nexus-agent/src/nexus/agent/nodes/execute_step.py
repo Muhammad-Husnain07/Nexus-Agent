@@ -156,6 +156,8 @@ async def execute_step(  # noqa: PLR0912, PLR0913, PLR0915
         except Exception as exc:
             logger.debug("cost_control_check_failed", error=str(exc))
 
+    if isinstance(step.get("tool_name"), str) and step["tool_name"].lower() in ("null", "none", ""):
+        step["tool_name"] = None
     if step.get("tool_name") and step["tool_name"] not in tool_map:
         step["status"] = "failed"
         plan_list = list(state.get("plan") or [])

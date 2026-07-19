@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import structlog
@@ -69,12 +70,16 @@ async def understand_intent(
             _openai_message("system", system_prompt),
             _openai_message("user", last_user),
         ],
-        response_format={"type": "json_object"},
         temperature=0,
     )
 
+    content = (response.content or "").strip()
+    if content.startswith("```"):
+        content = re.sub(r"^```[a-zA-Z]*\n?", "", content)
+        content = re.sub(r"\n```$", "", content)
+        content = content.strip()
     try:
-        parsed: dict[str, Any] = json.loads(response.content or "{}")
+        parsed: dict[str, Any] = json.loads(content or "{}")
         analysis = IntentAnalysis(**parsed)
     except (json.JSONDecodeError, TypeError) as exc:
         logger.warning("intent.parse_failed", content=response.content, error=str(exc))

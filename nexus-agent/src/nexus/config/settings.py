@@ -252,6 +252,10 @@ class AgentSettings(BaseModel):
         le=50,
         description="Max ReAct sub-iterations per step (internal micro-loop)",
     )
+    skip_preview: bool = Field(
+        default=False,
+        description="Skip the present_preview node (routes directly to finalize)",
+    )
 
 
 class ToolSettings(BaseModel):

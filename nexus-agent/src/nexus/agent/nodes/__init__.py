@@ -17,7 +17,12 @@ def msg_role(msg: Any) -> str:
     """Extract role from either a dict message or a BaseMessage."""
     if isinstance(msg, dict):
         return str(msg.get("role", ""))
-    return str(getattr(msg, "type", ""))
+    role = str(getattr(msg, "type", ""))
+    if role == "human":
+        return "user"
+    if role == "ai":
+        return "assistant"
+    return role
 
 
 from nexus.agent.nodes.analyze_results import analyze_results

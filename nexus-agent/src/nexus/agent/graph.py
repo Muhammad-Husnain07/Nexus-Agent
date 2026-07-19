@@ -62,9 +62,9 @@ def route_after_analyze(state: AgentState) -> str:
     max_iter: int = get_settings().agent.max_iterations
     if state.get("iteration_count", 0) >= max_iter:
         return "finalize"
-    if decision == "preview":
+    if decision == "preview" and not get_settings().agent.skip_preview:
         return "present_preview"
-    return decision
+    return decision if decision == "continue" else "finalize"
 
 
 # ---------------------------------------------------------------------------
