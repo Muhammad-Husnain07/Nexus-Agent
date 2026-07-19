@@ -20,7 +20,7 @@ import BuildIcon from "@mui/icons-material/Build";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import AttachMoneyIcon from "@mui/icons-material/AttachMoney";
 import TrendingUpIcon from "@mui/icons-material/TrendingUp";
-import { useAuth } from "../contexts/AuthContext";
+
 
 const stats = [
   { label: "Total Sessions", value: "12", icon: <ChatIcon />, trend: "+3", color: "primary" as const },
@@ -36,14 +36,13 @@ const quickActions = [
 ];
 
 export default function DashboardPage() {
-  const { user } = useAuth();
   const navigate = useNavigate();
   const [loading] = useState(false);
 
   return (
     <Box>
       <Typography variant="h4" fontWeight={700} gutterBottom>
-        Welcome{user ? `, ${user.email.split("@")[0]}` : ""} 👋
+        Welcome 👋
       </Typography>
 
       <Grid container spacing={3} sx={{ mb: 4 }}>

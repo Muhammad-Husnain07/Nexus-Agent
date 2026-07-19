@@ -47,4 +47,4 @@ class Tenant(Base):
     sessions = relationship("Session", back_populates="tenant", passive_deletes=True)
     tools = relationship("Tool", back_populates="tenant", passive_deletes=True)
     memories = relationship("Memory", back_populates="tenant", passive_deletes=True)
-    audit_logs = relationship("AuditLog", back_populates="tenant", passive_deletes=True)
+

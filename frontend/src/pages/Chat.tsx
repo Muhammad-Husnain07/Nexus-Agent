@@ -58,6 +58,7 @@ export default function ChatPage() {
       if (!reader) throw new Error("No stream reader");
       const decoder = new TextDecoder();
       let buffer = "";
+      let currentEvent = "";
       let assistantId = crypto.randomUUID();
       setMessages((prev) => [...prev, { id: assistantId, role: "assistant", content: "", created_at: new Date().toISOString() }]);
       while (true) {
@@ -68,21 +69,30 @@ export default function ChatPage() {
         buffer = lines.pop() || "";
         for (const line of lines) {
           if (line.startsWith("event: ")) {
-            const eventType = line.slice(7).trim();
-            if (eventType === "tool_call_started") setRightOpen(true);
+            currentEvent = line.slice(7).trim();
           } else if (line.startsWith("data: ")) {
             try {
               const data = JSON.parse(line.slice(6));
-              if (data.type === "agent_response") {
-                setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, content: m.content + (data.payload?.text || "") } : m));
-              } else if (data.type === "tool_call_completed") {
+              const eventType = data.type || currentEvent;
+              const payload = data.payload || data;
+              if (eventType === "final_response") {
+                setMessages((prev) => prev.map((m) =>
+                  m.id === assistantId ? { ...m, content: m.content + (payload.text || payload.content || "") } : m
+                ));
+              } else if (eventType === "plan_created") {
+                const steps = payload.steps || [];
+                const planMsg = { id: crypto.randomUUID(), role: "system" as const, content: `Planning: ${steps.length} step(s)`, created_at: new Date().toISOString() };
+                setMessages((prev) => [...prev, planMsg]);
+              } else if (eventType === "tool_call_completed") {
                 setMessages((prev) => {
                   const last = prev[prev.length - 1];
                   if (last && last.role === "assistant") {
-                    return prev.map((m) => m.id === last.id ? { ...m, tool_results: [...(m.tool_results || []), { tool_name: data.payload.tool_name, status: data.payload.status, data: data.payload.data }] } : m);
+                    return prev.map((m) => m.id === last.id ? { ...m, tool_results: [...(m.tool_results || []), { tool_name: payload.tool_name, status: payload.status, data: payload.data }] } : m);
                   }
                   return prev;
                 });
+              } else if (eventType === "tool_call_started") {
+                setRightOpen(true);
               }
             } catch { /* ignore malformed JSON */ }
           }

@@ -39,7 +39,6 @@ from nexus.config.settings import get_settings
 from nexus.errors import ErrorHandlerMiddleware
 from nexus.llm.provider import ProviderRegistry
 from nexus.middleware.auth import AuthMiddleware
-from nexus.middleware.embed_auth import EmbedTokenAuth
 from nexus.middleware.tenant import TenantMiddleware
 from nexus.observability.logging import setup_logging
 from nexus.observability.tracing import setup_tracing
@@ -300,7 +299,6 @@ def create_app() -> FastAPI:
 
     app.add_middleware(RequestIDMiddleware)
     app.add_middleware(LoggingMiddleware)
-    app.add_middleware(EmbedTokenAuth)
     app.add_middleware(TenantMiddleware)
     app.add_middleware(TieredRateLimitMiddleware)
     app.add_middleware(AuthMiddleware)
