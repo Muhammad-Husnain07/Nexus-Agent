@@ -1,15 +1,18 @@
 # =============================================================================
 # Nexus Agent — Production docker-compose
 #
-# Runs the full stack: nexus-agent, PostgreSQL+pgvector, Redis.
-# Optional services (commented out): litellm-proxy, otel-collector, prometheus.
+# Runs the full stack: nexus-agent, PostgreSQL+pgvector, Redis, optional Ollama.
 #
 # Usage:
-#   docker compose up -d
+#   docker compose --profile ollama up -d       # with Ollama
+#   docker compose up -d                        # without Ollama
 #   docker compose logs -f
 #   docker compose down
 #
 # For local development, docker-compose.override.yml adds hot-reload + src mount.
+#
+# Profiles:
+#   ollama   - includes the Ollama service for local LLM inference
 # =============================================================================
 
 services:
@@ -84,6 +87,36 @@ services:
       - nexus-network
     restart: unless-stopped
 
+  # ── Migration Job (runs once on startup) ────────────────────────────────────
+  nexus-migrate:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    profiles:
+      - ollama
+      - standalone
+    env_file:
+      - ../.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - nexus-network
+    command: ["sh", "-c", "alembic upgrade head && python -m scripts.seed --no-embed"]
+
+  # ── Optional: Ollama (local LLM inference) ─────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    profiles:
+      - ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - nexus-network
+    restart: unless-stopped
+
   # ── Optional: LiteLLM Proxy ──────────────────────────────────────────────
   # litellm-proxy:
   #   image: ghcr.io/berriai/litellm:main-latest
@@ -124,6 +157,7 @@ services:
 volumes:
   postgres-data:
   redis-data:
+  ollama-data:
   # prometheus-data:
 
 networks:
