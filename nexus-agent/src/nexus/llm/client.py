@@ -2,15 +2,98 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
+import httpx
 import litellm
 from pydantic import BaseModel, Field
 
 from nexus.llm.provider import ProviderRegistry
+
+log = logging.getLogger(__name__)
+
+# Chat templates for models that need raw mode (thinking models).
+# Keyed by model family prefix, values are callables that format messages.
+# The template is used when 'raw: true' is sent to Ollama so the model
+# still receives properly structured input.
+_MODEL_TEMPLATES: dict[str, str] = {
+    "qwen": (
+        "<|im_start|>system\n{system}<|im_end|>\n"
+        "<|im_start|>user\n{user}<|im_end|>\n"
+        "<|im_start|>assistant"
+    ),
+    "qwq": (
+        "<|im_start|>system\n{system}<|im_end|>\n"
+        "<|im_start|>user\n{user}<|im_end|>\n"
+        "<|im_start|>assistant"
+    ),
+    "deepseek": (
+        "<|im_start|>system\n{system}<|im_end|>\n"
+        "<|im_start|>user\n{user}<|im_end|>\n"
+        "<|im_start|>assistant"
+    ),
+}
+
+# Cache of model → chat template, populated lazily from Ollama /api/show
+_model_template_cache: dict[str, str | None] = {}
+
+
+async def _fetch_ollama_template(model: str, api_base: str) -> str | None:
+    """Fetch a model's native chat template from Ollama and cache it."""
+    if model in _model_template_cache:
+        return _model_template_cache[model]
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(f"{api_base}/api/show", json={"model": model})
+            if resp.status_code == 200:
+                data = resp.json()
+                template = data.get("template") or ""
+                if template and "{{ " in template:
+                    _model_template_cache[model] = template
+                    return template
+    except Exception as exc:
+        log.warning("Failed to fetch Ollama template for %s: %s", model, exc)
+    _model_template_cache[model] = None
+    return None
+
+
+def _extract_template_format(template: str) -> str | None:
+    """Convert a Go Ollama template into a Python format string.
+
+    Handles the common pattern:
+      {{- range .Messages }}
+      {{- if eq .Role "system" }}<|im_start|>system\n{{ .Content }}<|im_end|>
+      ...
+      {{- end }}
+      {{- end }}
+    """
+    # Simple conversion: extract role→tag mappings from the template
+    # This handles the common Qwen-style templates
+    if "<|im_start|>" in template:
+        parts = []
+        if "system" in template:
+            parts.append("<|im_start|>system\n{system}<|im_end|>")
+        parts.append("<|im_start|>user\n{user}<|im_end|>")
+        parts.append("<|im_start|>assistant")
+        return "\n".join(parts)
+    return None
+
+
+def _get_family(model: str) -> str | None:
+    """Extract model family from a model name (e.g. 'ollama/qwen3:4b' → 'qwen')."""
+    name = model.lower().split("/")[-1].split(":")[0]
+    for family in _MODEL_TEMPLATES:
+        if name.startswith(family):
+            return family
+    # Try partial match
+    for family in _MODEL_TEMPLATES:
+        if family in name:
+            return family
+    return None
 
 _LITELLM_TEMPERATURE: float = 0.7
 
@@ -113,13 +196,48 @@ class LLMClient:
         provider, provider_name = self.registry.resolve_provider(model)
         start = time.monotonic()
 
+        # Ensure model is prefixed with provider name for LiteLLM routing
+        if "/" not in model and provider.config.base_url:
+            model = f"{provider_name}/{model}"
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
         }
+        if provider.config.base_url:
+            kwargs["api_base"] = provider.config.base_url
         api_key_val = provider.api_key.get_secret_value()
         if api_key_val:
             kwargs["api_key"] = api_key_val
+        if provider_name == "ollama":
+            kwargs["keep_alive"] = "30m"
+            # Use raw mode for thinking models so content/tool_calls appear in
+            # the right fields instead of getting lost in `thinking`.
+            family = _get_family(model)
+            if family is not None:
+                kwargs["extra_body"] = {"raw": True}
+                template = _model_template_cache.get(model)
+                if template is None:
+                    tmpl_data = await _fetch_ollama_template(model, provider.config.base_url or "")
+                    if tmpl_data:
+                        fmt = _extract_template_format(tmpl_data)
+                        if fmt:
+                            template = fmt
+                fmt_template = template or _MODEL_TEMPLATES[family]
+                # Format messages using the template
+                parts, sys_parts, user_parts = [], [], []
+                for m in messages:
+                    role = m.get("role", "user")
+                    content = m.get("content", "")
+                    if role == "system":
+                        sys_parts.append(content)
+                    elif role == "user":
+                        user_parts.append(content)
+                system_text = "\n".join(sys_parts) if sys_parts else ""
+                user_text = "\n".join(user_parts) if user_parts else messages[-1].get("content", "")
+                formatted = fmt_template.format(system=system_text, user=user_text)
+                kwargs["messages"] = [{"role": "user", "content": formatted}]
+                # response_format isn't supported in raw mode with Ollama
+                kwargs.pop("response_format", None)
         if tools:
             kwargs["tools"] = tools
         if response_format:
@@ -184,11 +302,16 @@ class LLMClient:
         from nexus.config.settings import get_settings  # noqa: PLC0415
 
         settings = get_settings()
-        provider, _ = self.registry.resolve_provider(model)
+        provider, provider_name = self.registry.resolve_provider(model)
+        # Ensure model is prefixed with provider name for LiteLLM routing
+        if "/" not in model and provider.config.base_url:
+            model = f"{provider_name}/{model}"
         kwargs: dict[str, Any] = {
             "model": model,
             "input": texts,
         }
+        if provider.config.base_url:
+            kwargs["api_base"] = provider.config.base_url
         api_key_val = provider.api_key.get_secret_value()
         if api_key_val:
             kwargs["api_key"] = api_key_val

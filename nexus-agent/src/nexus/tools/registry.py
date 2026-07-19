@@ -94,6 +94,7 @@ class ToolRegistry:
         session: AsyncSession,
         tenant_id: uuid.UUID,
         data: ToolCreate,
+        skip_embedding: bool = False,
     ) -> ToolRead:
         """Register a new tool, generate its embedding, and return it."""
         self._validate_no_python_code(data)
@@ -121,10 +122,14 @@ class ToolRegistry:
         session.add(tool)
         await session.flush()
 
-        emb = await self._generate_embedding(_embedding_text(tool))
-        if emb is not None:
-            tool.embedding = emb
-            await session.flush()
+        if not skip_embedding:
+            emb = await self._generate_embedding(_embedding_text(tool))
+            if emb is not None:
+                tool.embedding = emb
+                await session.flush()
+
+        # Refresh to avoid MissingGreenlet on expired attribute lazy loads
+        await session.refresh(tool)
 
         logger.info("tool.registered", tool_id=str(tool.id), name=tool.name)
         return _tool_to_read(tool)

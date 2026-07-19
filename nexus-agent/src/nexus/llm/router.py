@@ -47,12 +47,13 @@ class ModelRouter:
 
     def _build_default_map(self) -> dict[TaskType, str]:
         default = self._default_model
+        embed = self._settings.embedding_model
         return {
             TaskType.PLANNING: default,
-            TaskType.TOOL_SELECTION: "gpt-4o-mini",
-            TaskType.SUMMARIZATION: "gpt-4o-mini",
+            TaskType.TOOL_SELECTION: default,
+            TaskType.SUMMARIZATION: default,
             TaskType.CHAT: default,
-            TaskType.EMBEDDING: "text-embedding-3-small",
+            TaskType.EMBEDDING: embed,
         }
 
     def get_model(self, task: TaskType, tenant_id: uuid.UUID | None = None) -> str:

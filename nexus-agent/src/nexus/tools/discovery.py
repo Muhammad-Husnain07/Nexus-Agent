@@ -8,6 +8,7 @@ import uuid
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nexus.config.settings import get_settings
 from nexus.llm.client import LLMClient
 from nexus.redis_client.cache import RedisCache
 from nexus.tools.registry import ToolRegistry
@@ -74,7 +75,7 @@ class DynamicToolSelector:
         )
         try:
             response = await self._llm.complete(
-                model="gpt-4o-mini",
+                model=get_settings().llm.default_model,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=256,
                 temperature=0,
