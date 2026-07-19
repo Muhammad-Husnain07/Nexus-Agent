@@ -79,6 +79,8 @@ def create_refresh_token(user_id: uuid.UUID, expires_delta: timedelta | None = N
     now = datetime.now(UTC)
     payload: dict[str, Any] = {
         "sub": str(user_id),
+        "iss": settings.auth.jwt_issuer,
+        "aud": settings.auth.jwt_audience,
         "iat": now,
         "exp": now + expire,
         "type": "refresh",

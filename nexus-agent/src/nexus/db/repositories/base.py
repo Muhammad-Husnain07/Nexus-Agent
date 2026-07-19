@@ -49,6 +49,7 @@ class GenericRepository[T: Base]:
         for key, value in kwargs.items():
             setattr(instance, key, value)
         await self._session.flush()
+        await self._session.refresh(instance)
         return instance
 
     async def delete(self, id: uuid.UUID) -> bool:

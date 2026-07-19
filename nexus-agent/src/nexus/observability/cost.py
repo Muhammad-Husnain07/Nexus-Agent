@@ -63,17 +63,18 @@ async def cost_daily(
 ) -> list[dict[str, Any]]:
     """Return per-day cost breakdown."""
     since = datetime.now(UTC) - timedelta(days=days)
+    day_expr = func.date_trunc("day", AgentRun.started_at)
 
     stmt = (
         select(
-            func.date_trunc("day", AgentRun.started_at).label("day"),
+            day_expr.label("day"),
             func.sum(AgentRun.total_cost_usd).label("cost"),
             func.sum(AgentRun.total_tokens).label("tokens"),
             func.count(AgentRun.id).label("runs"),
         )
         .where(AgentRun.started_at >= since)
-        .group_by(func.date_trunc("day", AgentRun.started_at))
-        .order_by(func.date_trunc("day", AgentRun.started_at))
+        .group_by(day_expr)
+        .order_by(day_expr)
     )
 
     if tenant_id is not None:
