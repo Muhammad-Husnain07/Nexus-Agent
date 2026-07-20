@@ -88,13 +88,6 @@ class ForbiddenError(NexusError):
         super().__init__(code=ErrorCode.FORBIDDEN, message=message, status_code=403, **kwargs)
 
 
-class TenantSuspendedError(NexusError):
-    def __init__(self, message: str = "Tenant account is suspended", **kwargs: Any) -> None:
-        super().__init__(
-            code=ErrorCode.TENANT_SUSPENDED, message=message, status_code=403, **kwargs
-        )
-
-
 # ── Agent Errors ────────────────────────────────────────────────────────────
 
 

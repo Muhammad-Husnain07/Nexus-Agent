@@ -1,8 +1,4 @@
-"""Repository base classes for generic and tenant-scoped CRUD."""
+"""Repository base class for CRUD operations."""
+from nexus.db.repositories.base import GenericRepository
 
-from nexus.db.repositories.base import GenericRepository, TenantScopedRepository
-
-__all__ = [
-    "GenericRepository",
-    "TenantScopedRepository",
-]
+__all__ = ["GenericRepository"]

@@ -16,7 +16,7 @@ from sqlalchemy import text
 
 from nexus.db.base import async_session
 from nexus.db.models.memory import Memory
-from nexus.db.repositories.base import TenantScopedRepository
+from nexus.db.repositories.base import GenericRepository
 
 logger = structlog.get_logger("nexus.memory.store")
 
@@ -62,7 +62,7 @@ class MemoryStore:
         mid = memory_id or uuid.uuid4()
 
         async with async_session() as session:
-            repo = TenantScopedRepository(session, Memory)
+            repo = GenericRepository(session, Memory)
             existing = await repo.get(mid)
             if existing is not None:
                 existing.content = content
@@ -93,7 +93,7 @@ class MemoryStore:
             A dict representation or ``None`` if not found.
         """
         async with async_session() as session:
-            repo = TenantScopedRepository(session, Memory)
+            repo = GenericRepository(session, Memory)
             mem = await repo.get(memory_id)
             if mem is None:
                 return None
@@ -181,7 +181,7 @@ class MemoryStore:
             ``True`` if deleted, ``False`` if not found.
         """
         async with async_session() as session:
-            repo = TenantScopedRepository(session, Memory)
+            repo = GenericRepository(session, Memory)
             deleted = await repo.delete(memory_id)
             if deleted:
                 await session.commit()

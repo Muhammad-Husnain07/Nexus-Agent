@@ -48,4 +48,3 @@ class Memory(TenantMixin, Base):
 
     __table_args__ = tenant_table_args("memory")
 
-    tenant = relationship("Tenant", back_populates="memories", passive_deletes=True)

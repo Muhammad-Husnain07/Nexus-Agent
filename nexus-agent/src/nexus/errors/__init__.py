@@ -14,7 +14,6 @@ from nexus.errors.base import (
     PlanningError,
     QuotaExceededError,
     RateLimitError,
-    TenantSuspendedError,
     ToolExecutionError,
     UnauthorizedError,
 )
@@ -41,7 +40,6 @@ __all__ = [
     # Security
     "UnauthorizedError",
     "ForbiddenError",
-    "TenantSuspendedError",
     # Agent
     "AgentError",
     "PlanningError",

@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Query
 from nexus.db.base import async_session
 from nexus.db.context import get_tenant
 from nexus.db.models.memory import Memory
-from nexus.db.repositories.base import TenantScopedRepository
+from nexus.db.repositories.base import GenericRepository
 
 logger = structlog.get_logger("nexus.api.memory")
 
@@ -50,7 +50,7 @@ async def list_memories(
             result = await session.execute(sql, params)
             rows = result.fetchall()
         else:
-            repo = TenantScopedRepository(session, Memory)
+            repo = GenericRepository(session, Memory)
             filters: dict[str, Any] = {}
             if kind:
                 filters["kind"] = kind
@@ -66,7 +66,7 @@ async def get_memory(
 ) -> dict[str, Any]:
     """Get a single memory by ID."""
     async with async_session() as session:
-        repo = TenantScopedRepository(session, Memory)
+        repo = GenericRepository(session, Memory)
         mem = await repo.get(memory_id)
     if mem is None:
         raise HTTPException(status_code=404, detail="Memory not found")
@@ -79,7 +79,7 @@ async def delete_memory(
 ) -> None:
     """Delete a memory. Verifies tenant ownership."""
     async with async_session() as session:
-        repo = TenantScopedRepository(session, Memory)
+        repo = GenericRepository(session, Memory)
         mem = await repo.get(memory_id)
         if mem is None:
             raise HTTPException(status_code=404, detail="Memory not found")

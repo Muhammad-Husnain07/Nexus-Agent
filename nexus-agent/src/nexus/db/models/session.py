@@ -39,7 +39,6 @@ class Session(TenantMixin, Base):
 
     __table_args__ = tenant_table_args("session")
 
-    tenant = relationship("Tenant", back_populates="sessions", passive_deletes=True)
     messages = relationship("Message", back_populates="session", passive_deletes=True)
     agent_runs = relationship("AgentRun", back_populates="session", passive_deletes=True)
 

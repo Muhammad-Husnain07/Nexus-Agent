@@ -83,7 +83,6 @@ class Tool(TenantMixin, Base):
         UniqueConstraint("tenant_id", "name", name="uq_tool_tenant_name"),
     )
 
-    tenant = relationship("Tenant", back_populates="tools", passive_deletes=True)
     executions = relationship("ToolExecution", back_populates="tool", passive_deletes=True)
 
 

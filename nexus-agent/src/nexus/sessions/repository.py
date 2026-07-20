@@ -13,10 +13,10 @@ from sqlalchemy.orm import selectinload
 from nexus.db.context import get_tenant
 from nexus.db.models.session import Message as MessageModel
 from nexus.db.models.session import Session as SessionModel
-from nexus.db.repositories import TenantScopedRepository
+from nexus.db.repositories import GenericRepository
 
 
-class SessionRepository(TenantScopedRepository[SessionModel]):
+class SessionRepository(GenericRepository[SessionModel]):
     """Tenant-scoped CRUD for sessions with paginated listing."""
 
     def __init__(self, session: AsyncSession) -> None:
@@ -101,7 +101,7 @@ class SessionRepository(TenantScopedRepository[SessionModel]):
         return result.scalar() or 0
 
 
-class MessageRepository(TenantScopedRepository[MessageModel]):
+class MessageRepository(GenericRepository[MessageModel]):
     """Tenant-scoped CRUD for messages with paginated listing."""
 
     def __init__(self, session: AsyncSession) -> None:

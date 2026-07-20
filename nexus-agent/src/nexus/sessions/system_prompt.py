@@ -12,8 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexus.db.context import get_tenant
 from nexus.db.models.memory import Memory as MemoryModel
-from nexus.db.models.tenant import Tenant as TenantModel
-from nexus.db.repositories import TenantScopedRepository
+from nexus.db.repositories import GenericRepository
 from nexus.llm.client import LLMClient
 
 logger = structlog.get_logger("nexus.sessions.system_prompt")
@@ -63,7 +62,7 @@ class SystemPromptBuilder:
     async def build(
         self,
         session: Any,
-        tenant: TenantModel | None = None,
+        tenant: object | None = None,
         tool_categories: list[str] | None = None,
         session_db: AsyncSession | None = None,
     ) -> str:
@@ -99,7 +98,7 @@ class SystemPromptBuilder:
 
         # 3. Tenant instructions
         if tenant is None and session_db is not None and tenant_id is not None:
-            repo = TenantScopedRepository(session_db, TenantModel)
+            repo = GenericRepository(session_db)
             tenant = await repo.get(tenant_id)  # type: ignore[arg-type]
 
         if tenant and tenant.settings:
@@ -136,7 +135,7 @@ class SystemPromptBuilder:
         if user_id is None:
             return None
 
-        repo = TenantScopedRepository(session_db, MemoryModel)
+        repo = GenericRepository(session_db, MemoryModel)
         memories = await repo.find(
             kind="preference",
             tenant_id=tenant_id,

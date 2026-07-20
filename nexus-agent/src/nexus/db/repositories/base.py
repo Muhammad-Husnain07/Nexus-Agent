@@ -1,4 +1,4 @@
-"""Generic and tenant-scoped repository base classes for CRUD operations."""
+"""Generic repository base class for CRUD operations."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexus.db.base import Base
-from nexus.db.context import get_asserted_tenant, get_tenant
+
 
 
 class GenericRepository[T: Base]:
@@ -62,51 +62,4 @@ class GenericRepository[T: Base]:
         return True
 
 
-class TenantScopedRepository[T: Base](GenericRepository[T]):
-    """Repository that automatically scopes all operations to the current tenant.
 
-    Reads tenant_id from TenantContext (contextvars) and injects it into
-    every query filter and every create call.  Also performs a defense-in-depth
-    assertion that the context tenant matches the auth-verified tenant.
-    """
-
-    def _assert_tenant(self) -> None:
-        """Raise RuntimeError if the context tenant diverges from the asserted tenant.
-
-        This is a belt-and-suspenders check against any future code path that
-        sets tenant context incorrectly.
-        """
-        active = get_tenant()
-        asserted = get_asserted_tenant()
-        if asserted is not None and active is not None and active != asserted:
-            raise RuntimeError(
-                f"Tenant mismatch: context tenant {active} != asserted tenant {asserted}"
-            )
-
-    async def create(self, **kwargs: Any) -> T:
-        """Create a new instance with tenant_id from context."""
-        if "tenant_id" not in kwargs:
-            tenant_id = get_tenant()
-            if tenant_id is not None:
-                kwargs["tenant_id"] = tenant_id
-        return await super().create(**kwargs)
-
-    async def get(self, id: uuid.UUID) -> T | None:
-        """Retrieve an instance scoped to the current tenant."""
-        self._assert_tenant()
-        stmt = (
-            select(self._model)
-            .where(self._model.id == id)
-            .where(self._model.tenant_id == get_tenant())
-        )
-        result = await self._session.execute(stmt)
-        return result.scalar_one_or_none()
-
-    async def find(self, **filters: Any) -> list[T]:
-        """Find instances with auto-injected tenant_id filter."""
-        self._assert_tenant()
-        if "tenant_id" not in filters:
-            tenant_id = get_tenant()
-            if tenant_id is not None:
-                filters["tenant_id"] = tenant_id
-        return await super().find(**filters)

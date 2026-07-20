@@ -56,18 +56,12 @@ def tenant_table_args(
 
 
 class TenantMixin:
-    """Mixin that adds tenant_id foreign key and created_at index helpers.
-
-    Every tenant-scoped table gets:
-      - tenant_id UUID FK → tenant.id
-    Models should add their own indexes via __table_args__.
-    """
+    """Mixin that adds a plain tenant_id UUID column (no FK constraint)."""
 
     @declared_attr
     def tenant_id(cls) -> Mapped[uuid.UUID]:
         return mapped_column(
             UUID(as_uuid=True),
-            ForeignKey("tenant.id", ondelete="CASCADE"),
             nullable=False,
             index=True,
         )
