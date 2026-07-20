@@ -7,7 +7,6 @@ from nexus.config.secrets import (
 )
 from nexus.config.settings import (
     AgentSettings,
-    AuthSettings,
     DatabaseSettings,
     LLMSettings,
     ObservabilitySettings,
@@ -21,7 +20,6 @@ from nexus.config.settings import (
 
 __all__ = [
     "AgentSettings",
-    "AuthSettings",
     "DatabaseSettings",
     "EnvSecretResolver",
     "LLMSettings",

@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import BaseModel, Field, SecretStr, model_validator
+from pydantic import BaseModel, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -116,18 +116,7 @@ class LLMSettings(BaseModel):
     )
 
 
-class AuthSettings(BaseModel):
-    """Authentication and authorization configuration (passthrough — no enforcement)."""
-    jwt_secret: SecretStr = Field(
-        default=SecretStr("change-me"),
-        description="JWT signing secret (min 32 chars; use a 64-char hex string)",
-    )
-    jwt_algorithm: str = Field(default="HS256", description="JWT signing algorithm")
-    jwt_issuer: str = Field(default="nexus-agent", description="JWT issuer (iss)")
-    jwt_audience: str = Field(default="nexus-api", description="JWT audience (aud)")
-    access_token_ttl_minutes: int = Field(default=30, ge=1, description="Access token TTL")
-    refresh_token_ttl_days: int = Field(default=7, ge=1, description="Refresh token TTL")
-    api_key_header_name: str = Field(default="X-API-Key", description="API key header")
+
 
 
 class ObservabilitySettings(BaseModel):
@@ -286,7 +275,6 @@ class Settings(BaseSettings):
     )
     redis: RedisSettings = Field(default_factory=RedisSettings, description="Redis configuration")
     llm: LLMSettings = Field(default_factory=LLMSettings, description="LLM configuration")
-    auth: AuthSettings = Field(description="Authentication configuration")
     observability: ObservabilitySettings = Field(
         default_factory=ObservabilitySettings, description="Observability configuration"
     )

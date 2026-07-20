@@ -21,7 +21,6 @@ from sqlalchemy import text
 from nexus.config.settings import get_settings
 from nexus.db.base import get_engine
 from nexus.db.models.tenant import Tenant
-from nexus.db.models.user import User
 from nexus.tools.registry import ToolRegistry
 from nexus.tools.schemas import ToolCreate
 

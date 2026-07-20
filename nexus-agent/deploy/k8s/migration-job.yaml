@@ -17,20 +17,9 @@ spec:
       containers:
         - name: migration
           image: nexus-agent:latest
-          command:
-            - python
-            - -m
-            - alembic
-            - upgrade
-            - head
+          command: ["sh", "-c", "alembic upgrade head"]
           envFrom:
             - configMapRef:
-                name: nexus-agent-config
+                name: nexus-config
             - secretRef:
-                name: nexus-agent-secret
-          env:
-            - name: NEXUS_DATABASE__URL
-              valueFrom:
-                secretKeyRef:
-                  name: nexus-agent-secret
-                  key: database-url
+                name: nexus-secrets
