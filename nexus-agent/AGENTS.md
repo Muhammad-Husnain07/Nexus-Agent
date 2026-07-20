@@ -138,11 +138,9 @@ This module owns tool registration, discovery, and invocation. Key responsibilit
 ### `src/nexus/api/AGENTS.md`
 
 This module owns the FastAPI application. Key responsibilities:
-- Route definitions: `/chat/stream`, `/chat/sync`, `/tools`, `/sessions`, `/health`.
+- Route definitions: `/tools`, `/sessions`, `/chat`, `/approvals`, `/memory`, `/ws`.
 - SSE and WebSocket endpoints for streaming agent responses.
-- Middleware: tenant extraction, authn/authz, rate limiting, request ID, structured logging.
-- OpenAPI schema generation with all Pydantic models.
-- Webhook ingestion for tool callbacks.
+- Middleware: tenant resolution, rate limiting, request ID, structured logging.
 
 ### `src/nexus/memory/AGENTS.md`
 
@@ -166,22 +164,18 @@ This module owns the LLM integration layer. Key responsibilities:
 - `LLMClient` — unified interface to 100+ providers via LiteLLM.
 - `ProviderRegistry` — loads provider configs from settings, resolves API keys.
 - `ModelRouter` — routes task types (chat, embedding) to the appropriate model.
-- `CostTracker` — tracks per-request token usage and cost.
 - Fallback chains and retry policies for provider resilience.
 
 ### `src/nexus/security/AGENTS.md`
 
-This module owns authentication and authorization. Key responsibilities:
-- JWT issuance, refresh, and revocation via `python-jose`.
-- API key generation with argon2id hashing and SHA-256 lookup.
-- RBAC with role-to-permission mapping (tenant_admin, developer, end_user, viewer).
-- Credential encryption for tool auth secrets using AES-GCM.
-- Input guard, rate limiting, quota enforcement, and cost alerts.
+This module owns rate limiting. Key responsibilities:
+- Tiered rate limiting per endpoint prefix via Redis.
+- Passthrough auth middleware (no JWT, no RBAC).
 
 ### `src/nexus/middleware/AGENTS.md`
 
 This module owns the ASGI middleware stack. Key responsibilities:
-- `AuthMiddleware` — JWT and API key authentication, sets `request.state.*`.
-- `TenantMiddleware` — extracts tenant ID from auth or header, enforces isolation.
+- `AuthMiddleware` — passthrough (injects default user identity).
+- `TenantMiddleware` — extracts tenant ID from request state.
 - `TieredRateLimitMiddleware` — per-tenant sliding window rate limiter.
 - `DrainMiddleware` — graceful shutdown, rejects new requests during drain.

@@ -117,19 +117,7 @@ class LLMSettings(BaseModel):
 
 
 class AuthSettings(BaseModel):
-    """Authentication and authorization configuration.
-
-    Fields:
-        jwt_secret: Secret key for JWT signing.
-        jwt_algorithm: JWT signing algorithm.
-        jwt_issuer: JWT issuer claim (``iss``).
-        jwt_audience: JWT audience claim (``aud``).
-        access_token_ttl_minutes: Access token lifetime in minutes.
-        refresh_token_ttl_days: Refresh token lifetime in days.
-        api_key_header_name: HTTP header name for API key authentication.
-        credential_master_key_ref: Env var or Vault path for the AES master key.
-    """
-
+    """Authentication and authorization configuration (passthrough — no enforcement)."""
     jwt_secret: SecretStr = Field(
         default=SecretStr("change-me"),
         description="JWT signing secret (min 32 chars; use a 64-char hex string)",
@@ -137,30 +125,9 @@ class AuthSettings(BaseModel):
     jwt_algorithm: str = Field(default="HS256", description="JWT signing algorithm")
     jwt_issuer: str = Field(default="nexus-agent", description="JWT issuer (iss)")
     jwt_audience: str = Field(default="nexus-api", description="JWT audience (aud)")
-    access_token_ttl_minutes: int = Field(
-        default=30, ge=1, description="Access token TTL in minutes"
-    )
-    refresh_token_ttl_days: int = Field(default=7, ge=1, description="Refresh token TTL in days")
-    api_key_header_name: str = Field(default="X-API-Key", description="API key header name")
-
-    @model_validator(mode="after")
-    def _validate_jwt_secret(self) -> "AuthSettings":
-        """Reject weak or missing JWT secrets regardless of environment."""
-        secret = self.jwt_secret.get_secret_value()
-        if not secret or secret == "change-me" or len(secret) < 32:
-            import structlog
-
-            logger = structlog.get_logger("nexus.config.settings")
-            logger.error(
-                "jwt_secret.weak_or_missing",
-                length=len(secret),
-                hint="Set NEXUS_AUTH__JWT_SECRET to a strong random value (min 32 chars, recommended 64-char hex)",
-            )
-            raise RuntimeError(
-                "JWT secret is weak or missing. "
-                "Set NEXUS_AUTH__JWT_SECRET to a strong random value (min 32 chars)."
-            )
-        return self
+    access_token_ttl_minutes: int = Field(default=30, ge=1, description="Access token TTL")
+    refresh_token_ttl_days: int = Field(default=7, ge=1, description="Refresh token TTL")
+    api_key_header_name: str = Field(default="X-API-Key", description="API key header")
 
 
 class ObservabilitySettings(BaseModel):

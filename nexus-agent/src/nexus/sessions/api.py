@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexus.api.depends import TenantDep, UserDep
 from nexus.db.base import get_session
-from nexus.security.rbac import Permission, require_permission
+
 from nexus.sessions.schemas import (
     ForkRequest,
     MessageCreate,
@@ -112,7 +112,6 @@ async def update_session(
 @router.delete(
     "/{session_id}",
     status_code=204,
-    dependencies=[require_permission(Permission.SESSIONS_DELETE)],
 )
 async def archive_session(
     session_id: uuid.UUID,

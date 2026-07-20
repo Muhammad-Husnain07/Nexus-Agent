@@ -335,19 +335,9 @@ def create_app() -> FastAPI:
     def _custom_openapi() -> dict:
         if app.openapi_schema:
             return app.openapi_schema
-        schema = app._generate_openapi()  # type: ignore[attr-defined]
+        schema = app._generate_openapi()
         if schema:
             schema.setdefault("components", {})
-            schema["components"]["securitySchemes"] = {
-                "BearerAuth": {
-                    "type": "http",
-                    "scheme": "bearer",
-                    "bearerFormat": "JWT",
-                    "description": "JWT token from the auth endpoint",
-                },
-
-            }
-            schema["security"] = [{"BearerAuth": []}]
         app.openapi_schema = schema
         return app.openapi_schema
 

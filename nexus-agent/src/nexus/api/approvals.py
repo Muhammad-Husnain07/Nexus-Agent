@@ -25,7 +25,7 @@ from nexus.db.repositories.base import GenericRepository, TenantScopedRepository
 from nexus.llm.client import LLMClient
 from nexus.redis_client.client import get_redis_client
 from nexus.redis_client.pubsub import EventBus
-from nexus.security.rbac import Permission, require_permission
+
 from nexus.tools.discovery import DynamicToolSelector
 from nexus.tools.executor import ToolExecutor
 from nexus.tools.registry import ToolRegistry
@@ -122,7 +122,6 @@ async def list_pending_approvals(
 
 @router.get(
     "/pending",
-    dependencies=[require_permission(Permission.APPROVALS_DECIDE)],
 )
 async def list_global_pending_approvals() -> list[dict[str, Any]]:
     """List ALL pending approvals for the caller's tenant, newest first."""
@@ -153,7 +152,6 @@ async def list_global_pending_approvals() -> list[dict[str, Any]]:
 
 @router.get(
     "/{approval_id}",
-    dependencies=[require_permission(Permission.APPROVALS_DECIDE)],
 )
 async def get_approval(
     approval_id: uuid.UUID,
@@ -185,7 +183,6 @@ async def get_approval(
 
 @router.post(
     "/{approval_id}/decide",
-    dependencies=[require_permission(Permission.APPROVALS_DECIDE)],
 )
 async def decide_approval(
     approval_id: uuid.UUID,

@@ -13,7 +13,7 @@ from starlette.requests import Request
 
 from nexus.api.depends import TenantDep
 from nexus.db.base import get_session
-from nexus.security.rbac import Permission, require_permission
+
 from nexus.tools.registry import ToolRegistry
 from nexus.tools.result import ToolResult
 from nexus.tools.schemas import ToolCreate, ToolList, ToolRead, ToolSearchResult, ToolUpdate
@@ -36,7 +36,6 @@ RegistryDep = Annotated[ToolRegistry, Depends(get_registry)]
     "",
     response_model=ToolRead,
     status_code=201,
-    dependencies=[require_permission(Permission.TOOLS_REGISTER)],
 )
 async def register_tool(
     session: SessionDep,
@@ -99,7 +98,6 @@ async def get_tool(
 @router.put(
     "/{tool_id}",
     response_model=ToolRead,
-    dependencies=[require_permission(Permission.TOOLS_REGISTER)],
 )
 async def update_tool(
     tool_id: uuid.UUID,
@@ -117,7 +115,6 @@ async def update_tool(
 @router.delete(
     "/{tool_id}",
     status_code=204,
-    dependencies=[require_permission(Permission.TOOLS_DELETE)],
 )
 async def delete_tool(
     tool_id: uuid.UUID,

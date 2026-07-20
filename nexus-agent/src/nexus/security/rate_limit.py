@@ -27,7 +27,7 @@ TIER_CONFIG: list[tuple[str, int, int]] = [
     ("/api/v1/agent", 60, 60),
     ("/api/v1/sessions", 60, 60),
     ("/api/v1/tools", 30, 60),
-    ("/api/v1/admin", 10, 60),
+
     ("/api/v1/approvals", 30, 60),
     ("/api/v1/auth", 20, 60),
 ]

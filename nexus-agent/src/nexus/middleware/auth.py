@@ -19,6 +19,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if request.url.path in BYPASS_PATHS:
             return await call_next(request)
         request.state.user_id = uuid.UUID(DEFAULT_USER_ID_STR)
-        request.state.user_role = "tenant_admin"
+        request.state.user_role = ""
         request.state.tenant_id = uuid.UUID(DEFAULT_TENANT_ID_STR)
         return await call_next(request)
