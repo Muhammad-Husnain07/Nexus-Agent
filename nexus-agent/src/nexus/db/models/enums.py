@@ -5,14 +5,6 @@ from __future__ import annotations
 import enum
 
 
-class TenantStatus(enum.Enum):
-    """Tenant account status."""
-
-    ACTIVE = "active"
-    SUSPENDED = "suspended"
-    ARCHIVED = "archived"
-
-
 class SessionStatus(enum.Enum):
     """Conversation session status."""
 
