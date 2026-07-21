@@ -16,96 +16,49 @@ from nexus.llm.provider import ProviderRegistry
 
 log = logging.getLogger(__name__)
 
-# Chat templates for models that need raw mode (thinking models).
-# Keyed by model family prefix, values are callables that format messages.
-# The template is used when 'raw: true' is sent to Ollama so the model
-# still receives properly structured input.
-_MODEL_TEMPLATES: dict[str, str] = {
-    "qwen": (
-        "<|im_start|>system\n{system}<|im_end|>\n"
-        "<|im_start|>user\n{user}<|im_end|>\n"
-        "<|im_start|>assistant"
-    ),
-    "qwq": (
-        "<|im_start|>system\n{system}<|im_end|>\n"
-        "<|im_start|>user\n{user}<|im_end|>\n"
-        "<|im_start|>assistant"
-    ),
-    "deepseek": (
-        "<|im_start|>system\n{system}<|im_end|>\n"
-        "<|im_start|>user\n{user}<|im_end|>\n"
-        "<|im_start|>assistant"
-    ),
-}
-
-# Cache of model → chat template, populated lazily from Ollama /api/show
-_model_template_cache: dict[str, str | None] = {}
-
-
-async def _fetch_ollama_template(model: str, api_base: str) -> str | None:
-    """Fetch a model's native chat template from Ollama and cache it."""
-    if model in _model_template_cache:
-        return _model_template_cache[model]
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(f"{api_base}/api/show", json={"model": model})
-            if resp.status_code == 200:
-                data = resp.json()
-                template = data.get("template") or ""
-                if template and "{{ " in template:
-                    _model_template_cache[model] = template
-                    return template
-    except Exception as exc:
-        log.warning("Failed to fetch Ollama template for %s: %s", model, exc)
-    _model_template_cache[model] = None
-    return None
-
-
-def _extract_template_format(template: str) -> str | None:
-    """Convert a Go Ollama template into a Python format string.
-
-    Handles the common pattern:
-      {{- range .Messages }}
-      {{- if eq .Role "system" }}<|im_start|>system\n{{ .Content }}<|im_end|>
-      ...
-      {{- end }}
-      {{- end }}
-    """
-    # Simple conversion: extract role→tag mappings from the template
-    # This handles the common Qwen-style templates
-    if "<|im_start|>" in template:
-        parts = []
-        if "system" in template:
-            parts.append("<|im_start|>system\n{system}<|im_end|>")
-        parts.append("<|im_start|>user\n{user}<|im_end|>")
-        parts.append("<|im_start|>assistant")
-        return "\n".join(parts)
-    return None
-
-
-def _get_family(model: str) -> str | None:
-    """Extract model family from a model name (e.g. 'ollama/qwen3:4b' → 'qwen')."""
-    name = model.lower().split("/")[-1].split(":")[0]
-    for family in _MODEL_TEMPLATES:
-        if name.startswith(family):
-            return family
-    # Try partial match
-    for family in _MODEL_TEMPLATES:
-        if family in name:
-            return family
-    return None
+# Cache of Ollama model name → capabilities (fetched from /api/tags at runtime)
+_ollama_capabilities: dict[str, set[str]] = {}
+# Simple template for models that don't support the chat API natively
+_RAW_TEMPLATE = (
+    "{system}"
+    "{user}"
+)
 
 _LITELLM_TEMPERATURE: float = 0.7
 
 
-class UsageInfo(BaseModel):
-    """Token usage information for an LLM response.
+async def _ollama_supports_tools(model: str, api_base: str) -> bool:
+    """Check if an Ollama model supports the chat API with tool calls.
 
-    Attributes:
-        prompt_tokens: Number of tokens in the prompt.
-        completion_tokens: Number of tokens in the completion.
-        total_tokens: Sum of prompt and completion tokens.
+    Fetches model capabilities from ``/api/tags`` at runtime and caches
+    the result.  No hardcoded model names — works for any Ollama model.
     """
+    if model in _ollama_capabilities:
+        return "tools" in _ollama_capabilities[model]
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{api_base}/api/tags")
+            if resp.status_code == 200:
+                data = resp.json()
+                for entry in data.get("models", []):
+                    name: str = entry.get("name", "")
+                    caps: list[str] = entry.get("capabilities", [])
+                    _ollama_capabilities[name] = set(caps)
+                    # Also cache without tag (e.g. "Qwen3:4B" and "Qwen3")
+                    base = name.split(":")[0]
+                    if base not in _ollama_capabilities:
+                        _ollama_capabilities[base] = set(caps)
+
+        cached = _ollama_capabilities.get(model, set())
+        return "tools" in cached
+    except Exception as exc:
+        log.warning("Failed to fetch Ollama capabilities for %s: %s", model, exc)
+        return True  # assume chat API works on error rather than breaking
+
+
+class UsageInfo(BaseModel):
+    """Token usage information for an LLM response."""
 
     prompt_tokens: int = Field(default=0, description="Tokens in the prompt")
     completion_tokens: int = Field(default=0, description="Tokens in the completion")
@@ -113,19 +66,7 @@ class UsageInfo(BaseModel):
 
 
 class LLMResponse(BaseModel):
-    """A complete (non-streaming) response from an LLM call.
-
-    Attributes:
-        content: The response text content.
-        tool_calls: List of tool call invocations, if any.
-        usage: Token usage breakdown.
-        finish_reason: Reason the generation finished (stop, length, tool_calls).
-        raw_response: The full raw response from LiteLLM.
-        model: The model identifier used.
-        provider: The provider name that served the request.
-        latency_ms: Total request latency in milliseconds.
-        cost_usd: Computed cost in USD based on token usage and provider pricing.
-    """
+    """A complete (non-streaming) response from an LLM call."""
 
     content: str | None = Field(default=None, description="Response text content")
     tool_calls: list[dict[str, Any]] | None = Field(
@@ -141,13 +82,7 @@ class LLMResponse(BaseModel):
 
 
 class LLMChunk(BaseModel):
-    """A single streaming chunk from an LLM response.
-
-    Attributes:
-        delta_content: Text content delta for this chunk.
-        delta_tool_calls: Tool call deltas for this chunk.
-        finish_reason: Finish reason if this is the final chunk.
-    """
+    """A single streaming chunk from an LLM response."""
 
     delta_content: str | None = Field(default=None, description="Text content delta")
     delta_tool_calls: list[dict[str, Any]] | None = Field(
@@ -156,15 +91,30 @@ class LLMChunk(BaseModel):
     finish_reason: str | None = Field(default=None, description="Finish reason if final chunk")
 
 
+def _format_raw_prompt(messages: list[dict[str, Any]]) -> str:
+    """Concatenate messages into a flat prompt for models without chat API support."""
+    parts: list[str] = []
+    for m in messages:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        if role == "system":
+            parts.append(f"System: {content}\n")
+        elif role == "user":
+            parts.append(f"User: {content}\n")
+        elif role == "assistant":
+            parts.append(f"Assistant: {content}\n")
+        elif role == "tool":
+            parts.append(f"Tool result: {content}\n")
+    parts.append("Assistant: ")
+    return "".join(parts)
+
+
 @dataclass
 class LLMClient:
     """Unified client for LLM completions and embeddings via LiteLLM.
 
     Wraps ``litellm.acompletion`` and ``litellm.acompletion_stream`` with
     provider resolution, cost tracking, and optional caching.
-
-    Attributes:
-        registry: ProviderRegistry for resolving models to providers.
     """
 
     registry: ProviderRegistry = field(default_factory=ProviderRegistry.get_instance)
@@ -181,8 +131,13 @@ class LLMClient:
     ) -> LLMResponse | AsyncIterator[LLMChunk]:
         """Send a completion request to the LLM.
 
+        For Ollama models, the client dynamically detects whether the model
+        supports the chat API with tool calls (via ``/api/tags`` capabilities).
+        Models with ``"tools"`` capability use the native chat API.  Older
+        models without tool support fall back to raw mode with a flat prompt.
+
         Args:
-            model: Model identifier (e.g. gpt-4o, claude-3-opus).
+            model: Model identifier (e.g. gpt-4o, ollama/Qwen3:4B).
             messages: Conversation messages in OpenAI format.
             tools: Optional tool/function definitions.
             response_format: Optional structured output format spec.
@@ -208,36 +163,18 @@ class LLMClient:
         api_key_val = provider.api_key.get_secret_value()
         if api_key_val:
             kwargs["api_key"] = api_key_val
+
+        # Ollama-specific handling — dynamically detect chat API support
         if provider_name == "ollama":
             kwargs["keep_alive"] = "30m"
-            # Use raw mode for thinking models so content/tool_calls appear in
-            # the right fields instead of getting lost in `thinking`.
-            family = _get_family(model)
-            if family is not None:
+            supports_tools = await _ollama_supports_tools(model, provider.config.base_url or "")
+            if not supports_tools:
+                # Fallback to raw mode for models without tool support
                 kwargs["extra_body"] = {"raw": True}
-                template = _model_template_cache.get(model)
-                if template is None:
-                    tmpl_data = await _fetch_ollama_template(model, provider.config.base_url or "")
-                    if tmpl_data:
-                        fmt = _extract_template_format(tmpl_data)
-                        if fmt:
-                            template = fmt
-                fmt_template = template or _MODEL_TEMPLATES[family]
-                # Format messages using the template
-                parts, sys_parts, user_parts = [], [], []
-                for m in messages:
-                    role = m.get("role", "user")
-                    content = m.get("content", "")
-                    if role == "system":
-                        sys_parts.append(content)
-                    elif role == "user":
-                        user_parts.append(content)
-                system_text = "\n".join(sys_parts) if sys_parts else ""
-                user_text = "\n".join(user_parts) if user_parts else messages[-1].get("content", "")
-                formatted = fmt_template.format(system=system_text, user=user_text)
-                kwargs["messages"] = [{"role": "user", "content": formatted}]
-                # response_format isn't supported in raw mode with Ollama
+                prompt = _format_raw_prompt(messages)
+                kwargs["messages"] = [{"role": "user", "content": prompt}]
                 kwargs.pop("response_format", None)
+
         if tools:
             kwargs["tools"] = tools
         if response_format:
@@ -303,7 +240,6 @@ class LLMClient:
 
         settings = get_settings()
         provider, provider_name = self.registry.resolve_provider(model)
-        # Ensure model is prefixed with provider name for LiteLLM routing
         if "/" not in model and provider.config.base_url:
             model = f"{provider_name}/{model}"
         kwargs: dict[str, Any] = {
@@ -316,14 +252,12 @@ class LLMClient:
         if api_key_val:
             kwargs["api_key"] = api_key_val
 
-        # Pass output dimensions if the provider supports it
         if provider.config.supports_output_dimensions:
             kwargs["dimensions"] = settings.llm.embedding_dimensions
 
         response = await aembedding(**kwargs)
         embeddings = [item["embedding"] for item in response.data]
 
-        # Validate dimension matches the configured column size
         expected = settings.llm.embedding_dimensions
         for i, vec in enumerate(embeddings):
             actual = len(vec)
