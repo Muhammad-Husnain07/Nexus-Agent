@@ -1,9 +1,4 @@
-"""MemoryManager — service for extracting, storing, and retrieving long-term memories.
-
-Coordinates between the ``EpisodicSummarizer``, ``MemoryStore``, and the LLM
-to extract salient information from agent runs, deduplicate against existing
-memories, and serve relevant context to future sessions.
-"""
+"""MemoryManager — service for extracting, storing, and retrieving long-term memories."""
 
 from __future__ import annotations
 
@@ -59,30 +54,13 @@ class MemoryManager:
         self._settings = get_settings()
         self._memory_settings = self._settings.memory
 
-    # ------------------------------------------------------------------
-    # Extraction
-    # ------------------------------------------------------------------
-
     async def extract_and_store(
         self,
-        tenant_id: str,
-        user_id: str,
         session_id: str,
         agent_run_id: str | None = None,
         agent_state: dict[str, Any] | None = None,
     ) -> list[str]:
-        """Extract salient memories from an agent run and persist them.
-
-        Args:
-            tenant_id: Tenant UUID string.
-            user_id: User UUID string.
-            session_id: Session UUID string.
-            agent_run_id: Optional agent run UUID string.
-            agent_state: The final ``AgentState`` dict from the run.
-
-        Returns:
-            List of memory IDs that were stored or updated.
-        """
+        """Extract salient memories from an agent run and persist them."""
         if not self._memory_settings.enabled:
             logger.info("memory.extract_skipped_disabled")
             return []
@@ -93,8 +71,6 @@ class MemoryManager:
         stored_ids: list[str] = []
         for mem in memories_raw:
             mid = await self._dedup_and_store(
-                tenant_id=tenant_id,
-                user_id=user_id,
                 session_id=session_id,
                 kind=mem["kind"],
                 content=mem["content"],
@@ -103,11 +79,8 @@ class MemoryManager:
             if mid:
                 stored_ids.append(mid)
 
-        # Also store an episodic summary
         summary = await self._summarizer.summarize(agent_state or {})
         summary_id = await self._dedup_and_store(
-            tenant_id=tenant_id,
-            user_id=user_id,
             session_id=session_id,
             kind="episodic",
             content=summary,
@@ -147,77 +120,55 @@ class MemoryManager:
             logger.warning("memory.extract_parse_failed")
             return []
 
-    async def _dedup_and_store(  # noqa: PLR0913
+    async def _dedup_and_store(
         self,
-        tenant_id: str,
-        user_id: str,
         session_id: str,
         kind: str,
         content: str,
         importance: float,
     ) -> str | None:
-        """Deduplicate against existing memories, then store.
-
-        If a similar memory (cosine > ``similarity_threshold``) exists
-        with the same kind, the existing entry is updated instead of
-        creating a duplicate.
-        """
+        """Deduplicate against existing memories, then store."""
         mid = uuid.uuid4()
         embedding = await self._generate_embedding(content)
 
         if embedding and self._memory_settings.similarity_threshold > 0:
             similar = await self._store.search(
                 query_embedding=embedding,
-                namespace=(tenant_id, "memories", kind),
+                kind=kind,
                 top_k=1,
-                metadata_filter={"user_id": user_id},
             )
             sim = self._memory_settings.similarity_threshold
             if similar and similar[0].get("similarity", 0) >= sim:
                 existing_id = uuid.UUID(similar[0]["id"])
                 logger.info("memory.dedup_merged", existing_id=str(existing_id), kind=kind)
                 await self._store.put(
-                    namespace=(tenant_id, "memories", kind),
+                    session_id=session_id,
                     memory_id=existing_id,
+                    kind=kind,
                     content=content,
                     embedding=embedding,
-                    metadata={"user_id": user_id, "session_id": session_id},
+                    metadata={"session_id": session_id},
                     importance=importance,
                 )
                 return str(existing_id)
 
         await self._store.put(
-            namespace=(tenant_id, "memories", kind),
+            session_id=session_id,
             memory_id=mid,
+            kind=kind,
             content=content,
             embedding=embedding,
-            metadata={"user_id": user_id, "session_id": session_id},
+            metadata={"session_id": session_id},
             importance=importance,
         )
         return str(mid)
 
-    # ------------------------------------------------------------------
-    # Retrieval
-    # ------------------------------------------------------------------
-
     async def retrieve_relevant(
         self,
-        tenant_id: str,
-        user_id: str,
         query: str,
         top_k: int | None = None,
     ) -> list[dict[str, Any]]:
-        """Semantic search for memories relevant to *query*.
-
-        Args:
-            tenant_id: Tenant UUID string.
-            user_id: User UUID string.
-            query: Natural-language query (e.g. user's current message).
-            top_k: Max results (defaults to ``memory.retrieval_top_k``).
-
-        Returns:
-            List of matching memory dicts with ``similarity``.
-        """
+        """Semantic search for memories relevant to *query*."""
         if not self._memory_settings.enabled:
             return []
 
@@ -229,42 +180,44 @@ class MemoryManager:
         return await self._store.search(
             query_embedding=embedding,
             top_k=k,
-            metadata_filter={"user_id": user_id},
         )
 
     async def retrieve_formatted(
         self,
-        tenant_id: str,
-        user_id: str,
         query: str,
     ) -> str:
-        """Retrieve memories and format them as a system-prompt block."""
-        memories = await self.retrieve_relevant(tenant_id, user_id, query)
+        """Retrieve memories and format them as structured few-shot examples."""
+        memories = await self.retrieve_relevant(query)
         if not memories:
             return ""
 
-        lines = ["# Relevant past memories\n"]
+        lines: list[str] = ["# Relevant past interactions — use as reference\n"]
         for m in memories:
-            lines.append(f"- [{m['kind']}] (importance {m['importance']:.1f}): {m['content']}")
-        return "\n".join(lines)
+            kind = m.get("kind", "unknown")
+            content = m.get("content", "")
+            meta = m.get("metadata", {}) or {}
 
-    # ------------------------------------------------------------------
-    # Decay
-    # ------------------------------------------------------------------
+            if kind == "episodic":
+                lines.append("## Example from past interaction")
+                outcome = "Success" if "success" in content.lower() else "Completed"
+                tool_hint = meta.get("tool_name", "")
+                if tool_hint:
+                    lines.append(f"Tools used: {tool_hint} → {outcome}")
+                lines.append(f"Context: {content}")
+                lines.append("")
+
+            elif kind in ("preference", "fact", "semantic"):
+                lines.append(f"- Known: {content}")
+                lines.append("")
+
+            elif kind in ("decision", "procedure"):
+                lines.append(f"- Rule: {content}")
+                lines.append("")
+
+        return "\n".join(lines) if len(lines) > 1 else ""
 
     async def decay(self, days_threshold: int = 90) -> int:
-        """Reduce importance of stale memories.
-
-        Memories not accessed in *days_threshold* days have their importance
-        halved.  Those falling below ``importance_threshold`` are archived
-        (marked with ``archived: true`` in metadata).
-
-        Args:
-            days_threshold: Age in days for a memory to be considered stale.
-
-        Returns:
-            Number of memories archived.
-        """
+        """Reduce importance of stale memories."""
         cutoff = datetime.now(UTC) - timedelta(days=days_threshold)
         threshold = self._memory_settings.importance_threshold
         archived = 0
@@ -297,31 +250,36 @@ class MemoryManager:
         logger.info("memory.decay_complete", archived=archived)
         return archived
 
-    # ------------------------------------------------------------------
-    # Embeddings
-    # ------------------------------------------------------------------
-
     async def _generate_embedding(self, text_content: str) -> list[float] | None:
         """Generate an embedding vector via the configured embedding model."""
         if not text_content.strip():
             return None
         try:
-            response = await self._llm.complete(
-                model=self._settings.llm.embedding_model,
-                messages=[{"role": "user", "content": text_content}],
-                temperature=0,
+            embeddings = await self._llm.embed(
+                self._settings.llm.embedding_model,
+                [text_content],
             )
-            raw = (response.content or "").strip()
-            if raw.startswith("[") and raw.endswith("]"):
-                return json.loads(raw)
+            if embeddings and len(embeddings) > 0 and embeddings[0]:
+                return embeddings[0]
+            logger.warning("memory.embedding_empty", model=self._settings.llm.embedding_model)
             return None
         except Exception as exc:
             logger.warning("memory.embedding_failed", error=str(exc))
             return None
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
+    @staticmethod
+    def _msg_role(msg: Any) -> str:
+        """Extract role from dict or BaseMessage."""
+        if isinstance(msg, dict):
+            return str(msg.get("role", "?"))
+        return str(getattr(msg, "type", "?")) if not isinstance(msg, str) else "?"
+
+    @staticmethod
+    def _msg_content(msg: Any) -> str:
+        """Extract content from dict or BaseMessage."""
+        if isinstance(msg, dict):
+            return str(msg.get("content", ""))
+        return str(getattr(msg, "content", "")) if not isinstance(msg, str) else ""
 
     @staticmethod
     def _build_transcript(agent_state: dict[str, Any] | None) -> str:
@@ -336,8 +294,8 @@ class MemoryManager:
 
         parts = [f"Intent: {json.dumps(intent)}"]
         for msg in messages[-10:]:
-            role = msg.get("role", "?")
-            content = msg.get("content", "")[:300]
+            role = MemoryManager._msg_role(msg)
+            content = MemoryManager._msg_content(msg)[:300]
             parts.append(f"{role}: {content}")
 
         if plan:

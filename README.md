@@ -26,7 +26,7 @@ cd ../frontend && npm install && cd ../
 cp nexus-agent/.env.example nexus-agent/.env
 docker compose -f nexus-agent/docker/docker-compose.yml up -d postgres redis
 cd nexus-agent && uv run alembic upgrade head
-uv run python scripts/seed.py --no-embed
+uv run python scripts/seed.py
 make dev
 ```
 

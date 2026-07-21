@@ -5,8 +5,7 @@ The Nexus Agent uses a **passthrough auth model** — no JWT verification, no AP
 ## Current Security Model
 
 - **Auth Middleware**: Injects a default user identity for all requests
-- **Tenant Middleware**: Single-tenant — injects a fixed tenant ID
-- **Rate Limiting**: Per-endpoint rate limiting via Redis (tiered)
+- **Rate Limiting**: Per-IP rate limiting via Redis
 - **HTTPS**: Enforced via reverse proxy (nginx)
 
 ## Outbound Tool Calls
