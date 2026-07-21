@@ -43,7 +43,6 @@ dependencies = [
     "argon2-cffi>=25.1.0",
     "cryptography>=49.0.0",
     "jsonschema>=4.23",
-    "prometheus-client>=0.21",
 ]
 
 [dependency-groups]

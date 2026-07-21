@@ -12,4 +12,4 @@ services:
       - ../src:/app/src
     environment:
       NEXUS_ENV: development
-    command: ["uv", "run", "uvicorn", "nexus.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    command: ["uv", "run", "uvicorn", "nexus.main:create_app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
