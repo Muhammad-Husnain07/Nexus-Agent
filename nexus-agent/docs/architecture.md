@@ -15,8 +15,6 @@ graph TB
     FastAPI --> Agent[LangGraph Agent]
     Agent --> LLM[LLM Provider]
     Agent --> ToolExec[ToolExecutor]
-    FastAPI --> Auth[Auth Middleware]
-    FastAPI --> Tenant[Tenant Middleware]
     ToolExec -->|HTTP| ExternalAPI[External APIs]
     Agent --> Memory[Memory / Checkpointer]
     Memory --> PG[(PostgreSQL + pgvector)]
@@ -39,11 +37,8 @@ graph TB
 | **Memory** | `src/nexus/memory/` | Short-term checkpointer + long-term pgvector store |
 | **Sessions** | `src/nexus/sessions/` | Conversation history, context window management |
 | **HITL** | `src/nexus/agent/hitl.py` | Human-in-the-loop approval interrupts |
-| **Auth** | `src/nexus/security/` | JWT, API keys, RBAC, credential vault |
-| **Multi-Tenant** | `src/nexus/db/context.py` | contextvar-based tenant isolation |
-| **Embed API** | `src/nexus/api/embed.py` | Embed widget CRUD, token generation, usage analytics |
-| **Embed Middleware** | `src/nexus/middleware/embed_auth.py` | Embed token validation, domain whitelist, per-token rate limiting |
-| **Observability** | `src/nexus/observability/` | OpenTelemetry, structlog, Prometheus metrics |
+| **Auth** | `src/nexus/security/` | Passthrough auth (no JWT, no RBAC), rate limiting |
+| **Logging** | inlined structlog | Structured logging across all modules |
 | **Error Handling & Resilience** | `src/nexus/errors/` | Circuit breakers, retry policies, dead letter queue, graceful degradation |
 | **Configuration** | `src/nexus/config/` | Pydantic BaseSettings, secret management |
 | **Utilities** | `src/nexus/utils/` | Scheduled jobs, constants |
@@ -64,28 +59,47 @@ sequenceDiagram
     participant DB
 
     Client->>FastAPI: POST /api/v1/sessions/{id}/chat {message, stream:true}
-    FastAPI->>Router: Authenticate + resolve tenant
-    Router->>Agent: AgentRunner.invoke()
+    FastAPI->>Agent: AgentRunner.invoke()
     Agent->>LLM: understand_intent
-    LLM-->>Agent: IntentAnalysis
-    Agent->>FastAPI: SSE: tool_selected
-    FastAPI-->>Client: event: tool_selected
-    Agent->>Tools: DynamicToolSelector.select()
-    Tools-->>Agent: [ToolRead]
-    Agent->>LLM: plan(goal, tools)
-    LLM-->>Agent: Plan(steps)
-    Agent->>FastAPI: SSE: plan_created
-    FastAPI-->>Client: event: plan_created
-    Agent->>Tools: ToolExecutor.execute(tool, inputs)
-    Tools->>DB: INSERT ToolExecution
-    Tools-->>Agent: ToolResult
-    Agent->>FastAPI: SSE: tool_call_completed
-    FastAPI-->>Client: event: tool_call_completed
-    Agent->>LLM: analyze_results
-    LLM-->>Agent: AnalysisResult(finalize)
+    LLM-->>Agent: IntentAnalysis(needs_tool, response_type)
+    alt greeting / meta / memory query
+        Agent->>LLM: respond_without_tool
+        LLM-->>Agent: Direct response
+    else tool query
+        Agent->>FastAPI: SSE: tool_selected
+        FastAPI-->>Client: event: tool_selected
+        Note over Agent: Tool Subgraph (DAG-based parallel executor)
+        Agent->>Tools: discover_tools (semantic search)
+        Agent->>LLM: dag_expander (generate DAG plan)
+        LLM-->>Agent: Task list with dependencies
+        Agent->>FastAPI: SSE: plan_created
+        FastAPI-->>Client: event: plan_created
+        loop For each batch of ready tasks
+            par Parallel tool execution
+                Agent->>Tools: ToolExecutor.execute(task)
+                Tools->>DB: INSERT ToolExecution
+                Tools-->>Agent: ToolResult
+            end
+        end
+        Agent->>FastAPI: SSE: tool_call_completed
+        FastAPI-->>Client: event: tool_call_completed
+    end
+    Agent->>LLM: finalize (compose response)
+    LLM-->>Agent: Final response
     Agent->>FastAPI: SSE: final_response
     FastAPI-->>Client: event: final_response
-    FastAPI-->>Client: event: done
+    Agent->>LLM: reflect_on_response (score 0-10)
+    alt score >= 7 or max rounds reached
+        FastAPI-->>Client: event: done
+    else approach issue → clarify
+        Agent->>LLM: gather_requirements
+        LLM-->>Agent: Clarification question
+        FastAPI-->>Client: event: clarification_needed
+        FastAPI-->>Client: event: done
+    else wording issue → revise_finalize
+        Agent->>LLM: finalize (with feedback)
+        LLM-->>Agent: Improved response
+    end
 ```
 
 ---
@@ -168,10 +182,9 @@ sequenceDiagram
     participant DB
 
     Developer->>API: POST /api/v1/tools {name, description, auth, schemas}
-    API->>API: Validate auth & RBAC (tools:register)
     API->>API: Validate no Python code fields
     API->>API: Validate JSON Schema Draft 7
-    API->>Registry: registry.register(session, tenant_id, tool)
+    API->>Registry: registry.register(tool)
     Registry->>Secrets: Encrypt auth_ref (AES-256-GCM)
     Secrets-->>Registry: ciphertext
     Registry->>LLM: embed(name + description + purpose + tags)
@@ -180,27 +193,6 @@ sequenceDiagram
     DB-->>Registry: Tool(id, version=1)
     Registry-->>API: ToolRead (auth_ref reference, not value)
     API-->>Developer: 201 Created + ToolRead JSON
-```
-
----
-
-## Data Flow — Multi-Tenant Request
-
-```mermaid
-sequenceDiagram
-    participant Client
-    participant TenantMW
-    participant App
-    participant DB
-
-    Client->>TenantMW: POST /api/v1/tools (X-Tenant-ID: uuid)
-    TenantMW->>TenantMW: set_tenant(tenant_id) via contextvar
-    TenantMW->>DB: SELECT Tenant WHERE id = ...
-    DB-->>TenantMW: Tenant(status=active)
-    TenantMW->>App: call_next(request)
-    App->>DB: all queries filtered by get_tenant()
-    DB-->>App: tenant-scoped results
-    App-->>Client: Response with X-Tenant-ID header
 ```
 
 ---
@@ -233,25 +225,7 @@ graph TB
 
 ## Security Model
 
-```mermaid
-graph LR
-    Request[HTTP Request] --> Auth{Authentication}
-    Auth -->|Bearer JWT| JWTVerify[JWT Verification]
-    Auth -->|API Key| KeyVerify[Argon2 Hash Comparison]
-    
-    JWTVerify --> RBAC{RBAC}
-    KeyVerify --> RBAC
-    
-    RBAC -->|tenant_admin| Admin[Full Access]
-    RBAC -->|developer| Dev[Tools + Sessions]
-    RBAC -->|end_user| User[Chat + Read Tools]
-    RBAC -->|viewer| Viewer[Read Only]
-    
-    ToolExec[ToolExecutor] --> Authz{Authz Gate}
-    Authz -->|requires_approval| HITL[Human Approval]
-    Authz -->|risk_level=high| HITL
-    Authz -->|safe| HTTP[HTTP Call / MCP Request]
-```
+No authentication. All requests are treated as the default user (passthrough).
 
 ### Why No Python Code Execution
 
@@ -298,10 +272,17 @@ The agent is **multi-turn** by design. When it needs clarification, the `gather_
 
 ```
 User message → understand_intent
-  ├─ Enough info? → discover_tools → plan → execute_step → ...
-  └─ Missing info? → gather_requirements → ask questions → END
-                                                    ↓
-                              User replies → understand_intent (merges answers) → ...
+  ├─ Greeting/meta/memory → respond_without_tool → finalize → reflect → END
+  ├─ Missing info? → gather_requirements → ask questions → END
+  │                                                    ↓
+  │                              User replies → understand_intent (merges answers) → ...
+  └─ Tool query → tool_subgraph (DAG parallel executor)
+       ├─ All tasks done → finalize → review_final_answer → reflect
+       │    ├─ Score >= 7 → END
+       │    ├─ Wording fix → revise_finalize → finalize (loop)
+       │    ├─ Wrong approach → clarify → gather_requirements → END
+       │    └─ Replan → revise → understand_intent
+       └─ Tools failed → ask → gather_requirements → END
 ```
 
 This avoids internal clarification loops and gives the user a natural back-and-forth experience. Each turn is a complete conversation round-trip.
@@ -312,7 +293,7 @@ This avoids internal clarification loops and gives the user a natural back-and-f
 |----------|--------|-----------|
 | Agent framework | LangGraph 1.0 | Purpose-built for stateful agents with interrupts, checkpointing |
 | LLM abstraction | LiteLLM | 100+ providers, unified API, cost tracking |
-| Multi-tenancy | contextvar + tenant_id per row | Zero-copy isolation, no connection overhead |
+| Single-tenancy | N/A | All data shared, simplified deployment |
 | HITL mechanism | LangGraph interrupt() | First-class resume support, checkpointing |
 | Streaming | SSE (preferred) + WebSocket | Browser-native EventSource, bidirectional fallback |
 | Tool protocol | MCP + REST | Industry standard for tool discovery, dual interface |

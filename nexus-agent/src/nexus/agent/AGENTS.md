@@ -1,53 +1,61 @@
 # `src/nexus/agent/` — LangGraph Orchestration
 
-This module owns the LangGraph StateGraph that implements a hybrid ReAct + Plan-and-Execute reasoning loop. The agent contains **zero business logic** — it plans, reasons, gathers requirements, and invokes tools.
+This module owns the LangGraph StateGraph that implements a hybrid DAG-based Plan-and-Execute + Reflection reasoning loop. The agent contains **zero business logic** — it plans, reasons via DAG expansion, executes tools in parallel, reflects on responses, and routes to clarification when needed.
 
 ## Key Responsibilities
 
-- Define `StateGraph` topology with 9 nodes (understand_intent → gather_requirements → discover_tools → plan → select_and_bind_tools → execute_step → analyze_results → present_preview → finalize).
+- Define `StateGraph` topology with **6 parent nodes** + **3-node tool subgraph**.
 - Manage graph lifecycle: compile with checkpointer, stream updates, cache per session.
 - Provide `AgentRunner` that wires LLM, tools, memory, event bus, and session lock.
-- Human-in-the-Loop via LangGraph `interrupt()` for approvals and feedback.
-- Supervisor + sub-agent patterns reserved for future `StateGroup` / subgraphs.
+- Human-in-the-Loop via `review_final_answer` / `review_plan` nodes and LangGraph `interrupt()`.
+- DAG-based parallel tool execution inside the tool subgraph via `Send()` API.
+- Self-reflection via `reflect_on_response` — scores responses and routes to `finalize`, `revise_finalize`, `revise`, or `clarify`.
 
 ## Key Files
 
 | File | Responsibility |
 |------|---------------|
-| `graph.py` | `build_agent_graph()` — constructs, wires dependencies, compiles `StateGraph` with conditional edges and max-iteration guard |
-| `runner.py` | `AgentRunner` — session-scoped graph cache, `invoke()` async generator streaming `AgentEvent` types, Redis distributed lock to prevent concurrent runs |
-| `state.py` | `AgentState` TypedDict (messages, plan, tool_results, pending_approval, etc.), `PlanStep`, `Plan`, `IntentAnalysis`, `AnalysisResult`, `MissingSlot` Pydantic models |
-| `hitl.py` | `interrupt_for_approval()` with 5 criteria (tool flag, destructiveness, risk level, global default, name patterns), `build_approval_payload()` |
+| `graph.py` | `build_agent_graph()` — constructs parent graph with 6 nodes + tool subgraph |
+| `runner.py` | `AgentRunner` — session-scoped graph cache, `invoke()` async generator, Redis distributed lock |
+| `state.py` | `AgentState` TypedDict (28 fields), `IntentAnalysis`, `PlanStep`, `Plan` Pydantic models |
+| `tool_subgraph.py` | DAG-based parallel executor subgraph using `Send()` API (3 nodes) |
+| `hitl.py` | `interrupt_for_approval()` with 5 criteria, `build_approval_payload()`, `persist_interrupt()` |
 | `hitl_middleware.py` | Wraps `ToolExecutor` to intercept calls requiring HITL approval |
-| `feedback_interrupt.py` | `interrupt_for_feedback()` for intermediate preview approval (approve/edit/reject) |
+| `feedback_interrupt.py` | Reusable `interrupt_for_feedback()` for approve/edit/reject patterns |
 | `errors.py` | Re-exports agent-specific exceptions from central error module |
 | `schemas.py` | Request/response models: `AgentInvokeRequest`, `AgentStreamEvent`, `ApprovalAction`, etc. |
 
-## Nodes (`nodes/`)
+## Parent Graph Nodes (6)
 
 | Node | File | Behaviour |
 |------|------|-----------|
-| understand_intent | `understand_intent.py` | LLM extracts `IntentAnalysis` with primary_goal, missing_info_slots, confidence; routes to clarification if confidence < 0.5 |
-| gather_requirements | `gather_requirements.py` | Generates at most 3 clarifying questions per turn referencing missing slots; merges answers into `gathered_requirements`. Routes to `END` — the user replies with a new message, which re-enters at `understand_intent`. This is a multi-turn conversational pattern; the agent does not loop internally. |
-| discover_tools | `discover_tools.py` | Calls `DynamicToolSelector` to populate `available_tools` via semantic search + optional LLM re-rank |
-| plan | `plan.py` | LLM structured output `Plan` with steps, rationale, destructive flag; flags plan as needs_human_review if destructive |
-| select_and_bind_tools | `select_and_bind_tools.py` | Pre-filters tools for current plan step, converts to OpenAI tool-call schema |
-| execute_step | `execute_step.py` | ReAct micro-loop: resolves `${...}` placeholders, validates inputs, calls `ToolExecutor` (HITL-aware), error recovery (retry/revise/ask) |
-| analyze_results | `analyze_results.py` | LLM evaluates outcome vs expected_outcome; routes to continue/revise/clarify/escalate/finalize |
-| present_preview | `present_preview.py` | Interrupts for human feedback on intermediate results; supports approve/edit/reject with plan rollback |
-| finalize | `finalize.py` | Composes final answer with tool citations, persists episodic memory via `MemoryManager` |
+| `understand_intent` | `understand_intent.py` | LLM parses user message into `IntentAnalysis` (primary_goal, needs_tool, response_type, confidence). Routes to `respond_without_tool`, `gather_requirements`, or `tool_subgraph`. |
+| `respond_without_tool` | `respond_without_tool.py` | Handles greeting/meta/memory queries directly (no tool needed). |
+| `gather_requirements` | `gather_requirements.py` | Asks clarifying questions. Routes to END (user replies with new message, re-entering at `understand_intent`). |
+| `finalize` | `finalize.py` | Composes final response from tool results. Persists episodic memory for tool interactions. |
+| `review_final_answer` | `review_final_answer.py` | Optional HITL interrupt — pauses for approve/edit/reject on final response. Requires `needs_human_review=true`. |
+| `reflect_on_response` | `reflect_on_response.py` | LLM scores response quality. Routes: `finalize` (score >= 7), `revise_finalize` → `finalize` (regenerate), `revise` → `understand_intent` (re-plan), `clarify` → `gather_requirements` (ask user). |
 
-## Prompts (`prompts/`)
+## Tool Subgraph Nodes (3)
 
-| File | Content |
-|------|---------|
-| `manager.py` | `PromptManager` — versioned prompt templates with A/B testing weights, `render()` |
-| `understand_intent.py` | v1.0 + v2.0 with 6 few-shot examples |
-| `gather_requirements.py` | Clarifying question generation prompt |
-| `plan.py` | Step-by-step plan generation prompt |
-| `execute_step.py` | ReAct loop prompt |
-| `analyze_results.py` | Outcome evaluation prompt |
-| `finalize.py` | Final answer composition prompt |
+| Node | File | Behaviour |
+|------|------|-----------|
+| `discover_tools` | `discover_tools.py` | Semantic tool discovery via `DynamicToolSelector`. Entry point of subgraph. |
+| `dag_expander` | `dag_expander.py` | Generates DAG plan via LLM (parallel tasks with dependencies). `route_dag` conditional edge fans out ready tasks via `Send()`. |
+| `tool_executor` | `tool_executor.py` | Executes a single DAG task directly (no LLM — placeholder resolution + HTTP call). |
+
+## Prompts (7 registered)
+
+| Prompt File | Version | Used By |
+|-------------|---------|---------|
+| `understand_intent.py` | v3.0 | `understand_intent` node |
+| `plan_parallel.py` | v1.0 | `dag_expander` node |
+| `reflect_on_response.py` | v1.0 | `reflect_on_response` node |
+| `finalize.py` | v3.0 | `finalize` node |
+| `gather_requirements.py` | v2.0 | `gather_requirements` node |
+| `execute_step.py` | v2.0 | Legacy — unused in active graph but kept for reference |
+| `analyze_results.py` | v3.0 | Legacy — unused in active graph but kept for reference |
+| `plan.py` | v3.0 | Legacy — unused in active graph but kept for reference |
 
 ## Dependencies
 
