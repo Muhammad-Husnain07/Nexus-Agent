@@ -86,13 +86,9 @@ class ExecutionContext:
 
     def __init__(
         self,
-        tenant_id: uuid.UUID,
-        user_id: uuid.UUID,
         session_id: uuid.UUID,
         agent_run_id: uuid.UUID | None = None,
     ) -> None:
-        self.tenant_id = tenant_id
-        self.user_id = user_id
         self.session_id = session_id
         self.agent_run_id = agent_run_id
 
@@ -177,8 +173,6 @@ class ToolExecutor:
         if not skip_approval:
             check = check_approval_required(
                 tool,
-                tenant_id=context.tenant_id,
-                user_id=context.user_id,
                 session_id=context.session_id,
                 agent_run_id=context.agent_run_id,
                 settings=self._agent_settings,
@@ -187,8 +181,6 @@ class ToolExecutor:
                 raise ApprovalRequiredInterrupt(
                     tool_name=tool.name,
                     inputs=inputs,
-                    tenant_id=context.tenant_id,
-                    user_id=context.user_id,
                     session_id=context.session_id,
                     agent_run_id=context.agent_run_id,
                 )
@@ -497,7 +489,6 @@ class ToolExecutor:
     ) -> None:
         """Write a ``ToolExecution`` row to the database."""
         execution = ToolExecution(
-            tenant_id=context.tenant_id,
             tool_id=tool.id,
             session_id=context.session_id,
             agent_run_id=context.agent_run_id,

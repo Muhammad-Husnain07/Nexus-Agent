@@ -90,7 +90,7 @@ class AgentRunner:
 
         runner = AgentRunner(llm_client, tool_selector, tool_executor, event_bus)
         async for event in runner.invoke(
-            session_id=..., user_message=..., tenant_id=..., user_id=...
+            session_id=..., user_message=..., user_id=...
         ):
             print(event.to_dict())
     """
@@ -168,38 +168,44 @@ class AgentRunner:
         self,
         session_id: uuid.UUID | str,
         user_message: str,
-        tenant_id: uuid.UUID | str,
-        user_id: uuid.UUID | str,
         config: dict[str, Any] | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Run the agent graph and yield events.
 
+        Loads prior state from the checkpointer (multi-turn memory) and
+        appends the new user message to the accumulated conversation history.
+
         Args:
             session_id: The conversation session ID.
             user_message: The user's latest message.
-            tenant_id: The tenant ID.
-            user_id: The user ID.
-            config: Optional LangGraph ``RunnableConfig`` dict
-                (e.g. ``{"configurable": {"thread_id": ..., "tags": [...]}}``).
+            config: Optional LangGraph ``RunnableConfig`` dict.
 
         Yields:
             ``AgentEvent`` instances as the graph progresses.
         """
         sid = str(session_id)
-        tid = str(tenant_id)
-        uid = str(user_id)
 
         graph = self._build_graph()
+        run_config: dict[str, Any] = dict(config or {})
+        run_config.setdefault("configurable", {})["thread_id"] = sid
+
+        # Build initial state — preserve messages from prior turns (multi-turn memory)
+        # Try to load prior state from the checkpointer
+        prior_messages: list[dict[str, Any]] = []
+        try:
+            prior_state = await graph.aget_state(run_config)
+            if prior_state is not None and prior_state.values:
+                prior_messages = list(prior_state.values.get("messages", []))
+        except Exception:
+            pass
 
         initial_state: AgentState = {
-            "messages": [{"role": "user", "content": user_message}],
-            "tenant_id": tid,
+            "messages": prior_messages + [{"role": "user", "content": user_message}],
             "session_id": sid,
-            "user_id": uid,
-            "user_context": {"id": uid},
+            "user_context": {},
             "plan": None,
             "current_step_index": 0,
-            "gathered_requirements": {},
+            "gathered_requirements": prior_state.values.get("gathered_requirements", {}) if prior_state else {},
             "available_tools": [],
             "pending_approval": None,
             "iteration_count": 0,
@@ -209,11 +215,20 @@ class AgentRunner:
             "intent": None,
             "missing_info_slots": None,
             "errors": [],
+            "_bound_tools": [],
+            "intent_analysis": None,
+            "analysis_result": None,
+            "needs_human_review": False,
+            "questions_asked": 0,
+            "response_type": "tool",
+            "reflection_score": 0.0,
+            "reflection_feedback": "",
+            "reflection_count": 0,
+            "dag_tasks": [],
+            "dag_results": {},
+            "dag_phase": "",
             "_routing_decision": "continue",
         }
-
-        run_config: dict[str, Any] = dict(config or {})
-        run_config.setdefault("configurable", {})["thread_id"] = sid
 
         redis = get_redis_client()
         lock_acquired = False
@@ -241,14 +256,16 @@ class AgentRunner:
             async for event in graph.astream(initial_state, run_config, stream_mode="updates"):
                 node_name: str = next(iter(event))
                 state_update: dict[str, Any] = event[node_name]
-
-                for agent_event in self._translate(node_name, state_update):
+                agent_events = self._translate(node_name, state_update)
+                for agent_event in agent_events:
                     if self._event_bus:
                         await self._event_bus.publish(
                             agent_channel(sid),
                             agent_event.to_dict(),
                         )
                     yield agent_event
+        except asyncio.CancelledError:
+            logger.info("agent.run.cancelled", session_id=sid)
         except Exception as exc:
             logger.error("agent.run.failed", exc_info=exc)
             error_event = AgentEvent("error", {"message": str(exc)})
@@ -329,6 +346,8 @@ class AgentRunner:
                             agent_event.to_dict(),
                         )
                     yield agent_event
+        except asyncio.CancelledError:
+            logger.info("agent.resume.cancelled", session_id=session_id)
         except Exception as exc:
             logger.error("agent.resume.failed", session_id=session_id, exc_info=exc)
             error_event = AgentEvent("error", {"message": str(exc)})
@@ -352,35 +371,66 @@ class AgentRunner:
         """Map a LangGraph state update to zero or more ``AgentEvent`` instances."""
         events: list[AgentEvent] = []
 
+        # Handle subgraph-namespaced node names (e.g. "tool_subgraph:uuid:plan")
+        # Extract the inner node name after the last colon
+        inner_name = node_name.split(":")[-1] if ":" in node_name else node_name
+
+        # Emit final_response only from finalize (which always runs last).
         fr = state_update.get("final_response")
-        if fr is not None:
+        if fr is not None and inner_name == "finalize":
             events.append(AgentEvent("final_response", {"text": fr}))
 
-        if node_name == "understand_intent":
+        if inner_name == "understand_intent":
             intent = state_update.get("intent")
             if intent:
                 etype = "tool_selected" if intent.get("intent") else "error"
+                payload: dict[str, Any] = {
+                    "intent": intent.get("intent"),
+                    "parameters": intent.get("parameters", {}),
+                }
+                if not intent.get("intent") and state_update.get("final_response"):
+                    meta_question = state_update["final_response"]
+                    events.append(AgentEvent("clarification_needed", {"question": meta_question}))
+                events.append(AgentEvent(etype, payload))
+
+        elif inner_name == "reflect_on_response":
+            score = state_update.get("reflection_score")
+            if score is not None:
                 events.append(
                     AgentEvent(
-                        etype,
+                        "reflection_result",
                         {
-                            "intent": intent.get("intent"),
-                            "parameters": intent.get("parameters", {}),
+                            "score": score,
+                            "feedback": state_update.get("reflection_feedback", ""),
+                            "reflection_count": state_update.get("reflection_count", 0),
                         },
                     )
                 )
 
-        elif node_name == "gather_requirements":
+        elif inner_name in ("review_plan", "review_final_answer"):
+            fr = state_update.get("final_response")
+            if fr is not None:
+                event_type = "clarification_needed" if inner_name == "review_plan" else "interrupt"
+                events.append(AgentEvent(event_type, {"question": fr, "source": inner_name}))
+
+        elif inner_name == "gather_requirements":
             final = state_update.get("final_response")
             if final:
                 events.append(AgentEvent("clarification_needed", {"question": final}))
 
-        elif node_name == "plan":
+        elif inner_name == "plan":
             plan = state_update.get("plan")
             if plan:
                 events.append(AgentEvent("plan_created", {"steps": plan}))
 
-        elif node_name == "execute_step":
+        elif inner_name == "dag_expander":
+            # Emit plan_created when DAG is first generated
+            plan = state_update.get("plan")
+            if plan:
+                events.append(AgentEvent("plan_created", {"steps": plan}))
+
+        elif inner_name == "tool_executor":
+            # Emit tool_call_completed for each new tool result
             tool_results = state_update.get("tool_results", [])
             if tool_results:
                 last = tool_results[-1]
@@ -393,14 +443,40 @@ class AgentRunner:
                             "status": last.get("status"),
                             "data": last.get("data"),
                             "error": last.get("error"),
+                            "task_id": last.get("task_id"),
                         },
                     )
                 )
 
-        elif node_name == "present_preview":
+            # Emit approval_required if pending_approval is set
+            pending = state_update.get("pending_approval")
+            if pending and isinstance(pending, dict):
+                events.append(AgentEvent("approval_required", pending))
+
+        elif inner_name == "present_preview":
             data = state_update.get("final_response")
             if data:
                 events.append(AgentEvent("intermediate_preview", {"text": data}))
+
+        elif inner_name == "tool_subgraph":
+            # Subgraph finished — emit events from accumulated state
+            plan = state_update.get("plan")
+            if plan:
+                events.append(AgentEvent("plan_created", {"steps": plan}))
+            tool_results = state_update.get("tool_results", [])
+            if tool_results:
+                last = tool_results[-1]
+                events.append(
+                    AgentEvent(
+                        "tool_call_completed",
+                        {
+                            "tool_name": last.get("tool_name"),
+                            "status": last.get("status"),
+                            "data": last.get("data"),
+                            "error": last.get("error"),
+                        },
+                    )
+                )
 
         errors = state_update.get("errors", [])
         if errors and isinstance(errors, list):

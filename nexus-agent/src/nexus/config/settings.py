@@ -204,6 +204,12 @@ class AgentSettings(BaseModel):
         le=50,
         description="Max ReAct sub-iterations per step (internal micro-loop)",
     )
+    max_reflection_rounds: int = Field(
+        default=3,
+        ge=0,
+        le=20,
+        description="Max reflection iterations (0 = disabled)",
+    )
     skip_preview: bool = Field(
         default=False,
         description="Skip the present_preview node (routes directly to finalize)",

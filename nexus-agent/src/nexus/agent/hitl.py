@@ -3,6 +3,7 @@
 Provides the standard interrupt call for tool-approval scenarios and
 the extended ``requires_approval`` check that covers tool flags, plan-step
 destructiveness, risk level, global default, and tool-name patterns.
+Also provides generic interrupt persistence and payload builders.
 """
 
 from __future__ import annotations
@@ -15,11 +16,61 @@ from langgraph.types import interrupt
 
 from nexus.agent.state import PlanStep
 from nexus.config.settings import AgentSettings
+from nexus.db.models.agent_run import Approval
+from nexus.db.repositories.base import GenericRepository
 from nexus.tools.schemas import ToolRead
 
 logger = structlog.get_logger("nexus.agent.hitl")
 
 ApprovalDecision = Literal["approve", "reject", "edit"]
+
+INTERRUPT_TYPES = Literal["tool_approval", "plan_review", "final_review"]
+
+
+async def persist_interrupt(
+    db_session: Any,
+    agent_run_id: str,
+    interrupt_type: str,
+    payload: dict[str, Any],
+) -> Approval:
+    """Save an interrupt record to the database and return the ``Approval`` row.
+
+    The returned ``Approval.id`` can be used by the frontend to fetch
+    interrupt details via ``GET /approvals/{id}``.
+    """
+    repo = GenericRepository(db_session, Approval)
+    approval = await repo.create(
+        agent_run_id=agent_run_id,
+        interrupt_type=interrupt_type,
+        tool_call=payload if interrupt_type == "tool_approval" else {},
+        interrupt_payload=payload if interrupt_type != "tool_approval" else None,
+        status="pending",
+    )
+    await db_session.flush()
+    return approval
+
+
+def build_interrupt_payload(
+    interrupt_type: str,
+    data: dict[str, Any],
+    question: str = "Approve?",
+) -> dict[str, Any]:
+    """Build a standardised interrupt payload dictionary.
+
+    Args:
+        interrupt_type: One of ``tool_approval``, ``plan_review``, ``final_review``.
+        data: The content to show the user (tool call, plan, response, etc.).
+        question: The question to display to the user.
+
+    Returns:
+        A JSON-serialisable dict.
+    """
+    return {
+        "type": interrupt_type,
+        **data,
+        "question": question,
+        "options": ["approve", "edit", "reject"],
+    }
 
 
 def requires_approval(

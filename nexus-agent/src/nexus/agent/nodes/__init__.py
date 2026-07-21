@@ -26,13 +26,19 @@ def msg_role(msg: Any) -> str:
 
 
 from nexus.agent.nodes.analyze_results import analyze_results
+from nexus.agent.nodes.dag_expander import dag_expander, route_dag
 from nexus.agent.nodes.discover_tools import discover_tools
 from nexus.agent.nodes.execute_step import execute_step
 from nexus.agent.nodes.finalize import finalize
 from nexus.agent.nodes.gather_requirements import gather_requirements
 from nexus.agent.nodes.plan import plan
 from nexus.agent.nodes.present_preview import present_preview
+from nexus.agent.nodes.reflect_on_response import reflect_on_response
+from nexus.agent.nodes.respond_without_tool import respond_without_tool
+from nexus.agent.nodes.review_final_answer import review_final_answer
+from nexus.agent.nodes.review_plan import review_plan
 from nexus.agent.nodes.select_and_bind_tools import select_and_bind_tools
+from nexus.agent.nodes.tool_executor import tool_executor
 from nexus.agent.nodes.understand_intent import understand_intent
 
 __all__ = [
@@ -44,5 +50,12 @@ __all__ = [
     "execute_step",
     "present_preview",
     "analyze_results",
+    "dag_expander",
+    "route_dag",
+    "reflect_on_response",
+    "respond_without_tool",
+    "review_final_answer",
+    "review_plan",
+    "tool_executor",
     "finalize",
 ]

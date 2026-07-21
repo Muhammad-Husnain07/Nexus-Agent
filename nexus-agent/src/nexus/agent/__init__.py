@@ -18,7 +18,9 @@ from nexus.agent.schemas import (
     AgentStreamEvent,
     ApprovalAction,
 )
+from nexus.agent.nodes.reflect_on_response import reflect_on_response
 from nexus.agent.state import (
+    RESPONSE_TYPES,
     AgentState,
     AnalysisResult,
     IntentAnalysis,
@@ -45,6 +47,7 @@ __all__ = [
     "MissingSlot",
     "PlanStep",
     "PlanningError",
+    "RESPONSE_TYPES",
     "ToolExecutionError",
     "build_agent_graph",
 ]

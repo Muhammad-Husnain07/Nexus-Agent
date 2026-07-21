@@ -39,10 +39,13 @@ async def gather_requirements(
         ``gathered_requirements``, and resets ``missing_info_slots``.
     """
     missing: list[str] = state.get("missing_info_slots") or []
-    if not missing:
-        return {"final_response": None, "missing_info_slots": []}
+    
+    # Check for reflection issue context (from reflect_on_response approach_issue)
+    gathered = state.get("gathered_requirements", {}) or {}
+    reflection_issue = gathered.pop("_reflection_issue", None) if isinstance(gathered, dict) else None
 
-    gathered: dict[str, Any] = state.get("gathered_requirements", {})
+    if not missing and not reflection_issue:
+        return {"final_response": None, "missing_info_slots": []}
 
     # Build detail for each slot from intent_analysis if available
     intent_analysis_raw: dict[str, Any] | None = state.get("intent_analysis")
@@ -63,9 +66,10 @@ async def gather_requirements(
 
     system_prompt = prompt_manager.render(
         "gather_requirements",
-        missing_summary="\n".join(f"- {slot}" for slot in missing),
+        missing_summary="\n".join(f"- {slot}" for slot in missing) if missing else (reflection_issue or "No data found"),
         max_questions=str(max_q),
-        slots_detail=slots_detail or "No additional details available.",
+        slots_detail=slots_detail or reflection_issue or "No additional details available.",
+        reflection_context=reflection_issue or "",
     )
 
     response = await llm.complete(
@@ -74,7 +78,7 @@ async def gather_requirements(
             _openai_message("system", system_prompt),
             _openai_message(
                 "user",
-                f"Please ask me about: {', '.join(missing)}\n"
+                f"Please ask me about: {', '.join(missing) if missing else reflection_issue or 'the required information'}\n"
                 f"Already known: {json.dumps(gathered) if gathered else 'nothing yet'}",
             ),
         ],

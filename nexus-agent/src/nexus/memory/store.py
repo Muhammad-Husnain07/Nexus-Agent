@@ -1,9 +1,4 @@
-"""Long-term memory store backed by the ``Memory`` SQLAlchemy model with pgvector.
-
-Provides a typed ``MemoryStore`` for persisting and retrieving memories
-(user preferences, facts, procedures, episodic summaries) via semantic
-search.
-"""
+"""Long-term memory store backed by the ``Memory`` SQLAlchemy model with pgvector."""
 
 from __future__ import annotations
 
@@ -24,41 +19,22 @@ MemoryKind = Literal["episodic", "semantic", "procedural", "preference"]
 
 
 class MemoryStore:
-    """Postgres-backed memory store with vector similarity search.
-
-    Namespace convention: ``(tenant_id, "memories", memory_kind)``.
-
-    All methods operate within the ``Memory`` table which has a ``VECTOR(n)``
-    column for embeddings (dimension configured via ``embedding_dimensions``)
-    and an ``ivfflat`` index for approximate nearest neighbour search.
-    """
+    """Postgres-backed memory store with vector similarity search."""
 
     def __init__(self) -> None:
         pass
 
     async def put(  # noqa: PLR0913
         self,
-        namespace: tuple[str, str, str],
+        session_id: str | None = None,
         memory_id: uuid.UUID | None = None,
+        kind: str = "semantic",
         content: str = "",
         embedding: list[float] | None = None,
         metadata: dict[str, Any] | None = None,
         importance: float = 0.5,
     ) -> uuid.UUID:
-        """Store a memory entry.
-
-        Args:
-            namespace: ``(tenant_id, "memories", memory_kind)``.
-            memory_id: Optional UUID (auto-generated if ``None``).
-            content: The memory text.
-            embedding: Vector of dimension ``embedding_dimensions`` for semantic search.
-            metadata: Arbitrary JSON-serialisable metadata.
-            importance: Salience score 0-1.
-
-        Returns:
-            The UUID of the stored memory.
-        """
-        tenant_id, _, kind = namespace
+        """Store a memory entry."""
         mid = memory_id or uuid.uuid4()
 
         async with async_session() as session:
@@ -74,7 +50,7 @@ class MemoryStore:
             else:
                 await repo.create(
                     id=mid,
-                    tenant_id=uuid.UUID(tenant_id),
+                    session_id=uuid.UUID(session_id) if session_id else None,
                     kind=kind,
                     content=content,
                     embedding=embedding,
@@ -85,19 +61,14 @@ class MemoryStore:
         return mid
 
     async def get(
-        self, namespace: tuple[str, str, str], memory_id: uuid.UUID
+        self, memory_id: uuid.UUID
     ) -> dict[str, Any] | None:
-        """Retrieve a single memory by ID.
-
-        Returns:
-            A dict representation or ``None`` if not found.
-        """
+        """Retrieve a single memory by ID."""
         async with async_session() as session:
             repo = GenericRepository(session, Memory)
             mem = await repo.get(memory_id)
             if mem is None:
                 return None
-            # Update last_accessed_at
             mem.last_accessed_at = datetime.now(UTC)
             await session.commit()
             return self._row_to_dict(mem)
@@ -105,38 +76,21 @@ class MemoryStore:
     async def search(
         self,
         query_embedding: list[float],
-        namespace: tuple[str, str, str] | None = None,
+        kind: str | None = None,
         top_k: int = 5,
         metadata_filter: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
-        """Semantic search over stored memories.
-
-        Uses cosine similarity via pgvector's ``<=>`` operator on the
-        ``embedding`` column.  Results are ordered by similarity descending.
-
-        Args:
-            query_embedding: Query vector of dimension ``embedding_dimensions``.
-            namespace: Optional ``(tenant_id, "memories", kind)`` filter.
-            top_k: Max results.
-            metadata_filter: Optional JSONB key-value filter.
-
-        Returns:
-            List of matching memory dicts with ``similarity`` key added.
-        """
+        """Semantic search over stored memories."""
         vec_literal = "[" + ",".join(str(v) for v in query_embedding) + "]"
-        sql = "SELECT id, tenant_id, session_id, kind, content, metadata_, importance, "
+        sql = "SELECT id, session_id, kind, content, metadata_, importance, "
         sql += "created_at, last_accessed_at, "
         sql += f"1 - (embedding <=> '{vec_literal}'::vector) AS similarity "
         sql += "FROM memory WHERE 1=1 "
         params: dict[str, Any] = {}
 
-        if namespace is not None:
-            tenant_id, _, kind = namespace
-            sql += "AND tenant_id = :tenant_id "
-            params["tenant_id"] = tenant_id
-            if kind:
-                sql += "AND kind = :kind "
-                params["kind"] = kind
+        if kind:
+            sql += "AND kind = :kind "
+            params["kind"] = kind
 
         if metadata_filter:
             import re
@@ -161,25 +115,29 @@ class MemoryStore:
         for row in rows:
             d = {
                 "id": str(row[0]),
-                "tenant_id": str(row[1]),
-                "session_id": str(row[2]) if row[2] else None,
-                "kind": row[3],
-                "content": row[4],
-                "metadata": row[5],
-                "importance": float(row[6]),
-                "created_at": str(row[7]) if row[7] else None,
-                "last_accessed_at": str(row[8]) if row[8] else None,
-                "similarity": float(row[9]),
+                "session_id": str(row[1]) if row[1] else None,
+                "kind": row[2],
+                "content": row[3],
+                "metadata": row[4],
+                "importance": float(row[5]),
+                "created_at": str(row[6]) if row[6] else None,
+                "last_accessed_at": str(row[7]) if row[7] else None,
+                "similarity": float(row[8]),
             }
             output.append(d)
+
+        # Update last_accessed_at for retrieved memories
+        if rows:
+            ids = [str(r[0]) for r in rows]
+            update_sql = "UPDATE memory SET last_accessed_at = NOW() WHERE id = ANY(:ids)"
+            async with async_session() as session:
+                await session.execute(text(update_sql), {"ids": ids})
+                await session.commit()
+
         return output
 
-    async def delete(self, namespace: tuple[str, str, str], memory_id: uuid.UUID) -> bool:
-        """Delete a memory by ID.
-
-        Returns:
-            ``True`` if deleted, ``False`` if not found.
-        """
+    async def delete(self, memory_id: uuid.UUID) -> bool:
+        """Delete a memory by ID."""
         async with async_session() as session:
             repo = GenericRepository(session, Memory)
             deleted = await repo.delete(memory_id)
@@ -191,7 +149,6 @@ class MemoryStore:
     def _row_to_dict(row: Memory) -> dict[str, Any]:
         return {
             "id": str(row.id),
-            "tenant_id": str(row.tenant_id),
             "session_id": str(row.session_id) if row.session_id else None,
             "kind": row.kind,
             "content": row.content,

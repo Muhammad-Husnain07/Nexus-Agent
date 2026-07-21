@@ -41,7 +41,12 @@ async def finalize(
     results: list[dict[str, Any]] = state.get("tool_results", [])
     errors: list[str] = state.get("errors", [])
 
-    if errors and not results:
+    # If a final_response was already composed by a prior node (e.g.
+    # respond_without_tool), use it directly — skip recomposition.
+    existing_final: str | None = state.get("final_response")
+    if existing_final:
+        final = existing_final
+    elif errors and not results:
         final = "I encountered some issues:\n" + "\n".join(f"- {e}" for e in errors)
     elif results:
         tool_citations = json.dumps(
@@ -50,13 +55,26 @@ async def finalize(
                     "name": r.get("tool_name"),
                     "status": r.get("status"),
                     "data": r.get("data"),
+                    "error": r.get("error"),
                 }
                 for r in results
-                if r.get("status") == "success"
             ],
             indent=2,
         )
-        errors_summary = "\n".join(errors) if errors else "None"
+        # Collect errors from tool results that failed
+        tool_errors = [
+            r.get("error", "") or f"Tool '{r.get('tool_name')}' returned no data"
+            for r in results
+            if r.get("error") or r.get("data") is None
+        ]
+        errors_summary = "\n".join(errors + tool_errors) if (errors or tool_errors) else "None"
+
+        reflection_feedback = state.get("reflection_feedback", "") or ""
+        reflection_context = (
+            f"<improvement_feedback>\n{reflection_feedback}\n</improvement_feedback>\n\n"
+            if reflection_feedback
+            else ""
+        )
 
         user_prompt = prompt_manager.render(
             "finalize",
@@ -64,6 +82,8 @@ async def finalize(
             tool_citations=tool_citations,
             errors_summary=errors_summary,
         )
+        if reflection_context:
+            user_prompt = reflection_context + user_prompt
 
         response = await llm.complete(
             model=model,
@@ -76,17 +96,15 @@ async def finalize(
 
     final_msg = _openai_message("assistant", final)
 
-    # Persist to long-term memory via MemoryManager
+    # Persist to long-term memory via MemoryManager (skip for non-tool interactions)
     mem_error: str | None = None
-    if session_factory:
+    if session_factory and state.get("response_type") == "tool":
         try:
             manager = MemoryManager(
                 store=MemoryStore(),
                 llm=llm,
             )
             await manager.extract_and_store(
-                tenant_id=state.get("tenant_id", ""),
-                user_id=state.get("user_id", ""),
                 session_id=state.get("session_id", ""),
                 agent_state=dict(state),
             )

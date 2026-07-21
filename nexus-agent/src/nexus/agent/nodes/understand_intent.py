@@ -46,6 +46,22 @@ async def understand_intent(
     if not last_user:
         return {"intent": None, "missing_info_slots": [], "_routing_decision": "finalize"}
 
+    # Build conversation context: original user query + last 8 messages
+    all_msgs = list(messages)
+    first_user = next(
+        (msg_content(m) for m in all_msgs if msg_role(m) == "user"),
+        "",
+    )
+    context_messages: list[dict[str, Any]] = []
+    if first_user:
+        context_messages.append({"role": "user", "content": first_user[:800]})
+    for m in all_msgs[-8:]:
+        role = msg_role(m)
+        if role in ("user", "assistant", "system", "tool"):
+            text = msg_content(m)[:500]
+            if text and text != first_user[:500]:
+                context_messages.append({"role": role, "content": text})
+
     gathered: dict[str, Any] = state.get("gathered_requirements", {})
     gathered_context = (
         f"\nAlready gathered information: {json.dumps(gathered)}\n"
@@ -53,27 +69,51 @@ async def understand_intent(
         else "\nNo information has been gathered yet.\n"
     )
 
-    _tmpl = prompt_manager.get("understand_intent", version="2.0")
+    _tmpl = prompt_manager.get("understand_intent", version="3.0")
     system_prompt = prompt_manager.render(
         "understand_intent",
-        version="2.0",
+        version="3.0",
         examples=_tmpl.metadata.get("few_shot", ""),
     )
     system_prompt = system_prompt.replace(
-        "**Output format (JSON):**",
-        f"{gathered_context}\n**Output format (JSON):**",
+        "<output_format>",
+        f"{gathered_context}\n<output_format>",
     )
+
+    # Inject relevant long-term memories into the system prompt
+    try:
+        from nexus.memory.manager import MemoryManager  # noqa: PLC0415
+        from nexus.memory.store import MemoryStore  # noqa: PLC0415
+        _memory_mgr = MemoryManager(store=MemoryStore(), llm=llm)
+        _memory_ctx = await _memory_mgr.retrieve_formatted(query=last_user)
+        if _memory_ctx:
+            system_prompt = _memory_ctx + "\n\n" + system_prompt
+    except Exception:
+        logger.warning("memory.injection_failed", exc_info=True)
+
+    # Inject reflection feedback when re-entering from a reflection revise
+    reflection_feedback = state.get("reflection_feedback", "") or ""
+    if reflection_feedback:
+        system_prompt = (
+            f"<previous_response_feedback>\n{reflection_feedback}\n"
+            f"</previous_response_feedback>\n\n{system_prompt}"
+        )
 
     response = await llm.complete(
         model=model,
         messages=[
             _openai_message("system", system_prompt),
+            *context_messages,
             _openai_message("user", last_user),
         ],
         temperature=0,
     )
 
     content = (response.content or "").strip()
+    # Try to extract JSON from a larger response (handle LLM preamble)
+    json_match = re.search(r"\{[\s\S]*\}", content)
+    if json_match:
+        content = json_match.group(0).strip()
     if content.startswith("```"):
         content = re.sub(r"^```[a-zA-Z]*\n?", "", content)
         content = re.sub(r"\n```$", "", content)
@@ -126,7 +166,23 @@ async def understand_intent(
 
     new_messages.append(_openai_message("assistant", f"Parsed intent: {analysis.primary_goal}"))
 
-    # Low-confidence routing
+    # Determine response type from the analysis
+    response_type = analysis.response_type if hasattr(analysis, "response_type") else "tool"
+    needs_tool = analysis.needs_tool if hasattr(analysis, "needs_tool") else True
+
+    # Non-tool queries (greeting, meta, memory) route to respond_without_tool
+    # regardless of confidence — these don't need tool discovery
+    if not needs_tool:
+        return {
+            "messages": new_messages,
+            "intent": intent_dict,
+            "missing_info_slots": missing_slot_names,
+            "intent_analysis": analysis.model_dump(mode="json"),
+            "response_type": response_type,
+            "iteration_count": state.get("iteration_count", 0) + 1,
+            "gathered_requirements": gathered,
+        }
+
     if analysis.confidence < 0.5:
         meta_question = (
             f"I'm not entirely sure I understand. "
@@ -142,6 +198,7 @@ async def understand_intent(
             "missing_info_slots": missing_slot_names,
             "intent_analysis": analysis.model_dump(mode="json"),
             "final_response": meta_question,
+            "response_type": "tool",
             "iteration_count": state.get("iteration_count", 0) + 1,
             "gathered_requirements": gathered,
             "_routing_decision": "ask",
@@ -152,6 +209,7 @@ async def understand_intent(
         "intent": intent_dict,
         "missing_info_slots": missing_slot_names,
         "intent_analysis": analysis.model_dump(mode="json"),
+        "response_type": "tool",
         "iteration_count": state.get("iteration_count", 0) + 1,
         "gathered_requirements": gathered,
     }

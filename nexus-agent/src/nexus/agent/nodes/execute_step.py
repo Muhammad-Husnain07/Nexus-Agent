@@ -57,48 +57,155 @@ def _tool_to_openai_schema(tool: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _get_nested(data: Any, path: str) -> Any:
+    """Traverse a nested dict/array using dot-separated path.
+    When the exact path fails, strips leading 'result.' prefix and retries
+    (handles LLM paths like 'result.longitude' when data has 'results[0].longitude')."""
+    paths_to_try = [path]
+    # Also try without "result." prefix (LLM often uses result.field but data stores at top level)
+    if path.startswith("result."):
+        paths_to_try.append(path[7:])
+
+    for p in paths_to_try:
+        current = data
+        parts = p.split(".")
+        found = True
+        for part in parts:
+            if isinstance(current, dict) and part in current:
+                current = current[part]
+            elif isinstance(current, list) and part.isdigit():
+                idx = int(part)
+                if 0 <= idx < len(current):
+                    current = current[idx]
+                else:
+                    found = False
+                    break
+            elif isinstance(current, list):
+                matched = None
+                for item in current:
+                    if isinstance(item, dict) and part in item:
+                        matched = item[part]
+                        break
+                if matched is not None:
+                    current = matched
+                else:
+                    found = False
+                    break
+            else:
+                found = False
+                break
+        if found:
+            return current
+    return None
+
+
 def _resolve_placeholders(
     raw_inputs: dict[str, Any],
     gathered: dict[str, Any],
     tool_results: list[dict[str, Any]],
     user_context: dict[str, Any] | None = None,
+    plan_steps: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Resolve ``${...}`` placeholders in step inputs."""
+    """Resolve ``${...}`` placeholders in step inputs.
 
-    def _resolve(val: str) -> str:
-        def _replacer(match: re.Match) -> str:
-            key = match.group(1)
-            # Try gathered_requirements first
-            if key in gathered:
-                return str(gathered[key])
-            # Try user.* placeholders
-            if key.startswith("user.") and user_context:
-                user_key = key[5:]
-                if user_key in user_context:
-                    return str(user_context[user_key])
-            # Try dot-notation for nested access from tool results
-            parts = key.split(".", 1)
-            if len(parts) == 2:
-                prefix, suffix = parts
-                for r in tool_results:
-                    r_tool = r.get("tool_name", "")
-                    if prefix == r_tool or prefix == r.get("tool_call_id", ""):
-                        data = r.get("data", {})
-                        if isinstance(data, dict) and suffix in data:
-                            return str(data[suffix])
-            return f"${{{key}}}"  # Keep as literal if not resolved
+    Supports:
+      - ``${step_X.result}`` — the full data from the tool result of step X
+      - ``${step_X.result.field.nested}`` — deep access into result data
+      - ``${tool_name.field}`` — result from the most recent tool execution
+      - ``${gathered.field}`` — gathered requirements
+      - ``${user.field}`` — user context
+    """
 
-        return _PLACEHOLDER_RE.sub(_replacer, val)
+    def _find_tool_result(prefix: str) -> dict[str, Any] | None:
+        """Find the LATEST tool result by tool name, step ID, or step index."""
+        # Build a reverse-chronological list so first match = most recent
+        reversed_results = list(reversed(tool_results))
 
-    resolved: dict[str, Any] = {}
-    for k, v in raw_inputs.items():
-        if isinstance(v, str):
-            resolved[k] = _resolve(v)
-        elif isinstance(v, dict):
-            resolved[k] = {sk: _resolve(sv) if isinstance(sv, str) else sv for sk, sv in v.items()}
-        else:
-            resolved[k] = v
-    return resolved
+        # Try exact tool name match (most recent first)
+        for r in reversed_results:
+            if r.get("tool_name") == prefix:
+                return r
+
+        # Try step ID match (step_1, step_2, etc.) using plan_steps
+        if plan_steps and prefix.startswith("step_"):
+            try:
+                step_idx = int(prefix.split("_")[1]) - 1
+                if 0 <= step_idx < len(plan_steps):
+                    target_tool = plan_steps[step_idx].get("tool_name")
+                    if target_tool:
+                        for r in reversed_results:
+                            if r.get("tool_name") == target_tool:
+                                return r
+            except (ValueError, IndexError):
+                pass
+
+        # Try tool_call_id match
+        for r in reversed_results:
+            if r.get("tool_call_id") == prefix:
+                return r
+        return None
+
+    def _replacer(match: re.Match) -> str:
+        key = match.group(1)
+
+        # Try gathered_requirements first
+        if key.startswith("gathered."):
+            sub = key[9:]
+            val = _get_nested(gathered, sub)
+            if val is not None:
+                return str(val)
+
+        if key in gathered:
+            return str(gathered[key])
+
+        # Try user.* placeholders
+        if key.startswith("user.") and user_context:
+            val = _get_nested(user_context, key[5:])
+            if val is not None:
+                return str(val)
+
+        # Try tool result references: tool_name.field or step_X.result.nested
+        if "." in key:
+            prefix, _, rest = key.partition(".")
+            if rest:
+                result = _find_tool_result(prefix)
+                if result:
+                    data = result.get("data", {})
+                    # Special case: "${step_X.result}" returns full data as JSON
+                    if rest == "result":
+                        if isinstance(data, dict) and data:
+                            return json.dumps(data)
+                        return str(data)
+                    # Try nested access into data
+                    val = _get_nested(data, rest)
+                    if val is not None:
+                        return str(val)
+                    # If nested path fails (e.g. "result.longitude" but data has "results[0].longitude"),
+                    # return the full data JSON so the LLM can retry with proper field names
+                    if isinstance(data, dict) and data:
+                        return json.dumps(data)
+
+        # Try bare prefix as tool name (get full result data)
+        result = _find_tool_result(key)
+        if result:
+            data = result.get("data", {})
+            if isinstance(data, dict) and data:
+                return json.dumps(data)
+            return str(data)
+
+        return f"<<unresolved:{key}>>"
+
+    def _resolve_value(val: Any) -> Any:
+        """Recursively resolve placeholders at ANY nesting depth (dicts, lists, strings)."""
+        if isinstance(val, str):
+            return _PLACEHOLDER_RE.sub(_replacer, val)
+        if isinstance(val, dict):
+            return {k: _resolve_value(v) for k, v in val.items()}
+        if isinstance(val, list):
+            return [_resolve_value(item) for item in val]
+        return val
+
+    return {k: _resolve_value(v) for k, v in raw_inputs.items()}
 
 
 def _validate_inputs(
@@ -156,23 +263,61 @@ async def execute_step(  # noqa: PLR0912, PLR0913, PLR0915
         }
 
     sub_iterations: int = 0
+    retry_count: int = 0  # track consecutive retries to prevent infinite loops
     messages: list[dict[str, Any]] = list(state.get("messages", []))
     new_messages: list[dict[str, Any]] = []
     tool_results: list[dict[str, Any]] = list(state.get("tool_results", []))
     errors: list[str] = list(state.get("errors", []))
 
-    system_content = prompt_manager.render("execute_step", additional_context="")
-    tool_descriptions = [
-        {"name": t["name"], "description": t.get("description", "")} for t in tools
-    ]
-    if tool_descriptions:
-        system_content += "\n\nAvailable tools:\n" + json.dumps(tool_descriptions, indent=2)
+    tool_desc_list = [{"name": t["name"], "description": t.get("description", "")} for t in tools]
+    tool_descriptions = json.dumps(tool_desc_list, indent=2) if tool_desc_list else "No tools available."
+    system_content = prompt_manager.render("execute_step", version="2.0", tool_descriptions=tool_descriptions, additional_context="")
+
+    # Inject relevant long-term memories into system prompt
+    try:
+        from nexus.memory.manager import MemoryManager  # noqa: PLC0415
+        from nexus.memory.store import MemoryStore  # noqa: PLC0415
+        memory_manager = MemoryManager(store=MemoryStore(), llm=llm)
+        step_description = step.get("description", "")
+        memory_context = await memory_manager.retrieve_formatted(query=step_description)
+        if memory_context:
+            system_content = memory_context + "\n\n" + system_content
+            logger.info("memory.injected_into_execute_step", context_len=len(memory_context))
+    except Exception:
+        logger.warning("memory.injection_failed", exc_info=True)
 
     # Resolve placeholders in step inputs
     gathered: dict[str, Any] = state.get("gathered_requirements", {})
     user_context: dict[str, Any] = state.get("user_context", {})
+    plan_steps: list[dict[str, Any]] = list(state.get("plan") or [])
     step_inputs_raw: dict[str, Any] = step.get("inputs") or {}
-    step_inputs = _resolve_placeholders(step_inputs_raw, gathered, tool_results, user_context)
+    step_inputs = _resolve_placeholders(step_inputs_raw, gathered, tool_results, user_context, plan_steps)
+
+    # Auto-map resolved JSON values to schema fields
+    tool_name = step.get("tool_name")
+    if tool_name and tool_name in tool_map:
+        schema = tool_map[tool_name].get("input_schema", {})
+        required = schema.get("required", [])
+        if required:
+            for field in required:
+                if field not in step_inputs or not step_inputs.get(field):
+                    for k, v in list(step_inputs.items()):
+                        if isinstance(v, str):
+                            try:
+                                parsed = json.loads(v)
+                                if isinstance(parsed, dict):
+                                    # Try to extract the required field from nested data
+                                    if field in parsed:
+                                        step_inputs[field] = parsed[field]
+                                    # Also check for results array (geocoding API format)
+                                    results_list = parsed.get("results") or parsed.get("data", {}).get("results") or []
+                                    if isinstance(results_list, list) and results_list:
+                                        for item in results_list:
+                                            if isinstance(item, dict) and field in item:
+                                                step_inputs[field] = item[field]
+                                                break
+                            except (json.JSONDecodeError, TypeError):
+                                pass
 
     current_messages: list[dict[str, Any]] = [
         _openai_message("system", system_content),
@@ -225,6 +370,18 @@ async def execute_step(  # noqa: PLR0912, PLR0913, PLR0915
                     )
                     continue
 
+                # Override LLM's arguments with resolved step_inputs when they contain placeholders
+                # This ensures correct field values even when the LLM re-uses plan placeholders
+                for arg_key, arg_val in list(func_args.items()):
+                    if isinstance(arg_val, str) and ("${" in arg_val or "<<unresolved:" in arg_val):
+                        if arg_key in step_inputs:
+                            func_args[arg_key] = step_inputs[arg_key]
+                        elif arg_key == "coordinates" and "latitude" in step_inputs:
+                            # Special case: LLM uses "coordinates" but schema needs lat/lon
+                            func_args["latitude"] = step_inputs.get("latitude")
+                            func_args["longitude"] = step_inputs.get("longitude")
+                            func_args.pop("coordinates", None)
+
                 # Validate resolved inputs before execution (1 correction retry)
                 input_schema = tool_def.get("input_schema")
                 validation_error = _validate_inputs(func_args, input_schema)
@@ -254,17 +411,22 @@ async def execute_step(  # noqa: PLR0912, PLR0913, PLR0915
                         pass
 
                     if validation_error:
-                        errors.append(
-                            f"Input validation failed for '{func_name}': {validation_error}"
-                        )
-                        current_messages.append(
-                            _openai_message(
-                                "tool",
-                                content=f"Validation error: {validation_error}",
-                                tool_call_id=tc.get("id", ""),
-                            )
-                        )
-                        continue
+                        # Check if unresolved placeholders are the cause
+                        raw_str = json.dumps(func_args)
+                        if "<<unresolved:" in raw_str:
+                            err_msg = f"Input placeholder could not be resolved for '{func_name}'. The plan needs revision: the step references results that don't exist or have wrong field names."
+                        else:
+                            err_msg = f"Input validation failed for '{func_name}': {validation_error}"
+                        errors.append(err_msg)
+                        step["status"] = "failed"
+                        plan_list = list(state.get("plan") or [])
+                        plan_list[state["current_step_index"]] = step
+                        return {
+                            "plan": plan_list,
+                            "tool_results": tool_results,
+                            "errors": errors,
+                            "_routing_decision": "revise",
+                        }
 
                 if event_bus:
                     await event_bus.publish(
@@ -274,8 +436,6 @@ async def execute_step(  # noqa: PLR0912, PLR0913, PLR0915
 
                 tool_read = ToolRead(**tool_def)
                 ctx = ExecutionContext(
-                    tenant_id=uuid.UUID(state["tenant_id"]),
-                    user_id=uuid.UUID(state["user_id"]),
                     session_id=uuid.UUID(state["session_id"]),
                 )
 
@@ -344,6 +504,24 @@ async def execute_step(  # noqa: PLR0912, PLR0913, PLR0915
                         recovery = json.loads(recovery_response.content or "{}")
                         recovery_action = recovery.get("action", "ask")
                         if recovery_action == "retry":
+                            retry_count += 1
+                            if retry_count >= 3:
+                                # Too many retries — escalate to revise
+                                errors.append(f"Tool '{func_name}' failed after {retry_count} retries")
+                                step["status"] = "failed"
+                                plan_list = list(state.get("plan") or [])
+                                plan_list[state["current_step_index"]] = step
+                                result_dict = result.model_dump(mode="json")
+                                tool_results.append(result_dict)
+                                return {
+                                    "plan": plan_list,
+                                    "tool_results": tool_results,
+                                    "errors": errors,
+                                    "scratchpad": state.get("scratchpad", ""),
+                                    "iteration_count": state.get("iteration_count", 0) + 1,
+                                    "_routing_decision": "revise",
+                                    "pending_approval": None,
+                                }
                             modified = recovery.get("modified_inputs", func_args)
                             func_args = modified
                             continue  # retry the current iteration

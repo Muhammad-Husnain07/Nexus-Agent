@@ -1,18 +1,15 @@
 """LangGraph StateGraph — hybrid ReAct + Plan-and-Execute orchestration.
 
-Nodes
------
+Nodes (parent graph):
 * ``understand_intent`` — parse user message into structured intent
 * ``gather_requirements`` — ask clarifying questions when info is missing
-* ``discover_tools`` — find relevant tools via ``DynamicToolSelector``
-* ``plan`` — generate a step-by-step plan via LLM structured output
-* ``select_and_bind_tools`` — pre-filter tools for the current plan step
-* ``execute_step`` — ReAct micro-loop for the current plan step
-* ``present_preview`` — interrupt for human feedback on intermediate results
-* ``analyze_results`` — review results and decide next action
+* ``respond_without_tool`` — direct responses for non-tool queries
+* ``tool_subgraph`` — DAG-based parallel tool execution subgraph
 * ``finalize`` — compose the final answer
+* ``review_final_answer`` — interrupt for final approval
+* ``reflect_on_response`` — self-score and improve the response
 
-All node implementations live in ``nodes/`` modules.
+Tool execution lives in ``tool_subgraph`` (see ``tool_subgraph.py``).
 """
 
 from __future__ import annotations
@@ -25,17 +22,15 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 
 from nexus.agent.nodes import (
-    analyze_results,
-    discover_tools,
-    execute_step,
     finalize,
     gather_requirements,
-    plan,
-    present_preview,
-    select_and_bind_tools,
+    reflect_on_response,
+    respond_without_tool,
+    review_final_answer,
     understand_intent,
 )
 from nexus.agent.state import AgentState
+from nexus.agent.tool_subgraph import build_tool_subgraph
 from nexus.config.settings import get_settings
 from nexus.llm.client import LLMClient
 from nexus.redis_client.pubsub import EventBus
@@ -49,22 +44,30 @@ from nexus.tools.executor import ToolExecutor
 
 
 def route_after_understand(state: AgentState) -> str:
-    """If missing_info_slots is non-empty, ask clarifying questions."""
+    """Route based on response type and missing info.
+
+    Priority:
+    1. Non-tool queries (greeting/meta/memory) → respond_without_tool
+    2. Missing info slots → gather_requirements (clarify)
+    3. Tool queries → discover_tools
+    """
+    resp_type: str = state.get("response_type", "tool")
+    if resp_type in ("greeting", "meta", "memory_query"):
+        return "respond_without_tool"
     missing: list[str] = state.get("missing_info_slots") or []
     if missing:
         return "gather_requirements"
     return "discover_tools"
 
 
-def route_after_analyze(state: AgentState) -> str:
-    """Route to the next node based on the analyzer's decision."""
+def route_after_reflection(state: AgentState) -> str:
+    """Route based on reflection decision or max rounds reached."""
     decision: str = state.get("_routing_decision", "finalize")
-    max_iter: int = get_settings().agent.max_iterations
-    if state.get("iteration_count", 0) >= max_iter:
-        return "finalize"
-    if decision == "preview" and not get_settings().agent.skip_preview:
-        return "present_preview"
-    return decision if decision == "continue" else "finalize"
+    if decision == "clarify":
+        return "clarify"
+    if decision in ("revise_finalize", "revise"):
+        return decision
+    return "finalize"
 
 
 # ---------------------------------------------------------------------------
@@ -110,56 +113,78 @@ def build_agent_graph(  # noqa: PLR0913
 
     graph = StateGraph(AgentState)
 
-    graph.add_node("understand_intent", _node(understand_intent, _llm, _model))
-    graph.add_node("gather_requirements", _node(gather_requirements, _llm, _model))
-    graph.add_node("discover_tools", _node(discover_tools, tool_selector, session_factory))
-    graph.add_node("plan", _node(plan, _llm, _model, _settings))
-    graph.add_node("select_and_bind_tools", _node(select_and_bind_tools))
-    graph.add_node(
-        "execute_step",
-        _node(execute_step, _llm, tool_executor, _model, _settings, event_bus, session_factory),
+    # Build the tool execution subgraph
+    tool_subgraph = build_tool_subgraph(
+        tool_selector=tool_selector,
+        tool_executor=tool_executor,
+        llm_client=_llm,
+        model=_model,
+        settings=_settings,
+        event_bus=event_bus,
+        session_factory=session_factory,
     )
-    graph.add_node("present_preview", _node(present_preview))
-    graph.add_node("analyze_results", _node(analyze_results, _llm, _model))
-    graph.add_node("finalize", _node(finalize, _llm, _model))
+    graph.add_node("tool_subgraph", tool_subgraph)
+
+    graph.add_node("understand_intent", _node(understand_intent, _llm, _model))
+    graph.add_node("respond_without_tool", _node(respond_without_tool, _llm, _model))
+    graph.add_node("gather_requirements", _node(gather_requirements, _llm, _model))
+    graph.add_node("finalize", _node(finalize, _llm, _model, session_factory))
+    graph.add_node("review_final_answer", _node(review_final_answer))
+    graph.add_node("reflect_on_response", _node(reflect_on_response, _llm, _model))
 
     graph.set_entry_point("understand_intent")
 
     graph.add_conditional_edges(
         "understand_intent",
         route_after_understand,
-        {"gather_requirements": "gather_requirements", "discover_tools": "discover_tools"},
-    )
-
-    graph.add_edge("gather_requirements", END)
-    graph.add_edge("discover_tools", "plan")
-    graph.add_edge("plan", "select_and_bind_tools")
-    graph.add_edge("select_and_bind_tools", "execute_step")
-    graph.add_edge("execute_step", "analyze_results")
-
-    graph.add_conditional_edges(
-        "analyze_results",
-        route_after_analyze,
         {
-            "continue": "select_and_bind_tools",
-            "revise": "plan",
-            "ask": "gather_requirements",
-            "preview": "present_preview",
-            "finalize": "finalize",
+            "respond_without_tool": "respond_without_tool",
+            "gather_requirements": "gather_requirements",
+            "discover_tools": "tool_subgraph",
         },
     )
 
+    graph.add_edge("respond_without_tool", "finalize")
+    graph.add_edge("gather_requirements", END)
+
+    # Conditional routing after tool subgraph exits
+    def route_after_tool_subgraph(state: AgentState) -> str:
+        decision: str = state.get("_routing_decision", "finalize")
+        if decision == "ask":
+            return "gather_requirements"
+        return "finalize"
+
     graph.add_conditional_edges(
-        "present_preview",
+        "tool_subgraph",
+        route_after_tool_subgraph,
+        {
+            "finalize": "finalize",
+            "gather_requirements": "gather_requirements",
+        },
+    )
+
+    graph.add_edge("finalize", "review_final_answer")
+
+    graph.add_conditional_edges(
+        "review_final_answer",
         lambda s: s.get("_routing_decision", "continue"),
         {
-            "continue": "select_and_bind_tools",
-            "revise": "select_and_bind_tools",
-            "finalize": "finalize",
+            "continue": "reflect_on_response",
+            "revise": "understand_intent",
+            "finalize": END,
         },
     )
 
-    graph.add_edge("finalize", END)
+    graph.add_conditional_edges(
+        "reflect_on_response",
+        route_after_reflection,
+        {
+            "revise_finalize": "finalize",
+            "revise": "understand_intent",
+            "clarify": "gather_requirements",
+            "finalize": END,
+        },
+    )
 
     _cp = checkpointer or MemorySaver()
     return graph.compile(checkpointer=_cp)

@@ -1,9 +1,4 @@
-"""FastAPI router for /api/v1/approvals — structured HITL approval management.
-
-Provides endpoints for listing pending approvals, deciding on them, and
-checking approval status — all backed by the ``Approval`` table and the
-shared in-memory graph cache.
-"""
+"""FastAPI router for /api/v1/approvals — structured HITL approval management."""
 
 from __future__ import annotations
 
@@ -11,17 +6,20 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import json as json_module
+
 import structlog
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from langgraph.types import Command
+from sse_starlette.sse import EventSourceResponse
 
 from nexus.agent.graph import build_agent_graph
+from nexus.agent.runner import AgentEvent
 from nexus.agent.schemas import ApprovalAction
 from nexus.config.settings import get_settings
 from nexus.db.base import async_session
-from nexus.db.context import get_tenant
 from nexus.db.models.agent_run import Approval
-from nexus.db.repositories.base import GenericRepository, GenericRepository
+from nexus.db.repositories.base import GenericRepository
 from nexus.llm.client import LLMClient
 from nexus.redis_client.client import get_redis_client
 from nexus.redis_client.pubsub import EventBus
@@ -36,7 +34,7 @@ router = APIRouter(prefix="/approvals", tags=["approvals"])
 
 
 def _build_graph_from_request(request: Request) -> Any:
-    """Build a fresh compiled graph (stateless — state is in the Postgres checkpointer)."""
+    """Build a fresh compiled graph."""
     settings = get_settings()
     tool_registry: ToolRegistry = request.app.state.tool_registry
 
@@ -64,15 +62,33 @@ def _build_graph_from_request(request: Request) -> Any:
     )
 
 
+async def _resume_generator(
+    graph: Any,
+    config: dict[str, Any],
+    resume_value: dict[str, Any],
+) -> Any:
+    """Yield SSE events from a resumed graph execution."""
+    try:
+        async for event in graph.astream(
+            Command(resume=resume_value),
+            config,
+            stream_mode="updates",
+        ):
+            if isinstance(event, AgentEvent):
+                yield {"event": event.type, "data": json_module.dumps(event.to_dict())}
+            else:
+                yield {"event": "update", "data": json_module.dumps(event) if isinstance(event, dict) else str(event)}
+    except Exception as exc:
+        logger.error("approvals.resume_stream_error", error=str(exc))
+        yield {"event": "error", "data": json_module.dumps({"message": "Failed to resume agent execution"})}
+    yield {"event": "done", "data": "{}"}
+
+
 @router.get("/pending/{session_id}")
 async def list_pending_approvals(
     session_id: uuid.UUID,
 ) -> list[dict[str, Any]]:
-    """Return all pending (not-yet-decided) approvals for *session_id*.
-
-    Expired approvals (older than ``approval_timeout_hours``) are
-    auto-rejected before being returned.
-    """
+    """Return all pending approvals for a session."""
     settings = get_settings().agent
     timeout_hours = settings.approval_timeout_hours
     cutoff = datetime.now(UTC) - timedelta(hours=timeout_hours)
@@ -81,16 +97,20 @@ async def list_pending_approvals(
         repo = GenericRepository(session, Approval)
         all_pending: list[Approval] = await repo.find(status="pending")
 
-    # Filter by session_id (the Approval model doesn't have a direct FK to
-    # session, so we check via the agent_run relationship or tool_call payload)
     session_pending: list[dict[str, Any]] = []
     auto_rejected: list[str] = []
     for approval in all_pending:
-        tool_call = approval.tool_call or {}
-        if tool_call.get("session_id") != str(session_id):
+        # Generic interrupt types store session_id in interrupt_payload
+        payload = approval.interrupt_payload or {}
+        tc = approval.tool_call or {}
+        approval_session_id = (
+            tc.get("session_id")
+            or payload.get("session_id")
+            or payload.get("config", {}).get("configurable", {}).get("thread_id")
+        )
+        if approval_session_id != str(session_id):
             continue
 
-        # Auto-reject expired approvals
         if approval.created_at and approval.created_at < cutoff:
             auto_rejected.append(str(approval.id))
             async with async_session() as update_session:
@@ -108,7 +128,9 @@ async def list_pending_approvals(
             {
                 "id": str(approval.id),
                 "agent_run_id": str(approval.agent_run_id),
+                "interrupt_type": approval.interrupt_type,
                 "tool_call": approval.tool_call,
+                "interrupt_payload": approval.interrupt_payload,
                 "status": approval.status,
                 "created_at": approval.created_at.isoformat() if approval.created_at else None,
             }
@@ -120,28 +142,22 @@ async def list_pending_approvals(
     return session_pending
 
 
-@router.get(
-    "/pending",
-)
+@router.get("/pending")
 async def list_global_pending_approvals() -> list[dict[str, Any]]:
-    """List ALL pending approvals for the caller's tenant, newest first."""
-    tenant_id = get_tenant()
-    if tenant_id is None:
-        raise HTTPException(status_code=403, detail="No tenant context")
-
+    """List ALL pending approvals, newest first."""
     async with async_session() as session:
         repo = GenericRepository(session, Approval)
         all_pending = await repo.find(status="pending")
 
     result: list[dict[str, Any]] = []
     for approval in all_pending:
-        if approval.tenant_id != tenant_id:
-            continue
         tc = approval.tool_call or {}
         result.append({
             "id": str(approval.id),
             "agent_run_id": str(approval.agent_run_id),
+            "interrupt_type": approval.interrupt_type,
             "tool_call": tc,
+            "interrupt_payload": approval.interrupt_payload,
             "status": approval.status,
             "created_at": approval.created_at.isoformat() if approval.created_at else None,
         })
@@ -150,9 +166,7 @@ async def list_global_pending_approvals() -> list[dict[str, Any]]:
     return result
 
 
-@router.get(
-    "/{approval_id}",
-)
+@router.get("/{approval_id}")
 async def get_approval(
     approval_id: uuid.UUID,
 ) -> dict[str, Any]:
@@ -164,15 +178,12 @@ async def get_approval(
     if approval is None:
         raise HTTPException(status_code=404, detail="Approval not found")
 
-        # already scoped the query
-    tenant_id = get_tenant()
-    if tenant_id is not None and approval.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Approval not found")
-
     return {
         "id": str(approval.id),
         "agent_run_id": str(approval.agent_run_id),
+        "interrupt_type": approval.interrupt_type,
         "tool_call": approval.tool_call,
+        "interrupt_payload": approval.interrupt_payload,
         "status": approval.status,
         "created_at": approval.created_at.isoformat() if approval.created_at else None,
         "decided_at": approval.decided_at.isoformat() if approval.decided_at else None,
@@ -180,22 +191,19 @@ async def get_approval(
     }
 
 
-@router.post(
-    "/{approval_id}/decide",
-)
+@router.post("/{approval_id}/decide", response_model=None)
 async def decide_approval(
     approval_id: uuid.UUID,
     decision: ApprovalAction,
     request: Request,
-) -> dict[str, Any]:
+    stream: bool = Query(False, description="If true, returns SSE stream of resumed execution"),
+):
     """Make a decision on a pending approval and resume the agent graph.
 
-    The decision body is an ``ApprovalAction`` with the new shape:
-    - ``action``: ``"approve"`` | ``"reject"`` | ``"edit"``
-    - ``edited_inputs``: dict (required when action=edit)
-    - ``comment``: optional human comment
+    When ``stream=true``, returns an SSE stream with tool_call_completed,
+    final_response, and done events — same format as the chat endpoint.
+    When ``stream=false`` (default), consumes events silently and returns JSON.
     """
-    # Resolve action from backward-compat fields
     if decision.action is not None:
         decision_action = decision.action
         edited_inputs = decision.edited_inputs
@@ -209,7 +217,6 @@ async def decide_approval(
             detail="edited_inputs is required when action=edit",
         )
 
-    # Load and verify the approval record
     async with async_session() as session:
         repo = GenericRepository(session, Approval)
         approval = await repo.get(approval_id)
@@ -223,18 +230,15 @@ async def decide_approval(
                 detail=f"Approval is already {approval.status}",
             )
 
-        tenant_id = get_tenant()
-        if tenant_id is not None and approval.tenant_id != tenant_id:
-            raise HTTPException(
-                status_code=403,
-                detail="This approval does not belong to your tenant",
-            )
-
-        # Extract session_id from approval tool_call payload
         tool_call = approval.tool_call or {}
-        session_id = tool_call.get("session_id")
+        interrupt_payload = approval.interrupt_payload or {}
+        # Resolve session_id from tool_call (legacy) or interrupt_payload (generic)
+        session_id = (
+            tool_call.get("session_id")
+            or interrupt_payload.get("session_id")
+            or interrupt_payload.get("config", {}).get("configurable", {}).get("thread_id")
+        )
 
-        # Persist the decision
         resume_value: dict[str, Any] = {
             "action": decision_action,
             "edited_inputs": edited_inputs,
@@ -248,8 +252,17 @@ async def decide_approval(
         )
         await session.commit()
 
-    # Resume the graph via checkpointer (cross-worker safe, no in-memory cache)
-    if session_id:
+    if session_id and stream:
+        sid = str(session_id)
+        try:
+            graph = _build_graph_from_request(request)
+            config = {"configurable": {"thread_id": sid}}
+            return EventSourceResponse(_resume_generator(graph, config, resume_value))
+        except Exception as exc:
+            err_msg = f"Failed to resume agent: {exc}"
+            logger.error("approvals.resume_failed", approval_id=str(approval_id), error=err_msg)
+            raise HTTPException(status_code=500, detail=err_msg) from exc
+    elif session_id:
         sid = str(session_id)
         try:
             graph = _build_graph_from_request(request)
@@ -259,14 +272,11 @@ async def decide_approval(
                 config,
                 stream_mode="updates",
             ):
-                pass  # Consume all events
+                pass
         except Exception as exc:
             err_msg = f"Failed to resume agent: {exc}"
             logger.error("approvals.resume_failed", approval_id=str(approval_id), error=err_msg)
-            raise HTTPException(
-                status_code=500,
-                detail=err_msg,
-            ) from exc
+            raise HTTPException(status_code=500, detail=err_msg) from exc
 
     return {
         "status": "ok",

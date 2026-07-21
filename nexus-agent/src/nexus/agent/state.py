@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+from operator import add
 from typing import Annotated, Any, Literal, TypedDict
 
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
+
+
+def _merge_results(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    """Merge two dag_results dicts. Right takes precedence for overlapping keys."""
+    merged = dict(left)
+    merged.update(right)
+    return merged
 
 
 class PlanStep(BaseModel):
@@ -54,6 +62,11 @@ class MissingSlot(BaseModel):
     )
 
 
+RESPONSE_TYPES = Literal["tool", "greeting", "meta", "memory_query"]
+"""Supported response type categories — a query either needs a tool or can be
+answered directly via greeting / meta / memory-query."""
+
+
 class IntentAnalysis(BaseModel):
     """Structured analysis of user intent from the understand_intent node."""
 
@@ -64,7 +77,7 @@ class IntentAnalysis(BaseModel):
     missing_info_slots: list[MissingSlot] = Field(
         default_factory=list, description="Required information not yet provided"
     )
-    known_parameters: dict[str, str] = Field(
+    known_parameters: dict[str, Any] = Field(
         default_factory=dict, description="Parameter values already extracted from the user's message"
     )
     confidence: float = Field(
@@ -72,6 +85,14 @@ class IntentAnalysis(BaseModel):
     )
     urgency: Literal["low", "normal", "high"] = Field(
         default="normal", description="Perceived urgency"
+    )
+    needs_tool: bool = Field(
+        default=True,
+        description="Whether this query requires a tool invocation",
+    )
+    response_type: RESPONSE_TYPES = Field(
+        default="tool",
+        description="Category of response: tool, greeting, meta, or memory_query",
     )
 
 
@@ -95,9 +116,7 @@ class AgentState(TypedDict):
     """
 
     messages: Annotated[list, add_messages]
-    tenant_id: str
     session_id: str
-    user_id: str
     user_context: dict[str, Any]
     plan: list[dict[str, Any]] | None
     current_step_index: int
@@ -106,7 +125,7 @@ class AgentState(TypedDict):
     pending_approval: dict[str, Any] | None
     iteration_count: int
     scratchpad: str
-    tool_results: list[dict[str, Any]]
+    tool_results: Annotated[list[dict[str, Any]], add]
     final_response: str | None
     intent: dict[str, Any] | None
     missing_info_slots: list[str] | None
@@ -116,4 +135,11 @@ class AgentState(TypedDict):
     analysis_result: dict[str, Any] | None
     needs_human_review: bool
     questions_asked: int
+    response_type: str
+    reflection_score: float
+    reflection_feedback: str
+    reflection_count: int
+    dag_tasks: list[dict[str, Any]]
+    dag_results: Annotated[dict[str, Any], _merge_results]
+    dag_phase: str
     _routing_decision: str

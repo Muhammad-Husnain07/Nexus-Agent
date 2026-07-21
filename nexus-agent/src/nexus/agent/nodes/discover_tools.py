@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Callable
 from typing import Any
 
@@ -20,20 +19,12 @@ async def discover_tools(
     selector: DynamicToolSelector,
     session_factory: Callable[[], Any] | None = None,
 ) -> dict[str, Any]:
-    """Discover relevant tools for the user's intent.
-
-    Queries ``DynamicToolSelector`` with the parsed intent or the latest
-    user message, then stores the results in ``available_tools``.
-
-    Returns:
-        Dict with ``available_tools`` list of serialised ``ToolRead`` dicts.
-    """
-    tenant_id = uuid.UUID(state["tenant_id"])
+    """Discover relevant tools for the user's intent."""
     intent: dict[str, Any] = state.get("intent") or {}
     query: str = intent.get("intent", "") or msg_content(state.get("messages", [{}])[-1])
 
     session = session_factory() if session_factory else None
-    tools = await selector.select(session, tenant_id=tenant_id, message=query)
+    tools = await selector.select(session, message=query)
     tool_dicts: list[dict[str, Any]] = [t.model_dump(mode="json") for t in tools]
 
     logger.info("tools.discovered", count=len(tool_dicts), query=query[:50])

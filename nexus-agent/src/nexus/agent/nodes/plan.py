@@ -47,6 +47,7 @@ async def plan(
             {
                 "name": t["name"],
                 "description": t.get("description", ""),
+                "input_schema": t.get("input_schema", {}),
                 "requires_approval": t.get("requires_approval", False),
                 "risk_level": t.get("risk_level", "low"),
             }
@@ -76,7 +77,7 @@ async def plan(
 
     system_prompt = prompt_manager.render(
         "plan",
-        version="2.0",
+        version="3.0",
         tool_descriptions=tool_descriptions,
     )
 
