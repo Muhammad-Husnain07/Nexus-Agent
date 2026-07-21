@@ -1,13 +1,12 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import api from "../lib/api";
-import type { ToolDefinition, ToolCreatePayload } from "../types/tool";
-import type { PaginatedResponse } from "../types/common";
+import type { Tool, ToolList } from "../types/tool";
 
 export function useToolsList(params?: Record<string, unknown>) {
   return useQuery({
     queryKey: ["tools", params],
     queryFn: async () => {
-      const res = await api.get<PaginatedResponse<ToolDefinition>>("/tools", { params });
+      const res = await api.get<ToolList>("/tools", { params });
       return res.data;
     },
   });
@@ -17,7 +16,7 @@ export function useTool(id: string) {
   return useQuery({
     queryKey: ["tool", id],
     queryFn: async () => {
-      const res = await api.get<ToolDefinition>(`/tools/${id}`);
+      const res = await api.get<Tool>(`/tools/${id}`);
       return res.data;
     },
     enabled: !!id,
@@ -27,8 +26,8 @@ export function useTool(id: string) {
 export function useCreateTool() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (data: ToolCreatePayload) => {
-      const res = await api.post<ToolDefinition>("/tools", data);
+    mutationFn: async (data: Record<string, unknown>) => {
+      const res = await api.post<Tool>("/tools", data);
       return res.data;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["tools"] }),
@@ -38,8 +37,8 @@ export function useCreateTool() {
 export function useUpdateTool(id: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (data: Partial<ToolCreatePayload>) => {
-      const res = await api.put<ToolDefinition>(`/tools/${id}`, data);
+    mutationFn: async (data: Record<string, unknown>) => {
+      const res = await api.put<Tool>(`/tools/${id}`, data);
       return res.data;
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["tools"] }); qc.invalidateQueries({ queryKey: ["tool", id] }); },
