@@ -35,8 +35,6 @@ _RENAME_PROMPT = (
 def _session_to_read(session: SessionModel, message_count: int = 0) -> SessionRead:
     return SessionRead(
         id=session.id,
-        tenant_id=session.tenant_id,
-        user_id=session.user_id,
         title=session.title,
         status=session.status,
         metadata=session.metadata_ or {},
@@ -59,11 +57,7 @@ def _message_to_read(msg: MessageModel) -> MessageRead:
 
 
 class SessionService:
-    """Orchestrates session lifecycle, messaging, forking, and renaming.
-
-    Wraps ``SessionRepository`` and ``MessageRepository`` with business
-    logic for context window management and LLM-powered features.
-    """
+    """Orchestrates session lifecycle, messaging, forking, and renaming."""
 
     def __init__(
         self,
@@ -83,18 +77,15 @@ class SessionService:
 
     async def create_session(
         self,
-        tenant_id: uuid.UUID,
-        user_id: uuid.UUID,
         data: SessionCreate | None = None,
     ) -> SessionRead:
         title = data.title if data and data.title else "New Session"
         metadata_ = data.metadata_ if data else None
         session = await self._session_repo.create(
-            user_id=user_id,
             title=title,
             metadata_=metadata_,
         )
-        logger.info("session_created", session_id=str(session.id), user_id=str(user_id))
+        logger.info("session_created", session_id=str(session.id))
         return _session_to_read(session)
 
     async def get_session(self, session_id: uuid.UUID) -> SessionRead | None:
@@ -106,15 +97,11 @@ class SessionService:
 
     async def list_sessions(
         self,
-        tenant_id: uuid.UUID | None = None,
-        user_id: uuid.UUID | None = None,
         status: str | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> SessionList:
         items, total = await self._session_repo.list(
-            tenant_id=tenant_id,
-            user_id=user_id,
             status=status,
             page=page,
             page_size=page_size,
@@ -169,7 +156,6 @@ class SessionService:
         history_messages = list(messages[: cutoff_idx + 1])
 
         new_session = await self._session_repo.create(
-            user_id=source.user_id,
             title=new_title or f"Fork of {source.title}",
         )
 

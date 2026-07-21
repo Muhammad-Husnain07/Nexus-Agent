@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 class ToolSchema(BaseModel):
     """A tool definition matching the API's ToolCreate schema."""
 
-    name: str = Field(description="Unique tool name (per tenant)")
+    name: str = Field(description="Unique tool name")
     description: str = Field(default="", description="Human-readable description")
     purpose: str = Field(default="", description="What the tool does and when to use it")
     endpoint_url: str = Field(default="", description="API endpoint URL")
@@ -32,8 +32,6 @@ class SessionInfo(BaseModel):
     """Conversation session information."""
 
     id: uuid.UUID = Field(description="Session UUID")
-    tenant_id: uuid.UUID = Field(description="Tenant UUID")
-    user_id: uuid.UUID = Field(description="User UUID")
     title: str = Field(description="Session title")
     status: str = Field(description="active or archived")
     created_at: datetime = Field(description="Creation timestamp")

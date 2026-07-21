@@ -8,7 +8,6 @@ the multi-tenant isolation model.
 from __future__ import annotations
 
 import time
-import uuid
 from typing import Any
 
 from redis.asyncio import Redis
@@ -80,15 +79,6 @@ class RateLimitError(Exception):
         self.retry_after_s = retry_after_s
         super().__init__(f"Rate limit exceeded for key '{key}'")
 
-
-def tenant_key(tenant_id: str | uuid.UUID, feature: str) -> str:
-    """Build a per-tenant rate-limit key."""
-    return f"rl:tenant:{tenant_id}:{feature}"
-
-
-def user_key(tenant_id: str | uuid.UUID, user_id: str | uuid.UUID, feature: str) -> str:
-    """Build a per-user (scoped within tenant) rate-limit key."""
-    return f"rl:tenant:{tenant_id}:user:{user_id}:{feature}"
 
 
 class SlidingWindowRateLimiter:

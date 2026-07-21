@@ -26,6 +26,8 @@ if sys.platform == "win32" and hasattr(asyncio, "WindowsSelectorEventLoopPolicy"
 
 import asyncpg
 import httpx
+import logging as stdlib_logging
+
 import structlog
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,9 +41,6 @@ from nexus.config.settings import get_settings
 from nexus.errors import ErrorHandlerMiddleware
 from nexus.llm.provider import ProviderRegistry
 from nexus.middleware.auth import AuthMiddleware
-from nexus.middleware.tenant import TenantMiddleware
-from nexus.observability.logging import setup_logging
-from nexus.observability.tracing import setup_tracing
 from nexus.redis_client.client import close_redis, init_redis, redis_health_check
 from nexus.security.rate_limit import TieredRateLimitMiddleware
 from nexus.tools.mcp_server import setup_mcp
@@ -136,8 +135,33 @@ class DrainMiddleware(BaseHTTPMiddleware):
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Initialize services on startup, tear down on shutdown."""
     settings = get_settings()
-    setup_logging(settings)
-    setup_tracing(settings)
+
+    # Configure structlog logging
+    level = getattr(stdlib_logging, settings.observability.log_level.upper(), stdlib_logging.INFO)
+    stdlib_logging.basicConfig(level=level, format="%(message)s", stream=sys.stdout, force=True)
+    renderer = (
+        structlog.processors.JSONRenderer()
+        if settings.observability.log_format == "json"
+        else structlog.dev.ConsoleRenderer()
+    )
+    structlog.configure(
+        processors=[
+            structlog.stdlib.filter_by_level,
+            structlog.stdlib.add_logger_name,
+            structlog.stdlib.add_log_level,
+            structlog.stdlib.PositionalArgumentsFormatter(),
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.StackInfoRenderer(),
+            structlog.processors.format_exc_info,
+            renderer,
+        ],
+        wrapper_class=structlog.stdlib.BoundLogger,
+        context_class=dict,
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        cache_logger_on_first_use=True,
+    )
+    stdlib_logging.captureWarnings(True)
+
     await init_redis()
     ProviderRegistry.init()
     tool_registry = ToolRegistry()
@@ -299,7 +323,6 @@ def create_app() -> FastAPI:
 
     app.add_middleware(RequestIDMiddleware)
     app.add_middleware(LoggingMiddleware)
-    app.add_middleware(TenantMiddleware)
     app.add_middleware(TieredRateLimitMiddleware)
     app.add_middleware(AuthMiddleware)
     app.add_middleware(ErrorHandlerMiddleware)
@@ -322,10 +345,6 @@ def create_app() -> FastAPI:
 
     # ── Routers ───────────────────────────────────────────────────────────
     app.include_router(router, prefix="/api/v1")
-
-    from nexus.observability.metrics import router as metrics_router
-
-    app.include_router(metrics_router)
 
     # ── OpenAPI auth schemes ──────────────────────────────────────────────
     # Set after app creation to avoid FastAPI inspecting during init

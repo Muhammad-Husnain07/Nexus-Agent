@@ -1,5 +1,8 @@
 """End-to-end test of the agent with tool calling."""
-import json, urllib.request, uuid, sys
+import json
+import urllib.request
+import uuid
+import sys
 
 sid = str(uuid.uuid4())
 print(f"Session: {sid}")

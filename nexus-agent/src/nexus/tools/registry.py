@@ -44,7 +44,6 @@ EMBEDDING_MODEL: str = get_settings().llm.embedding_model
 def _tool_to_read(tool: Tool) -> ToolRead:
     return ToolRead(
         id=tool.id,
-        tenant_id=tool.tenant_id,
         name=tool.name,
         description=tool.description or "",
         purpose=tool.purpose or "",
@@ -80,11 +79,7 @@ def _embedding_text(tool: ToolCreate | Tool) -> str:
 
 
 class ToolRegistry:
-    """Service for managing tool definitions with semantic search.
-
-    All operations are scoped to a tenant. Embeddings are generated via
-    ``LLMClient.embed`` using ``text-embedding-3-small``.
-    """
+    """Service for managing tool definitions with semantic search."""
 
     def __init__(self, llm_client: LLMClient | None = None) -> None:
         self._llm = llm_client or LLMClient()
@@ -92,7 +87,6 @@ class ToolRegistry:
     async def register(
         self,
         session: AsyncSession,
-        tenant_id: uuid.UUID,
         data: ToolCreate,
         skip_embedding: bool = False,
     ) -> ToolRead:
@@ -100,7 +94,6 @@ class ToolRegistry:
         self._validate_no_python_code(data)
         self._validate_json_schema(data.input_schema)
         tool = Tool(
-            tenant_id=tenant_id,
             name=data.name,
             description=data.description,
             purpose=data.purpose,
@@ -128,7 +121,6 @@ class ToolRegistry:
                 tool.embedding = emb
                 await session.flush()
 
-        # Refresh to avoid MissingGreenlet on expired attribute lazy loads
         await session.refresh(tool)
 
         logger.info("tool.registered", tool_id=str(tool.id), name=tool.name)
@@ -137,14 +129,13 @@ class ToolRegistry:
     async def update(  # noqa: PLR0913
         self,
         session: AsyncSession,
-        tenant_id: uuid.UUID,
         tool_id: uuid.UUID,
         data: ToolUpdate,
         changed_by: str | None = None,
         change_comment: str | None = None,
     ) -> ToolRead | None:
         """Update a tool, snapshot to ToolVersion, regenerate embedding if needed."""
-        tool = await self._get_model(session, tenant_id, tool_id)
+        tool = await self._get_model(session, tool_id)
         if tool is None:
             return None
 
@@ -164,7 +155,6 @@ class ToolRegistry:
         if update_dict:
             snapshot = _tool_to_read(tool).model_dump(mode="json")
             version = ToolVersion(
-                tenant_id=tenant_id,
                 tool_id=tool.id,
                 version=tool.version,
                 snapshot=snapshot,
@@ -186,11 +176,10 @@ class ToolRegistry:
     async def deregister(
         self,
         session: AsyncSession,
-        tenant_id: uuid.UUID,
         tool_id: uuid.UUID,
     ) -> bool:
-        """Soft-delete a tool by setting ``enabled=False``. Returns True if found."""
-        tool = await self._get_model(session, tenant_id, tool_id)
+        """Soft-delete a tool by setting ``enabled=False``."""
+        tool = await self._get_model(session, tool_id)
         if tool is None:
             return False
         tool.enabled = False
@@ -201,17 +190,15 @@ class ToolRegistry:
     async def get(
         self,
         session: AsyncSession,
-        tenant_id: uuid.UUID,
         tool_id: uuid.UUID,
     ) -> ToolRead | None:
         """Get a single tool by id (any enabled state)."""
-        tool = await self._get_model(session, tenant_id, tool_id)
+        tool = await self._get_model(session, tool_id)
         return _tool_to_read(tool) if tool else None
 
     async def list(  # noqa: PLR0913
         self,
         session: AsyncSession,
-        tenant_id: uuid.UUID,
         tags: list[str] | None = None,
         category: str | None = None,
         enabled: bool | None = True,
@@ -219,7 +206,7 @@ class ToolRegistry:
         page_size: int = 20,
     ) -> ToolList:
         """List tools with optional filters and pagination."""
-        query = select(Tool).where(Tool.tenant_id == tenant_id)
+        query = select(Tool)
 
         if enabled is not None:
             query = query.where(Tool.enabled == enabled)
@@ -247,15 +234,10 @@ class ToolRegistry:
     async def search_semantic(
         self,
         session: AsyncSession,
-        tenant_id: uuid.UUID,
         query: str,
         k: int = 10,
     ) -> list[ToolSearchResult]:
-        """Search tools by semantic similarity using pgvector cosine distance.
-
-        The query string is embedded via ``LLMClient.embed``, then a
-        ``<->`` (cosine distance) ORDER BY clause returns the closest matches.
-        """
+        """Search tools by semantic similarity using pgvector cosine distance."""
         query_vector = (await self._generate_embedding(query)) or []
         if not query_vector:
             return []
@@ -264,13 +246,13 @@ class ToolRegistry:
         sql = text(
             "SELECT id, embedding <=> :query_vec AS distance "
             "FROM tool "
-            "WHERE tenant_id = :tid AND enabled = true AND embedding IS NOT NULL "
+            "WHERE enabled = true AND embedding IS NOT NULL "
             "ORDER BY distance "
             "LIMIT :k"
         )
         rows = await session.execute(
             sql,
-            {"query_vec": vector_literal, "tid": tenant_id, "k": k},
+            {"query_vec": vector_literal, "k": k},
         )
 
         tool_ids = []
@@ -336,19 +318,10 @@ class ToolRegistry:
         tool: ToolRead,
         sample_input: dict[str, Any] | None = None,
     ) -> ToolResult:
-        """Make a real HTTP call to validate tool connectivity.
-
-        Args:
-            tool: The tool definition to test.
-            sample_input: Optional input payload for the request.
-
-        Returns:
-            A ``ToolResult`` with the actual response or error.
-        """
+        """Make a real HTTP call to validate tool connectivity."""
         settings = get_settings()
         sandbox_config_allowed = settings.tools.allowed_hosts
 
-        # Rate limit check before testing
         if tool.rate_limit_per_minute is not None and tool.rate_limit_per_minute > 0:
             redis = get_redis_client()
             if redis is not None:
@@ -369,7 +342,6 @@ class ToolRegistry:
                         duration_ms=0,
                     )
 
-        # Sandbox check
         try:
             check_allowed_host(tool.endpoint_url, sandbox_config_allowed)
         except Exception as exc:
@@ -445,10 +417,9 @@ class ToolRegistry:
     @staticmethod
     async def _get_model(
         session: AsyncSession,
-        tenant_id: uuid.UUID,
         tool_id: uuid.UUID,
     ) -> Tool | None:
         result = await session.execute(
-            select(Tool).where(Tool.id == tool_id, Tool.tenant_id == tenant_id)
+            select(Tool).where(Tool.id == tool_id)
         )
         return result.scalar_one_or_none()

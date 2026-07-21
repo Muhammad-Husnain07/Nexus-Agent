@@ -7,19 +7,19 @@ from datetime import datetime
 from typing import Any
 
 from pgvector.sqlalchemy import VECTOR
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from nexus.db.base import Base, TenantMixin, tenant_table_args
+from nexus.db.base import Base
 
 
-class Tool(TenantMixin, Base):
+class Tool(Base):
     """A registered tool/capability that the agent can invoke."""
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(
-        String(255), nullable=False, comment="Tool name (unique per tenant)"
+        String(255), nullable=False, unique=True, comment="Unique tool name"
     )
     description: Mapped[str] = mapped_column(Text, default="", comment="Human-readable description")
     purpose: Mapped[str] = mapped_column(
@@ -78,15 +78,10 @@ class Tool(TenantMixin, Base):
         onupdate=func.now(),
     )
 
-    __table_args__ = tenant_table_args(
-        "tool",
-        UniqueConstraint("tenant_id", "name", name="uq_tool_tenant_name"),
-    )
-
     executions = relationship("ToolExecution", back_populates="tool", passive_deletes=True)
 
 
-class ToolExecution(TenantMixin, Base):
+class ToolExecution(Base):
     """Record of a single tool invocation and its result."""
 
     __tablename__ = "tool_execution"
@@ -131,7 +126,5 @@ class ToolExecution(TenantMixin, Base):
         Boolean, default=False, comment="Whether this was a retry"
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-    __table_args__ = tenant_table_args("tool_execution")
 
     tool = relationship("Tool", back_populates="executions", passive_deletes=True)

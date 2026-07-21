@@ -1,4 +1,4 @@
-"""Tenant-scoped repositories for Session and Message CRUD."""
+"""Repositories for Session and Message CRUD."""
 
 from __future__ import annotations
 
@@ -10,27 +10,24 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from nexus.db.context import get_tenant
 from nexus.db.models.session import Message as MessageModel
 from nexus.db.models.session import Session as SessionModel
-from nexus.db.repositories import GenericRepository
+from nexus.db.repositories.base import GenericRepository
 
 
 class SessionRepository(GenericRepository[SessionModel]):
-    """Tenant-scoped CRUD for sessions with paginated listing."""
+    """CRUD for sessions with paginated listing."""
 
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session, SessionModel)
 
     async def create(  # type: ignore[override]
         self,
-        user_id: uuid.UUID,
         title: str = "New Session",
         metadata_: dict | None = None,
         **kwargs: Any,
     ) -> SessionModel:
         return await super().create(
-            user_id=user_id,
             title=title,
             metadata_=metadata_ or {},
             **kwargs,
@@ -38,17 +35,12 @@ class SessionRepository(GenericRepository[SessionModel]):
 
     async def list(  # type: ignore[override]
         self,
-        tenant_id: uuid.UUID | None = None,
-        user_id: uuid.UUID | None = None,
         status: str | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[list[SessionModel], int]:
-        tid = tenant_id or get_tenant()
-        stmt = select(self._model).where(self._model.tenant_id == tid)
+        stmt = select(self._model)
 
-        if user_id is not None:
-            stmt = stmt.where(self._model.user_id == user_id)
         if status is not None:
             stmt = stmt.where(self._model.status == status)
 
@@ -66,43 +58,40 @@ class SessionRepository(GenericRepository[SessionModel]):
 
         return items, total
 
-    async def get_with_messages(self, session_id: uuid.UUID) -> SessionModel | None:
-        tid = get_tenant()
+    async def get_with_messages(self, id: uuid.UUID) -> SessionModel | None:
+        """Get a session eagerly loaded with its messages."""
         stmt = (
             select(self._model)
-            .where(self._model.id == session_id)
-            .where(self._model.tenant_id == tid)
+            .where(self._model.id == id)
             .options(selectinload(self._model.messages))
         )
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def archive(self, session_id: uuid.UUID) -> SessionModel | None:
-        tid = get_tenant()
-        stmt = (
-            update(self._model)
-            .where(self._model.id == session_id)
-            .where(self._model.tenant_id == tid)
-            .values(status="archived")
-            .returning(self._model)
-        )
-        result = await self._session.execute(stmt)
-        await self._session.flush()
-        return result.scalar_one_or_none()
+    async def get_message_count(self, id: uuid.UUID) -> int:
+        """Return the count of messages in a session."""
+        from sqlalchemy import select as sa_select
 
-    async def get_message_count(self, session_id: uuid.UUID) -> int:
-        tid = get_tenant()
-        stmt = (
-            select(func.count(MessageModel.id))
-            .where(MessageModel.session_id == session_id)
-            .where(MessageModel.tenant_id == tid)
+        stmt = sa_select(func.count()).select_from(MessageModel).where(
+            MessageModel.session_id == id
         )
         result = await self._session.execute(stmt)
         return result.scalar() or 0
 
+    async def archive(self, id: uuid.UUID) -> SessionModel | None:
+        """Set session status to archived."""
+        return await self.update(id, status="archived")
+
+    async def count_active(self) -> int:
+        """Count active sessions."""
+        stmt = select(func.count(self._model.id)).where(self._model.status == "active")
+        result = await self._session.execute(stmt)
+        return result.scalar() or 0
+
+
 
 class MessageRepository(GenericRepository[MessageModel]):
-    """Tenant-scoped CRUD for messages with paginated listing."""
+    """CRUD for messages with paginated listing."""
 
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session, MessageModel)
@@ -131,18 +120,15 @@ class MessageRepository(GenericRepository[MessageModel]):
         before_id: uuid.UUID | None = None,
         after_id: uuid.UUID | None = None,
     ) -> tuple[list[MessageModel], int]:
-        tid = get_tenant()
         stmt = (
             select(self._model)
             .where(self._model.session_id == session_id)
-            .where(self._model.tenant_id == tid)
         )
 
         if before_id is not None:
             sub = (
                 select(self._model.created_at)
                 .where(self._model.id == before_id)
-                .where(self._model.tenant_id == tid)
             )
             before_ts_result = await self._session.execute(sub)
             before_ts = before_ts_result.scalar_one_or_none()
@@ -153,7 +139,6 @@ class MessageRepository(GenericRepository[MessageModel]):
             sub = (
                 select(self._model.created_at)
                 .where(self._model.id == after_id)
-                .where(self._model.tenant_id == tid)
             )
             after_ts_result = await self._session.execute(sub)
             after_ts = after_ts_result.scalar_one_or_none()
@@ -174,42 +159,61 @@ class MessageRepository(GenericRepository[MessageModel]):
 
         return items, total
 
-    async def get_by_session(self, session_id: uuid.UUID) -> Sequence[MessageModel]:
-        tid = get_tenant()
+    async def get_last_n(self, session_id: uuid.UUID, n: int = 2) -> list[MessageModel]:
+        """Get the last N messages for a session (ordered by created_at DESC)."""
         stmt = (
             select(self._model)
             .where(self._model.session_id == session_id)
-            .where(self._model.tenant_id == tid)
+            .order_by(self._model.created_at.desc())
+            .limit(n)
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def search_by_content(self, query: str, limit: int = 20) -> list[MessageModel]:
+        """Search messages by content (simple ILIKE)."""
+        stmt = (
+            select(self._model)
+            .where(self._model.content["text"].as_string().ilike(f"%{query}%"))
+            .order_by(self._model.created_at.desc())
+            .limit(limit)
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_session_messages_for_export(self, session_id: uuid.UUID) -> Sequence[MessageModel]:
+        """Get all messages for a session in ascending order."""
+        stmt = (
+            select(self._model)
+            .where(self._model.session_id == session_id)
             .order_by(self._model.created_at.asc())
         )
         result = await self._session.execute(stmt)
         return result.scalars().all()
 
-    async def get_last_n(self, session_id: uuid.UUID, n: int = 20) -> list[MessageModel]:
-        tid = get_tenant()
-        stmt = (
-            select(self._model)
-            .where(self._model.session_id == session_id)
-            .where(self._model.tenant_id == tid)
-            .order_by(self._model.created_at.desc())
-            .limit(n)
-        )
+    async def delete_by_session(self, session_id: uuid.UUID) -> int:
+        """Delete all messages for a session."""
+        stmt = select(self._model).where(self._model.session_id == session_id)
         result = await self._session.execute(stmt)
-        return list(reversed(result.scalars().all()))
+        messages = result.scalars().all()
+        for msg in messages:
+            await self._session.delete(msg)
+        return len(messages)
 
     async def create_many(self, messages: list[dict]) -> list[MessageModel]:
-        tid = get_tenant()
-        instances: list[MessageModel] = []
-        for msg in messages:
-            instance = MessageModel(
-                tenant_id=tid,
-                session_id=msg["session_id"],
-                role=msg["role"],
-                content=msg.get("content", {}),
-                tool_calls=msg.get("tool_calls"),
-                parent_message_id=msg.get("parent_message_id"),
-            )
-            self._session.add(instance)
-            instances.append(instance)
+        """Bulk-create messages from a list of dicts."""
+        instances = [MessageModel(**m) for m in messages]
+        for inst in instances:
+            self._session.add(inst)
         await self._session.flush()
         return instances
+
+    async def update_message_feedback(self, message_id: uuid.UUID, feedback: dict[str, Any]) -> MessageModel | None:
+        """Update feedback on a message."""
+        result = await self._session.execute(
+            update(MessageModel)
+            .where(MessageModel.id == message_id)
+            .values(feedback=feedback)
+            .returning(MessageModel)
+        )
+        return result.scalar_one_or_none()

@@ -1,5 +1,5 @@
 # ruff: noqa: E501
-"""Prompt templates for the execute_step node."""
+"""Prompt templates for the execute_step node (v2.0 Anthropic-style)."""
 
 from nexus.agent.prompts.manager import prompt_manager
 
@@ -7,6 +7,22 @@ SYSTEM_PROMPT_V1 = """\
 You are a helpful assistant that solves tasks by invoking tools.
 When a step specifies a tool name, you MUST call that tool using the provided function definition.
 Do NOT describe what you would do — actually invoke the tool function.
+{additional_context}
+"""
+
+SYSTEM_PROMPT_V2 = """\
+<role>You are a helpful assistant executing plan steps for Nexus Agent.</role>
+
+<context>You are in the middle of executing a plan. The current step may specify a tool to call, or it may ask you to respond directly. Follow the step instructions precisely.</context>
+
+<instructions>
+1. If the current step has a tool_name, call that tool using the provided function definition. Invoke the tool — do not just describe it.
+2. If the current step has tool_name set to null, respond directly using your own knowledge and the conversation context. Do not try to call a tool.
+3. Use the available tool definitions below to determine the correct parameters and format.
+4. If you need more information, ask the user rather than guessing parameter values.
+</instructions>
+
+{tool_descriptions}
 {additional_context}
 """
 
@@ -50,6 +66,7 @@ Set `pending_approval` and yield an approval_required event.
 """
 
 prompt_manager.register("execute_step", SYSTEM_PROMPT_V1, version="1.0")
+prompt_manager.register("execute_step", SYSTEM_PROMPT_V2, version="2.0")
 prompt_manager.register("execute_step_correction", CORRECTION_PROMPT_V1, version="1.0")
 prompt_manager.register("execute_step_error_recovery", ERROR_RECOVERY_PROMPT_V1, version="1.0")
 prompt_manager.register("execute_step_approval", APPROVAL_PROMPT_V1, version="1.0")

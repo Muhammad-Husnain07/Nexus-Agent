@@ -1,8 +1,7 @@
-"""FastAPI dependencies — tenant, user, services, and registries.
+"""FastAPI dependencies — user, services, and registries.
 
 Provides reusable ``Annotated`` type aliases for dependency injection
-across all API routers.  The lightweight ``TenantDep``/``UserDep`` are
-re-exported from ``nexus.api.depends`` to avoid circular imports.
+across all API routers.
 """
 
 from __future__ import annotations
@@ -13,7 +12,6 @@ import structlog
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nexus.api.depends import TenantDep, UserDep
 from nexus.db.base import get_session
 from nexus.llm.client import LLMClient
 from nexus.redis_client.client import get_redis_client
@@ -32,9 +30,7 @@ __all__ = [
     "AgentRunnerDep",
     "SessionDep",
     "SessionServiceDep",
-    "TenantDep",
     "ToolRegistryDep",
-    "UserDep",
 ]
 
 

@@ -102,18 +102,30 @@ class PromptManager:
         sorted_versions = sorted(versions.keys(), key=lambda v: [int(x) for x in v.split(".")])
         return versions[sorted_versions[-1]]
 
-    def render(self, prompt_name: str, prompt_version: str | None = None, **kwargs: Any) -> str:
+    def render(
+        self,
+        prompt_name: str,
+        prompt_version: str | None = None,
+        version: str | None = None,
+        **kwargs: Any,
+    ) -> str:
         """Retrieve and format a prompt template.
+
+        Uses Python's ``.format()`` which only processes the template string.
+        Literal braces in the template must be escaped as ``{{...}}``.
 
         Args:
             name: Logical prompt name.
-            version: Desired version (see :meth:`get`).
+            prompt_version: Desired version (see :meth:`get`).
+            version: Alias for ``prompt_version`` (accepted as keyword arg
+                for backward compatibility).
             **kwargs: Format arguments for the template.
 
         Returns:
             The formatted prompt string.
         """
-        tmpl = self.get(prompt_name, version=prompt_version)
+        ver = prompt_version or version
+        tmpl = self.get(prompt_name, version=ver)
         return tmpl.template.format(**kwargs)
 
     def list_versions(self, name: str) -> list[str]:

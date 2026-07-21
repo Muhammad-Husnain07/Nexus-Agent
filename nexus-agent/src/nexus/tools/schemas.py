@@ -31,7 +31,7 @@ class ToolCreate(BaseModel):
     code execution.
     """
 
-    name: str = Field(description="Unique tool name (per tenant)")
+    name: str = Field(description="Unique tool name")
     description: str = Field(default="", description="Human-readable description")
     purpose: str = Field(default="", description="What the tool does and when to use it")
     tool_type: Literal["http_api", "mcp"] = Field(
@@ -57,7 +57,7 @@ class ToolCreate(BaseModel):
     requires_approval: bool = Field(default=False, description="Requires HITL approval")
     risk_level: str = Field(default="low", description="Risk level: low | medium | high")
     enabled: bool = Field(default=True, description="Whether the tool is active")
-    tenant_public: bool = Field(default=False, description="Visible to all tenants when true")
+    tenant_public: bool = Field(default=False, description="Visible to all when true")
     idempotent: bool = Field(
         default=False, description="Whether the tool supports idempotent execution (safe to retry)"
     )
@@ -77,7 +77,7 @@ class ToolCreate(BaseModel):
 class ToolUpdate(BaseModel):
     """Request body for updating an existing tool. All fields optional."""
 
-    name: str | None = Field(default=None, description="Unique tool name (per tenant)")
+    name: str | None = Field(default=None, description="Unique tool name")
     description: str | None = Field(default=None, description="Human-readable description")
     purpose: str | None = Field(default=None, description="What the tool does and when to use it")
     tool_type: Literal["http_api", "mcp"] | None = Field(
@@ -122,8 +122,7 @@ class ToolRead(BaseModel):
     """
 
     id: uuid.UUID = Field(description="Unique tool identifier")
-    tenant_id: uuid.UUID = Field(description="Owning tenant")
-    name: str = Field(description="Unique tool name (per tenant)")
+    name: str = Field(description="Unique tool name")
     description: str = Field(description="Human-readable description")
     purpose: str = Field(description="What the tool does and when to use it")
     tool_type: Literal["http_api", "mcp"] = Field(
@@ -145,7 +144,7 @@ class ToolRead(BaseModel):
     requires_approval: bool = Field(description="Requires HITL approval")
     risk_level: str = Field(description="Risk level")
     enabled: bool = Field(description="Whether the tool is active")
-    tenant_public: bool = Field(default=False, description="Visible to all tenants")
+    tenant_public: bool = Field(default=False, description="Visible to all")
     idempotent: bool = Field(default=False, description="Supports idempotent execution")
     rate_limit_per_minute: int | None = Field(
         default=None, description="Max requests per minute (null = unlimited)"

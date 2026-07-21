@@ -17,10 +17,10 @@ This module owns the tool lifecycle — the only boundary through which the agen
 |------|---------------|
 | `registry.py` | `ToolRegistry` — `register()`, `update()` (with version snapshot), `deregister()` (soft-delete), `get()`, `list()` (paginated, filterable), `search_semantic()` (pgvector cosine similarity). Auto-generates embeddings on create/update |
 | `executor.py` | `ToolExecutor.execute()` — full pipeline: approval gate → input validation (JSON Schema) → sandbox host check → auth header resolution → HTTP call with tenacity retry (5xx/408/429) → output validation (soft-fail) → persist `ToolExecution` row → publish Redis event |
-| `discovery.py` | `DynamicToolSelector` — embed user message + context, top-K pgvector search, optional LLM re-rank; cached in Redis keyed by `(tenant_id, message_hash)` |
+| `discovery.py` | `DynamicToolSelector` — embed user message + context, top-K pgvector search, optional LLM re-rank; cached in Redis keyed by `message_hash` |
 | `mcp_server.py` | `setup_mcp()` — attaches `FastApiMCP` to the FastAPI app, exposes registry as MCP tools at `/mcp` |
 | `schemas.py` | Pydantic models: `ToolCreate`, `ToolUpdate`, `ToolRead`, `ToolSearchResult`, `ToolExample`, `ToolVersionDiff` — all with field descriptions |
-| `api.py` | FastAPI router `/tools` — POST (register), GET (list + search), GET/PUT/DELETE by id, POST `/{id}/test` (dry-run). RBAC-protected |
+| `api.py` | FastAPI router `/tools` — POST (register), GET (list + search), GET/PUT/DELETE by id, POST `/{id}/test` (dry-run). Passthrough auth |
 | `result.py` | `ToolResult` dataclass with status, data, error, duration_ms, raw_response_excerpt |
 | `retries.py` | `http_retry_policy` — tenacity retry for tool HTTP calls; `is_retryable_status()`, `parse_retry_after()` |
 | `sandbox.py` | `SandboxConfig`, `check_allowed_host()`, `mask_sensitive_fields()` — optional outbound call restrictions |
@@ -46,4 +46,4 @@ Agent node → ToolExecutor.execute()
 - `nexus/llm/` — LLMClient.embed for embedding generation
 - `nexus/redis_client/` — EventBus for tool events, RedisCache for discovery
 - `nexus/config/` — settings for timeouts, retries, sandbox
-- `nexus/security/` — SecretResolver for auth refs, RBAC for tool admin
+- `nexus/security/` — SecretResolver for auth refs

@@ -16,10 +16,9 @@ agent manages through natural language conversations.
 ## Prerequisites
 
 - Nexus Agent running on `http://localhost:8000` (see [quickstart.md](../../docs/quickstart.md))
-- A JWT or API key for authentication
+- No authentication required. The backend uses passthrough auth. Just start the services and run the examples.
 - Python 3.12+ with `httpx` installed (`uv add httpx` or `pip install httpx`)
 - Tools must be registered — run `register_tools.py` or register via the REST API before chatting
-- JWT tokens expire after 30 minutes by default — re-login or use `/auth/refresh` to get a new token
 
 ## Setup
 
@@ -31,21 +30,13 @@ python examples/demo_app/main.py
 
 Verify: `curl http://localhost:8080/healthz` → `{"status":"ok","app":"content-studio"}`
 
-### 2. Get an auth token
+### 2. Authentication
 
-```bash
-curl -X POST http://localhost:8000/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email": "admin@example.com"}'
-```
-
-Save the returned `access_token`.
+No authentication required. Skip this step — the backend uses passthrough auth.
 
 ### 3. Register tools
 
 ```bash
-# Edit examples/register_tools.py — set TOKEN to your access_token
-# Then run:
 python examples/register_tools.py
 ```
 
@@ -66,7 +57,7 @@ Registered 9 tools.
 ### 4. Start chatting
 
 ```bash
-python examples/chat_client.py --token <your-access-token>
+python examples/chat_client.py
 ```
 
 ---
@@ -159,7 +150,7 @@ You: Update the latest article's title to 'Updated: AI in 2026' then preview it
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `401 Unauthorized` from demo app | Missing auth header | Pass `Bearer demo-token` |
+| `401 Unauthorized` from demo app | Demo app requires auth | Ensure demo app is configured correctly |
 | `Tool not found` from agent | Tools not registered | Run `register_tools.py` |
 | `Connection refused` on :8080 | Demo app not running | Start `python examples/demo_app/main.py` |
-| Token expired | JWT expires in 30 min by default | Re-login |
+| Token expired | N/A — passthrough auth has no expiry | Restart the client |

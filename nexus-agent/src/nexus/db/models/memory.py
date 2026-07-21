@@ -9,12 +9,12 @@ from typing import Any
 from pgvector.sqlalchemy import VECTOR
 from sqlalchemy import DateTime, Float, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
-from nexus.db.base import Base, TenantMixin, tenant_table_args
+from nexus.db.base import Base
 
 
-class Memory(TenantMixin, Base):
+class Memory(Base):
     """A stored memory entry for the agent's long-term memory system."""
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -45,6 +45,3 @@ class Memory(TenantMixin, Base):
         comment="Last time this memory was retrieved",
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-    __table_args__ = tenant_table_args("memory")
-

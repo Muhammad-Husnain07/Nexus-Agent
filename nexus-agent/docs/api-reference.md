@@ -37,14 +37,17 @@ All endpoints are prefixed with `/api/v1`.
 | POST | `/sessions/{id}/messages` | Add message |
 | POST | `/sessions/{id}/chat` | Send chat message (stream/non-stream) |
 
-## Approvals
+## Approvals (Inline)
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/approvals/pending` | List all pending approvals |
 | GET | `/approvals/pending/{session_id}` | List pending for session |
 | GET | `/approvals/{id}` | Get approval status |
-| POST | `/approvals/{id}/decide` | Approve/reject/edit |
+| POST | `/approvals/{id}/decide` | Approve/reject/edit. Use `?stream=true` for SSE response |
+
+Approvals appear inline in the chat SSE stream via `approval_required` events.
+The decide endpoint resumes execution and streams results back via SSE when `?stream=true`.
 
 ## Memory
 

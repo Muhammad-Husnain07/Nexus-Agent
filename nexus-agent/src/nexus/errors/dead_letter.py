@@ -15,12 +15,12 @@ from sqlalchemy import DateTime, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from nexus.db.base import Base, TenantMixin, tenant_table_args
+from nexus.db.base import Base
 
 logger = structlog.get_logger("nexus.errors.dead_letter")
 
 
-class DeadLetterExecution(TenantMixin, Base):
+class DeadLetterExecution(Base):
     """A tool execution that failed permanently and was sent to the DLQ."""
 
     __tablename__ = "dead_letter_execution"
@@ -58,10 +58,6 @@ class DeadLetterExecution(TenantMixin, Base):
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    __table_args__ = tenant_table_args(
-        "dead_letter_execution",
-    )
-
 
 class DeadLetterQueue:
     """Service for managing dead letter executions."""
@@ -78,7 +74,6 @@ class DeadLetterQueue:
 
     async def send(
         self,
-        tenant_id: uuid.UUID,
         tool_name: str,
         input_payload: dict[str, Any],
         error_message: str,
@@ -86,25 +81,11 @@ class DeadLetterQueue:
         retry_count: int = 0,
         tool_id: uuid.UUID | None = None,
     ) -> uuid.UUID:
-        """Persist a failed execution to the dead letter queue.
-
-        Args:
-            tenant_id: The tenant that owns this execution.
-            tool_name: Name of the tool that failed.
-            input_payload: The input arguments.
-            error_message: The final error message.
-            error_code: Machine-readable error code.
-            retry_count: Number of retries attempted before giving up.
-            tool_id: Optional tool definition ID.
-
-        Returns:
-            The UUID of the dead letter execution record.
-        """
+        """Persist a failed execution to the dead letter queue."""
         entry_id = uuid.uuid4()
         async with _get_session() as session:
             entry = DeadLetterExecution(
                 id=entry_id,
-                tenant_id=tenant_id,
                 tool_name=tool_name,
                 tool_id=tool_id,
                 input_payload=input_payload,
@@ -126,14 +107,7 @@ class DeadLetterQueue:
         return entry_id
 
     async def replay(self, entry_id: uuid.UUID) -> dict[str, Any] | None:
-        """Replay a dead letter execution (stub — implement actual replay logic).
-
-        Args:
-            entry_id: The DLQ entry to replay.
-
-        Returns:
-            The entry dict if found, ``None`` otherwise.
-        """
+        """Replay a dead letter execution (stub)."""
         async with _get_session() as session:
             from sqlalchemy import select
 
@@ -157,19 +131,17 @@ class DeadLetterQueue:
 
     async def list(
         self,
-        tenant_id: uuid.UUID,
         status: str | None = None,
         tool_name: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        """List dead letter executions for a tenant."""
+        """List dead letter executions."""
         from sqlalchemy import select
 
         async with _get_session() as session:
             stmt = (
                 select(DeadLetterExecution)
-                .where(DeadLetterExecution.tenant_id == tenant_id)
                 .order_by(DeadLetterExecution.created_at.desc())
             )
             if status:
@@ -184,7 +156,6 @@ class DeadLetterQueue:
 def _to_dict(entry: DeadLetterExecution) -> dict[str, Any]:
     return {
         "id": str(entry.id),
-        "tenant_id": str(entry.tenant_id),
         "tool_name": entry.tool_name,
         "tool_id": str(entry.tool_id) if entry.tool_id else None,
         "error_message": entry.error_message,

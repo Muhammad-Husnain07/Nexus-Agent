@@ -11,7 +11,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
-from nexus.api.depends import TenantDep
 from nexus.db.base import get_session
 
 from nexus.tools.registry import ToolRegistry
@@ -40,19 +39,17 @@ RegistryDep = Annotated[ToolRegistry, Depends(get_registry)]
 async def register_tool(
     session: SessionDep,
     registry: RegistryDep,
-    tenant_id: TenantDep,
     request: Request,
 ) -> ToolRead:
     tool_data = await request.json()
     tool = ToolCreate(**tool_data)
-    return await registry.register(session, tenant_id, tool)
+    return await registry.register(session, tool)
 
 
 @router.get("", response_model=ToolList)
 async def list_tools(  # noqa: PLR0913
     registry: RegistryDep,
     session: SessionDep,
-    tenant_id: TenantDep,
     tags: str | None = Query(None, description="Comma-separated tag filter"),
     category: str | None = Query(None, description="Category filter"),
     enabled: bool | None = Query(True, description="Filter by enabled state"),
@@ -62,7 +59,6 @@ async def list_tools(  # noqa: PLR0913
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
     return await registry.list(
         session,
-        tenant_id,
         tags=tag_list,
         category=category,
         enabled=enabled,
@@ -75,11 +71,10 @@ async def list_tools(  # noqa: PLR0913
 async def search_tools(
     registry: RegistryDep,
     session: SessionDep,
-    tenant_id: TenantDep,
     q: str = Query(..., description="Search query"),
     k: int = Query(10, ge=1, le=50, description="Number of results"),
 ) -> list[ToolSearchResult]:
-    return await registry.search_semantic(session, tenant_id, q, k=k)
+    return await registry.search_semantic(session, q, k=k)
 
 
 @router.get("/{tool_id}", response_model=ToolRead)
@@ -87,9 +82,8 @@ async def get_tool(
     tool_id: uuid.UUID,
     registry: RegistryDep,
     session: SessionDep,
-    tenant_id: TenantDep,
 ) -> ToolRead:
-    tool = await registry.get(session, tenant_id, tool_id)
+    tool = await registry.get(session, tool_id)
     if tool is None:
         raise HTTPException(status_code=404, detail="Tool not found")
     return tool
@@ -104,9 +98,8 @@ async def update_tool(
     data: ToolUpdate,
     registry: RegistryDep,
     session: SessionDep,
-    tenant_id: TenantDep,
 ) -> ToolRead:
-    tool = await registry.update(session, tenant_id, tool_id, data)
+    tool = await registry.update(session, tool_id, data)
     if tool is None:
         raise HTTPException(status_code=404, detail="Tool not found")
     return tool
@@ -120,9 +113,8 @@ async def delete_tool(
     tool_id: uuid.UUID,
     registry: RegistryDep,
     session: SessionDep,
-    tenant_id: TenantDep,
 ) -> None:
-    deleted = await registry.deregister(session, tenant_id, tool_id)
+    deleted = await registry.deregister(session, tool_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Tool not found")
 
@@ -132,11 +124,10 @@ async def test_tool(  # noqa: PLR0913
     tool_id: uuid.UUID,
     registry: RegistryDep,
     session: SessionDep,
-    tenant_id: TenantDep,
     sample_input: dict[str, Any] | None = None,  # noqa: PT028
     dry_run: bool = Query(True, description="If True, validate schema only without HTTP call"),  # noqa: PT028
 ) -> ToolResult:
-    tool = await registry.get(session, tenant_id, tool_id)
+    tool = await registry.get(session, tool_id)
     if tool is None:
         raise HTTPException(status_code=404, detail="Tool not found")
 
@@ -189,7 +180,6 @@ async def test_tool(  # noqa: PLR0913
 async def diff_tool_versions(
     tool_id: uuid.UUID,
     session: SessionDep,
-    tenant_id: TenantDep,
     from_version: int = Query(..., ge=1, description="Source version number"),
     to_version: int = Query(..., ge=1, description="Target version number"),
 ) -> dict[str, Any]:
@@ -201,7 +191,6 @@ async def diff_tool_versions(
 
     stmt = sa_select(ToolVersion).where(
         ToolVersion.tool_id == tool_id,
-        ToolVersion.tenant_id == tenant_id,
         ToolVersion.version.in_([from_version, to_version]),
     )
     result = await session.execute(stmt)

@@ -41,7 +41,6 @@ def main() -> None:
 
     import asyncio
 
-    from nexus.config.settings import get_settings
     from nexus.db.base import async_session
 
     async def run() -> None:

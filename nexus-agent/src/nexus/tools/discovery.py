@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import uuid
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,11 +20,7 @@ MAX_TOOLS_FOR_LLM_RERANK: int = 5
 
 
 class DynamicToolSelector:
-    """Selects the most relevant tools for a given user message.
-
-    Uses semantic search (embedding-based) to find candidate tools, then
-    optionally asks the LLM to re-rank them. Results are cached in Redis.
-    """
+    """Selects the most relevant tools for a given user message."""
 
     def __init__(
         self,
@@ -40,20 +35,19 @@ class DynamicToolSelector:
     async def select(
         self,
         session: AsyncSession,
-        tenant_id: uuid.UUID,
         message: str,
         context: str = "",
         k: int = 10,
     ) -> list[ToolRead]:
         """Return the top-k most relevant tools for the given message + context."""
-        cache_key = self._cache_key(tenant_id, message, context)
+        cache_key = self._cache_key(message, context)
 
         cached = await self._check_cache(cache_key)
         if cached is not None:
             return cached
 
         query_text = f"{message}\n{context}" if context else message
-        results = await self._registry.search_semantic(session, tenant_id, query_text, k=k)
+        results = await self._registry.search_semantic(session, query_text, k=k)
 
         tools = [r.tool for r in results]
         if len(tools) > MAX_TOOLS_FOR_LLM_RERANK:
@@ -90,10 +84,10 @@ class DynamicToolSelector:
             logger.warning("llm_rerank.failed", exc_info=True)
             return tools
 
-    def _cache_key(self, tenant_id: uuid.UUID, message: str, context: str) -> str:
-        raw = f"{tenant_id}|{message}|{context}"
-        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
-        return f"tools:discovery:{tenant_id}:{digest}"
+    def _cache_key(self, message: str, context: str) -> str:
+        raw = f"{message}|{context}"
+        digest = hashlib.sha256(raw.encode()).hexdigest()
+        return f"tools:discovery:{digest}"
 
     async def _check_cache(self, key: str) -> list[ToolRead] | None:
         if self._cache is None:

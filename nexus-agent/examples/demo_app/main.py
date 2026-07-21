@@ -8,12 +8,11 @@ The app serves on http://localhost:8080 with OpenAPI at /docs.
 
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import UTC, datetime
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from examples.demo_app.models import Article, ArticleCreate, ArticleUpdate, seed_data

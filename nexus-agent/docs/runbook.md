@@ -26,7 +26,6 @@ Common incidents, diagnostic queries, and recovery procedures for the Nexus Agen
 
 **Symptoms:**
 - Agent returns `"Service degraded"` messages
-- `/metrics` shows `llm_cost_usd_total` flat
 - `CircuitBreakerRegistry.is_open(provider)` returns `True`
 
 **Diagnostic queries:**
@@ -105,7 +104,7 @@ ORDER BY duration DESC;
 
 ```sql
 -- Find stuck runs
-SELECT id, session_id, tenant_id, started_at,
+SELECT id, session_id, started_at,
        now() - started_at AS duration
 FROM agent_run
 WHERE status = 'running'
@@ -124,8 +123,7 @@ WHERE thread_id IN (
 **Recovery:**
 1. Cancel the stuck run via API:
    ```bash
-   curl -X POST http://localhost:8000/api/v1/agent/{session_id}/cancel \
-     -H "X-Tenant-ID: <tenant_id>"
+   curl -X POST http://localhost:8000/api/v1/agent/{session_id}/cancel
    ```
 2. If API unavailable, force-update the DB:
    ```sql
@@ -143,9 +141,9 @@ WHERE thread_id IN (
 ## 4. Runaway Cost
 
 **Symptoms:**
-- Cost dashboard shows >2x normal daily spend
-- Alert fires from `CostAlertService` at 80% / 100% thresholds
-- LLM cost metrics spike
+- Daily spend significantly exceeds normal
+- `agent_run.total_cost_usd` values are abnormally high
+- No automated alerting — cost tracking is passive (DB-only)
 
 **Diagnostic queries:**
 
@@ -156,36 +154,26 @@ import asyncio, asyncpg
 async def check():
     conn = await asyncpg.connect('postgresql://nexus:pass@localhost:5433/nexus')
     rows = await conn.fetch('''
-        SELECT tenant_id, sum(total_cost_usd) AS cost, count(*) AS runs
+        SELECT sum(total_cost_usd) AS cost, count(*) AS runs
         FROM agent_run
         WHERE started_at > now() - interval '1 day'
-        GROUP BY tenant_id ORDER BY cost DESC LIMIT 10
     ''')
-    for r in rows: print(f'  {r[tenant_id]}: \${r[cost]:.2f} ({r[runs]} runs)')
+    for r in rows: print(f'  Total: \${r[cost]:.2f} ({r[runs]} runs)')
     await conn.close()
 asyncio.run(check())
 "
 
 # Most expensive single runs
 psql -h localhost -p 5433 -U nexus -d nexus -c "
-SELECT id, tenant_id, total_cost_usd, total_tokens, started_at
+SELECT id, total_cost_usd, total_tokens, started_at
 FROM agent_run
 WHERE started_at > now() - interval '1 day'
 ORDER BY total_cost_usd DESC LIMIT 10;
 "
-```
 
 **Recovery:**
-1. Enable cost cap: verify `NEXUS_AGENT__COST_CAP_ENABLED=true`
-2. Manually degrade tenant model:
-   ```bash
-   redis-cli SET "cost_degraded:<tenant_id>" "gpt-4o-mini" EX 86400
-   ```
-3. Block offending tenant:
-   ```sql
-   UPDATE tenant SET status = 'suspended' WHERE id = '<tenant_id>';
-   ```
-4. Investigate which tools or patterns caused high token usage
+1. Investigate which tools or patterns caused high token usage
+2. Enable cost cap if available: `NEXUS_AGENT__COST_CAP_ENABLED=true`
 
 ---
 
@@ -222,8 +210,7 @@ WHERE enabled = true AND id IN (
 **Recovery:**
 1. Disable the failing tool:
    ```bash
-   curl -X DELETE http://localhost:8000/api/v1/tools/{tool_id} \
-     -H "X-Tenant-ID: <tenant_id>"
+   curl -X DELETE http://localhost:8000/api/v1/tools/{tool_id}
    ```
 2. Alert tool owner to investigate their API
 3. If tool recovery expected soon, leave enabled — circuit breaker will auto-recover
@@ -269,9 +256,9 @@ docker compose exec redis redis-cli info stats | grep keyspace_hits
 ## 7. HITL Approval Stalled
 
 **Symptoms:**
-- `hitl_approvals_pending` gauge > 50
 - Users report "waiting for approval" for hours
-- SSE events show `approval_required` but no decision
+- SSE events show `approval_required` but no decision received
+- Approval request was delivered via SSE stream but user never responded inline
 
 **Diagnostic queries:**
 
@@ -290,20 +277,20 @@ SHOW approval_timeout_hours;
 ```
 
 **Recovery:**
-1. Auto-reject expired approvals (configurable timeout, default 24h):
+1. Notify the user to check their chat — the approval prompt was sent via SSE and awaits their decision inline
+2. Auto-reject expired approvals (configurable timeout, default 24h):
    ```sql
    UPDATE approval SET status = 'rejected',
      decision_payload = '{"auto_rejected": true, "reason": "timeout"}'
    WHERE status = 'pending' AND created_at < now() - interval '24 hours';
    ```
-2. Reduce timeout: `NEXUS_AGENT__APPROVAL_TIMEOUT_HOURS=1`
-3. Manually approve/reject via API:
+3. Reduce timeout: `NEXUS_AGENT__APPROVAL_TIMEOUT_HOURS=1`
+4. Fallback: approve/reject via API if the SSE channel is unavailable:
    ```bash
    curl -X POST http://localhost:8000/api/v1/approvals/{id}/decide \
      -H "Content-Type: application/json" \
      -d '{"action": "approve"}'
    ```
-4. Add Slack/email notification for pending approvals (see `CostAlertService` as template)
 
 ---
 
@@ -432,7 +419,7 @@ kubectl get endpoints postgres redis
 
 ```sql
 -- All running agent runs older than 5 minutes
-SELECT id, session_id, tenant_id, started_at,
+SELECT id, session_id, started_at,
        now() - started_at AS age
 FROM agent_run
 WHERE status = 'running' AND started_at < now() - interval '5 min';
@@ -446,11 +433,11 @@ WHERE te.created_at > now() - interval '1 day'
 GROUP BY t.name ORDER BY avg_ms DESC LIMIT 10;
 
 -- Top 10 most expensive sessions today
-SELECT session_id, tenant_id, sum(total_cost_usd) AS cost,
+SELECT session_id, sum(total_cost_usd) AS cost,
        count(*) AS runs
 FROM agent_run
 WHERE started_at > now() - interval '1 day'
-GROUP BY session_id, tenant_id
+GROUP BY session_id
 ORDER BY cost DESC LIMIT 10;
 
 -- Tools with error rate > 10%

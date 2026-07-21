@@ -9,7 +9,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nexus.api.depends import TenantDep, UserDep
+
 from nexus.db.base import get_session
 
 from nexus.sessions.schemas import (
@@ -58,28 +58,18 @@ ServiceDep = Annotated[SessionService, Depends(get_session_service)]
 async def create_session(
     data: SessionCreate,
     service: ServiceDep,
-    tenant_id: TenantDep,
-    user_id: UserDep,
 ) -> SessionRead:
-    return await service.create_session(
-        tenant_id=tenant_id,
-        user_id=user_id,
-        data=data,
-    )
+    return await service.create_session(data=data)
 
 
 @router.get("", response_model=SessionList)
 async def list_sessions(
     service: ServiceDep,
-    tenant_id: TenantDep,
-    user_id: uuid.UUID | None = Query(None, description="Filter by user ID"),
     status: str | None = Query(None, description="Filter by status (active, archived)"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
 ) -> SessionList:
     return await service.list_sessions(
-        tenant_id=tenant_id,
-        user_id=user_id,
         status=status,
         page=page,
         page_size=page_size,

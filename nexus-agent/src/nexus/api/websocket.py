@@ -5,7 +5,6 @@ import asyncio
 import json
 import time
 import uuid
-from contextlib import suppress
 from typing import Any
 
 import structlog
@@ -14,7 +13,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from nexus.agent.runner import AgentRunner
 from nexus.llm.client import LLMClient
 from nexus.redis_client.client import get_redis_client
-from nexus.redis_client.pubsub import EventBus, agent_channel
+from nexus.redis_client.pubsub import EventBus
 from nexus.tools.discovery import DynamicToolSelector
 from nexus.tools.executor import ToolExecutor
 from nexus.tools.registry import ToolRegistry
@@ -81,8 +80,7 @@ async def handle_websocket(websocket: WebSocket) -> None:
             async for agent_event in runner.invoke(
                 session_id=sid,
                 user_message=message,
-                tenant_id="00000000-0000-0000-0000-000000000001",
-                user_id="00000000-0000-0000-0000-000000000002",
+
             ):
                 if not connected:
                     return

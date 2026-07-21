@@ -38,7 +38,7 @@ services; there is no mechanism for executing arbitrary code on the server.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | **Yes** | Unique per tenant. Lowercase, no spaces. Use `snake_case`. |
+| `name` | string | **Yes** | Lowercase, no spaces. Use `snake_case`. |
 | `description` | string | No | Human-readable. **This is what the LLM reads** to decide if this tool matches the user's intent. Be specific. |
 | `purpose` | string | No | When to use this tool. Helps the LLM understand context. |
 | `endpoint_url` | string | **Yes** | Full URL including protocol. The executor calls this endpoint. |
@@ -500,8 +500,8 @@ Examples are the closest thing to few-shot learning for the LLM:
 **Causes & solutions**:
 1. The backend's `cors_origins` setting doesn't include your frontend origin
    → Update `NEXUS_SERVER__CORS_ORIGINS` in your `.env` file
-2. For embed widgets: the domain is not in `allowed_domains`
-   → Update the embed config via `PUT /api/v1/embeds/{embed_id}`
+2. The frontend origin is behind a proxy or CDN
+   → Ensure the `Origin` header matches one of the configured origins
 
 ### Authentication Failures
 

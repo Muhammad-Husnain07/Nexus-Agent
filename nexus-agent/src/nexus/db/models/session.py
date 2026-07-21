@@ -10,17 +10,13 @@ from sqlalchemy import DateTime, ForeignKey, String, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from nexus.db.base import Base, TenantMixin, tenant_table_args
+from nexus.db.base import Base
 
 
-class Session(TenantMixin, Base):
+class Session(Base):
     """A conversation session between a user and the agent."""
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        nullable=False,
-    )
     title: Mapped[str] = mapped_column(String(512), default="New Session", comment="Session title")
     status: Mapped[str] = mapped_column(
         String(50),
@@ -37,13 +33,11 @@ class Session(TenantMixin, Base):
         JSONB, default=dict, comment="Arbitrary session metadata"
     )
 
-    __table_args__ = tenant_table_args("session")
-
     messages = relationship("Message", back_populates="session", passive_deletes=True)
     agent_runs = relationship("AgentRun", back_populates="session", passive_deletes=True)
 
 
-class Message(TenantMixin, Base):
+class Message(Base):
     """A single message within a conversation session."""
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -70,8 +64,6 @@ class Message(TenantMixin, Base):
         comment="Parent message ID for branching",
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-    __table_args__ = tenant_table_args("message")
 
     session = relationship("Session", back_populates="messages", passive_deletes=True)
     parent = relationship("Message", remote_side="Message.id", passive_deletes=True)

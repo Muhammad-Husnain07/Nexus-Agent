@@ -52,7 +52,7 @@ kubectl -n nexus get pods -w
 | `service.yaml` | Cluster-internal service on port 80 |
 | `ingress.yaml` | External HTTP/HTTPS routing with TLS termination |
 | `configmap.yaml` | Non-sensitive environment variables |
-| `secret.yaml` | Sensitive values (JWT secret, API keys, credentials) |
+| `secret.yaml` | Sensitive values (credentials, master key) |
 | `hpa.yaml` | Horizontal pod autoscaler (CPU-based, 2–10 replicas) |
 | `pdb.yaml` | Pod disruption budget (min 1 available) |
 | `network-policy.yaml` | Ingress/egress traffic restrictions |
@@ -107,13 +107,9 @@ supports WebSocket upgrades (default with nginx-ingress).
 ### Built-in Secrets (kubectl)
 
 ```bash
-# Generate a strong JWT secret
-JWT_SECRET=$(openssl rand -base64 48)
-
 # Create the secret
 kubectl create secret generic nexus-secrets \
   -n nexus \
-  --from-literal=NEXUS_AUTH__JWT_SECRET="$JWT_SECRET" \
   --from-literal=NEXUS_CREDENTIAL_MASTER_KEY="$(openssl rand -base64 32)"
 ```
 
@@ -131,24 +127,14 @@ spec:
   target:
     name: nexus-secrets
   data:
-    - secretKey: NEXUS_AUTH__JWT_SECRET
+    - secretKey: NEXUS_CREDENTIAL_MASTER_KEY
       remoteRef:
-        key: nexus/backend/jwt
+        key: nexus/backend/master-key
 ```
 
 ### Token Rotation
 
-1. Rotate `NEXUS_AUTH__JWT_SECRET` every 90 days
-2. Rotate `NEXUS_CREDENTIAL_MASTER_KEY` every 180 days
-3. Revoke and regenerate embed tokens via the API:
-   ```bash
-   curl -X DELETE https://nexus.example.com/api/v1/embeds/{embed_id} \
-     -H "Authorization: Bearer $ADMIN_TOKEN"
-   curl -X POST https://nexus.example.com/api/v1/embeds \
-     -H "Authorization: Bearer $ADMIN_TOKEN" \
-     -H "Content-Type: application/json" \
-     -d '{"allowed_domains": ["example.com"], "theme": "light"}'
-   ```
+1. Rotate `NEXUS_CREDENTIAL_MASTER_KEY` every 180 days
 
 ---
 

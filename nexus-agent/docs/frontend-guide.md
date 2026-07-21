@@ -2,9 +2,14 @@
 
 ## Overview
 
-The Nexus Agent frontend is a **React 18 + TypeScript** single-page application
+The Nexus Agent frontend is a **React 19 + TypeScript** single-page application
 built with **Vite**. It provides a management console for registering, testing,
-and monitoring tools, as well as a chat interface and embed widget generator.
+and monitoring tools, as well as a chat interface.
+
+No auth — all pages are publicly accessible. User identity is auto-injected by
+the backend.
+
+HITL approvals appear inline in the chat SSE stream — no separate approval page.
 
 ### Tech Stack
 
@@ -14,9 +19,9 @@ and monitoring tools, as well as a chat interface and embed widget generator.
 | Language | TypeScript (strict) | Type safety across the entire app |
 | UI | Tailwind CSS v4 + shadcn/ui | Utility-first styling, accessible components |
 | State (server) | TanStack Query v5 | Caching, refetching, mutations for API data |
-| State (client) | Zustand | Auth tokens, UI preferences |
+| State (client) | Zustand | UI preferences |
 | Forms | React Hook Form + Zod | Schema-validated form inputs |
-| HTTP | Axios | API client with auth interceptors |
+| HTTP | Axios | API client |
 | Real-time | WebSocket / SSE | Chat streaming, agent events |
 | DnD | @dnd-kit | JSON Schema property reordering |
 | Editor | @monaco-editor/react | JSON Schema code editing |
@@ -28,21 +33,25 @@ and monitoring tools, as well as a chat interface and embed widget generator.
 ```
 frontend/
 ├── src/
-│   ├── components/
-│   │   └── ui/              # shadcn/ui primitives (button, card, dialog, etc.)
-│   ├── features/
-│   │   ├── tool-builder/    # ToolBuilderForm, JsonSchemaEditor
-│   │   ├── chat/           # ChatInterface
-│   │   ├── test-playground/ # TestPlayground
-│   │   └── embed/          # EmbedGenerator, EmbeddedWidget
-│   ├── hooks/              # use-auth, use-tools, use-websocket, use-debounce
-│   ├── lib/                # api (Axios), websocket, utils, types (re-exports)
-│   ├── pages/              # Dashboard, ToolBuilder, TestPlayground, Chat, EmbedGenerator
-│   └── types/              # tool.ts, chat.ts, schema.ts
-├── vite.config.ts          # Main app build
-├── vite.embed.config.ts    # UMD embed widget bundle
-├── tsconfig.app.json       # strict: true
-└── components.json         # shadcn/ui configuration
+│   ├── App.tsx                — Routes + providers
+│   ├── main.tsx               — Entry point
+│   ├── index.css              — Tailwind v4 + CSS variables
+│   ├── lib/                   — api.ts, query-client.ts, utils.ts, websocket.ts
+│   ├── hooks/                 — TanStack Query hooks (use-tools-api, use-sessions, use-chat, use-memory)
+│   ├── types/                 — tool.ts, session.ts, chat.ts, common.ts, api.ts
+│   ├── routes/                — Page components per feature
+│   │   ├── dashboard.tsx
+│   │   ├── chat/index.tsx
+│   │   ├── tools/index.tsx, [id].tsx, new.tsx
+│   │   ├── sessions/index.tsx, [id].tsx
+│   │   ├── memory/index.tsx
+│   │   └── playground/index.tsx
+│   └── components/
+│       ├── Layout/            — dashboard-layout.tsx, Sidebar.tsx, top-nav.tsx
+│       └── ui/                — button.tsx, card.tsx, input.tsx, badge.tsx
+├── vite.config.ts
+├── tsconfig.app.json          — strict: true
+└── components.json            — shadcn/ui configuration
 ```
 
 ---
@@ -56,7 +65,7 @@ new tools. Each step validates its fields before allowing you to proceed.
 
 | Field | Description |
 |-------|-------------|
-| `name` | Unique per tenant. Lowercase, no spaces. Use `snake_case`. |
+| `name` | Lowercase, no spaces. Use `snake_case`. |
 | `description` | Human-readable. The LLM reads this to decide tool relevance. Be specific. |
 | `purpose` | When to use this tool. Helps the LLM understand context. |
 | `category` | Functional group: `general`, `data`, `analytics`, `communication`, etc. |
@@ -152,30 +161,6 @@ Use this to debug how the agent would perceive the tool call cycle.
 
 ---
 
-## Embed Widget Integration
-
-For a complete tutorial, see the **[Embed Integration Guide](embed-integration.md)**.
-
-Quick start:
-
-```html
-<script src="https://your-api.com/embed/widget.js"
-  data-token="nex_abc123..."
-  data-api-url="https://your-api.com">
-</script>
-```
-
-Generate a token via the **Embed Generator** (`/embed`) or the API:
-
-```bash
-curl -X POST https://your-api.com/api/v1/embeds \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"allowed_domains": ["example.com"], "theme": "light"}'
-```
-
----
-
 ## Styling Customization
 
 The UI uses **Tailwind CSS v4** with CSS custom properties for theming.
@@ -217,10 +202,6 @@ Override variables in your CSS:
 # Main console app
 npm run build
 # Output: dist/
-
-# Standalone embed widget (UMD)
-npm run build:embed
-# Output: dist-embed/embed-widget.js
 ```
 
 ### Environment Variables
@@ -229,7 +210,6 @@ npm run build:embed
 |----------|---------|-------------|
 | `VITE_API_URL` | `/api` | Backend API base URL (proxied in dev) |
 | `VITE_WS_URL` | `ws://localhost:8000/ws` | WebSocket endpoint |
-| `VITE_EMBED_URL` | Derived from API URL | Embed widget script location |
 
 Copy `.env.example` to `.env` and fill in your values:
 

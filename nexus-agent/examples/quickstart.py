@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import uuid
 
 from nexus_sdk import NexusClient
 from nexus_sdk.types import ToolSchema

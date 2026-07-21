@@ -34,8 +34,6 @@ class SessionRead(BaseModel):
     """Full session response."""
 
     id: uuid.UUID
-    tenant_id: uuid.UUID
-    user_id: uuid.UUID
     title: str
     status: str
     metadata_: dict[str, Any] | None = Field(alias="metadata")

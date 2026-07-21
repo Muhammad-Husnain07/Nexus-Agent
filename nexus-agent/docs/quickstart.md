@@ -25,7 +25,7 @@ docker compose -f docker/docker-compose.yml up -d postgres redis
 uv run alembic upgrade head
 
 # Seed demo tools
-uv run python scripts/seed.py --no-embed
+uv run python scripts/seed.py
 
 # Start backend
 uv run uvicorn nexus.main:create_app --factory --reload --host 0.0.0.0 --port 8000

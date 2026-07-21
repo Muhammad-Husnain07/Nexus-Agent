@@ -10,10 +10,10 @@ from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from nexus.db.base import Base, TenantMixin, tenant_table_args
+from nexus.db.base import Base
 
 
-class ToolVersion(TenantMixin, Base):
+class ToolVersion(Base):
     """Snapshot of a tool definition at a specific version number."""
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -34,7 +34,3 @@ class ToolVersion(TenantMixin, Base):
         Text, nullable=True, comment="Reason or description of the change"
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-    __table_args__ = tenant_table_args(
-        "tool_version",
-    )

@@ -21,8 +21,6 @@ from nexus.redis_client.rate_limiter import (
     RateLimitError,
     SlidingWindowRateLimiter,
     TokenBucketRateLimiter,
-    tenant_key,
-    user_key,
 )
 
 __all__ = [
@@ -42,7 +40,5 @@ __all__ = [
     "init_redis",
     "pubsub_channel",
     "redis_health_check",
-    "tenant_key",
     "tool_channel",
-    "user_key",
 ]

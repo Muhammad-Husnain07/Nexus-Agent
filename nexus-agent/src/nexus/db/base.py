@@ -1,11 +1,9 @@
-"""SQLAlchemy declarative base, async engine factory, session, and tenant mixin."""
+"""SQLAlchemy declarative base, async engine factory, and session."""
 
-import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from sqlalchemy import ForeignKey, Index, MetaData
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import MetaData
 from sqlalchemy.ext.asyncio import (
     AsyncAttrs,
     AsyncEngine,
@@ -13,7 +11,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, declared_attr, mapped_column
+from sqlalchemy.orm import DeclarativeBase, declared_attr
 
 from nexus.config.settings import get_settings
 
@@ -35,36 +33,7 @@ class Base(AsyncAttrs, DeclarativeBase):
     def __tablename__(cls) -> str:
         return cls.__name__.lower()
 
-    id: Any = None  # redefined in every subclass
-    tenant_id: Any = None  # redefined via TenantMixin
-
-
-def tenant_table_args(
-    name: str,
-    *extra_args: object,
-) -> tuple[object, ...]:
-    """Build __table_args__ tuple with standard tenant composite indexes.
-
-    Every tenant-scoped table should include (tenant_id, id) and
-    (tenant_id, created_at) composite indexes for efficient multi-tenant
-    querying.
-    """
-    return (
-        Index(f"ix_{name}_tid_id", "tenant_id", "id"),
-        Index(f"ix_{name}_tid_created", "tenant_id", "created_at"),
-    ) + extra_args
-
-
-class TenantMixin:
-    """Mixin that adds a plain tenant_id UUID column (no FK constraint)."""
-
-    @declared_attr
-    def tenant_id(cls) -> Mapped[uuid.UUID]:
-        return mapped_column(
-            UUID(as_uuid=True),
-            nullable=False,
-            index=True,
-        )
+    id: Any = None
 
 
 _engine: AsyncEngine | None = None
