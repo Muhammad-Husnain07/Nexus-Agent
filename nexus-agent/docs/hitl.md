@@ -14,7 +14,7 @@ preview** feedback (approve / edit / reject a result before proceeding).
 The chat SSE stream emits two event types related to human interaction:
 
 - ``approval_required`` — emitted **before** a tool call that requires approval (tool gating). The agent pauses and waits for a decision before executing the tool.
-- ``interrupt`` — emitted for generic pauses such as **intermediate preview** (``present_preview`` node). The agent presents a result and waits for feedback (approve/edit/reject) before proceeding.
+- ``interrupt`` — emitted for generic pauses such as **final answer review** (``review_final_answer`` node) or **plan review** (``review_plan`` node). The agent presents a result and waits for feedback (approve/edit/reject) before proceeding.
 
 Both events have the same SSE wire format but different payload structures.
 
@@ -151,9 +151,13 @@ Returns all pending (undecided) approvals for a session.  Expired approvals
 
 Make a decision on a pending approval and resume the agent graph.
 
+**Query parameter:** `?stream=true` — returns an SSE stream of resumed execution
+events (`tool_call_completed`, `final_response`, `done`) so the inline chat can
+continue without reconnecting to the chat endpoint.
+
 **Request body:** see Decision payloads table above.
 
-**Response:**
+**Response (stream=false, default):**
 ```json
 {
   "status": "ok",
@@ -162,13 +166,8 @@ Make a decision on a pending approval and resume the agent graph.
 }
 ```
 
-### Legacy convenience endpoints (kept for backward compatibility)
-
-| Endpoint | Action |
-|----------|--------|
-| ``POST /api/v1/agent/{session_id}/approve`` | Approve |
-| ``POST /api/v1/agent/{session_id}/reject`` | Reject |
-| ``POST /api/v1/agent/{session_id}/edit`` | Edit (requires ``edited_inputs`` in body) |
+**Response (stream=true):** SSE stream with the same event format as the
+chat endpoint — `tool_call_completed`, `final_response`, `done`.
 
 ---
 
@@ -178,9 +177,8 @@ Make a decision on a pending approval and resume the agent graph.
 
 Pending approvals older than ``approval_timeout_hours`` (default **24 h**,
 configurable via ``AgentSettings.approval_timeout_hours``) are
-**auto-rejected** when the frontend polls ``GET /pending/{session_id}``.
-The ``Approval`` row is updated with ``status = "rejected"`` and
-``decision_payload = {"action": "reject", "reason": "timeout"}``.
+**auto-rejected** on read. The ``Approval`` row is updated with
+``status = "rejected"`` and ``decision_payload = {"action": "reject", "reason": "timeout"}``.
 
 ### Session archived while approval pending
 
@@ -196,13 +194,15 @@ historical pending rows, but only the most recent one is actionable.
 
 ---
 
-## Frontend Integration Checklist
+## Frontend Integration (Inline Chat Flow)
 
 1. Connect to ``POST /api/v1/sessions/{session_id}/chat`` (SSE).
-2. Listen for ``event: approval_required`` and ``event: interrupt``.
-3. Render an approval dialog with the ``payload.question``, tool name,
-   inputs, and risk level.
-4. For **edit** actions, let the user modify the ``inputs`` dict and send
-   ``{"action": "edit", "edited_inputs": {...}}``.
-5. Call ``POST /api/v1/approvals/{approval_id}/decide`` with the decision.
-6. Reconnect to the SSE stream if resumed execution produces more events.
+2. Listen for ``event: approval_required`` — the payload contains the tool
+   name, inputs, risk level, and question.
+3. Render an approval card **inline** in the chat with Approve / Reject buttons.
+4. When the user clicks, call ``POST /api/v1/approvals/{approval_id}/decide?stream=true``
+   with ``{"action": "approve"}`` or ``{"action": "reject"}``.
+5. Parse the SSE response from the decide endpoint — it resumes execution and
+   streams ``tool_call_completed``, ``final_response``, and ``done`` events.
+6. Append these events to the same assistant message in the chat.
+7. For **edit** actions, send ``{"action": "edit", "edited_inputs": {...}}``.

@@ -54,24 +54,6 @@ See [deploy/k8s/](../deploy/k8s/) for all manifests:
 
 ---
 
-## JWT Secret Management
-
-The JWT signing secret (`NEXUS_AUTH__JWT_SECRET`) must NEVER be stored in
-`.env.example` or committed to git. In production, set it via a secret manager
-(HashiCorp Vault, AWS Secrets Manager, GitHub Actions secrets) and inject it
-as an environment variable.
-
-Generate a strong secret:
-
-```bash
-python -c "import secrets; print(secrets.token_hex(32))"
-```
-
-The application will refuse to start if the secret is empty, is the literal
-string ``change-me``, or is shorter than 32 characters.
-
----
-
 ## Scaling
 
 ### Horizontal Scaling (Kubernetes)
@@ -155,19 +137,9 @@ Add to your crontab for scheduled backups:
 |----------|---------|----------|
 | `GET /healthz` | Liveness probe | `{"status":"ok"}` |
 | `GET /readyz` | Readiness + dependencies | `{"status":"ok","database":"ok","redis":"ok"}` |
-| `GET /metrics` | Prometheus scrape | Prometheus text format |
 
-### Prometheus Metrics
 
-| Metric | Type | Labels |
-|--------|------|--------|
-| `agent_runs_total` | Counter | `tenant`, `status` |
-| `agent_run_duration_seconds` | Histogram | `tenant` |
-| `tool_calls_total` | Counter | `tenant`, `tool`, `status` |
-| `llm_tokens_total` | Counter | `tenant`, `provider`, `direction` |
-| `llm_cost_usd_total` | Counter | `tenant` |
-| `active_sessions` | Gauge | `tenant` |
-| `hitl_approvals_pending` | Gauge | `tenant` |
+Metrics collected via structlog structured logging. No Prometheus metrics are exposed.
 
 ### Alert Thresholds
 
@@ -179,14 +151,6 @@ Add to your crontab for scheduled backups:
 | DB pool exhausted | Pool waiting > 10 connections | Warning |
 | High cost spend | Daily cost > threshold | Warning |
 | Pending approvals > 50 | `hitl_approvals_pending` > 50 | Warning |
-
-### Tracing (OpenTelemetry)
-
-Configure the collector endpoint via `NEXUS_OBSERVABILITY__OTEL_ENDPOINT`. Auto-instrumented:
-- HTTPX tool calls
-- asyncpg queries
-- Redis operations
-- FastAPI request spans
 
 ### LLM Tracing (LangSmith)
 

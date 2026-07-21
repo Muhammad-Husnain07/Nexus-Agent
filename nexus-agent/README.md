@@ -13,10 +13,10 @@ A **standalone, vendor-neutral agentic AI orchestration layer** that exposes a c
                          │
 ┌────────────────────────▼─────────────────────────────────┐
 │                    FastAPI Gateway                         │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐ │
-│  │ AuthN/Z  │ │  Tenant  │ │  Rate    │ │  Structured  │ │
-│  │Middleware │ │Extract   │ │ Limiter  │ │   Logging    │ │
-│  └──────────┘ └──────────┘ └──────────┘ └──────────────┘ │
+│  ┌──────────┐  ┌──────────┐  ┌──────────────┐           │
+│  │  AuthN/Z │  │  Rate    │  │  Structured  │           │
+│  │Middleware│  │ Limiter  │  │   Logging    │           │
+│  └──────────┘  └──────────┘  └──────────────┘           │
 └────────────────────────┬─────────────────────────────────┘
                          │
 ┌────────────────────────▼─────────────────────────────────┐
@@ -36,7 +36,7 @@ A **standalone, vendor-neutral agentic AI orchestration layer** that exposes a c
 └────────────────────────┬─────────────────────────────────┘
                          │
 ┌────────────────────────▼─────────────────────────────────┐
-│              Data Layer (Multi-Tenant)                     │
+│              Data Layer (Single-Tenant)                     │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌───────────┐│
 │  │PostgreSQL│  │ pgvector │  │  Redis   │  │   Object  ││
 │  │+asyncpg  │  │ (embeds) │  │  (cache) │  │   Store   ││
@@ -100,17 +100,16 @@ Example: `NEXUS_DATABASE__URL` sets `settings.database.url`.
 | `NEXUS_MEMORY__ENABLED` | No | `true` | Enable memory extraction |
 | `NEXUS_MEMORY__RETRIEVAL_TOP_K` | No | `5` | Memories per query |
 | | | | |
-| **Security** | | | |
-| `NEXUS_AUTH__JWT_SECRET` | Yes | — | 32+ char random secret |
+| **Agent** | | | |
 | `NEXUS_AGENT__HITL_DEFAULT` | No | `true` | Require human approval by default |
 | `NEXUS_AGENT__RUN_LOCK_TTL_S` | No | `600` | Per-session lock TTL in seconds |
 | `NEXUS_TOOLS__MAX_RETRIES` | No | `3` | Max retries per tool call |
 | `NEXUS_SERVER__WORKERS` | No | `4` | Number of uvicorn workers |
 | | | | |
-| **Observability** | | | |
-| `NEXUS_OBSERVABILITY__LANGSMITH_API_KEY` | No | — | LangSmith API key for tracing |
-| `NEXUS_OBSERVABILITY__LOG_LEVEL` | No | `INFO` | Log level |
-| `NEXUS_OBSERVABILITY__OTEL_ENDPOINT` | No | — | OpenTelemetry collector endpoint |
+| **Logging** | | | |
+| `NEXUS_ENV` | No | `development` | Environment name |
+| `NEXUS_LOG_LEVEL` | No | `INFO` | Log level |
+| `NEXUS_LOG_FORMAT` | No | `console` | Log format (`console` or `json`) |
 
 > **Using a non-OpenAI provider?** LiteLLM supports 100+ providers. Set
 > `NEXUS_LLM__DEFAULT_PROVIDER` and `NEXUS_LLM__DEFAULT_MODEL` with the
@@ -167,7 +166,6 @@ nexus-agent/
 │   ├── llm/               # LiteLLM integration
 │   ├── memory/            # Short-term & long-term memory
 │   ├── middleware/         # Custom ASGI middleware
-│   ├── observability/     # OpenTelemetry + structlog
 │   ├── redis_client/      # Redis cache & pub/sub
 │   ├── security/          # AuthN/Z helpers
 │   ├── sessions/          # Session lifecycle

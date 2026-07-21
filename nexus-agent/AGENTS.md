@@ -39,7 +39,7 @@
 
 1. **Tool-driven** — All business capability is behind tool boundaries. The agent never calls a database or external API directly.
 2. **Vendor-neutral** — LLM providers, vector stores, and infrastructure are swappable via config/env vars.
-3. **Multi-tenant** — Every database row carries `tenant_id`. Isolation at the query layer.
+3. **Single-tenant** — No tenant isolation; all data is shared. Simplified deployment for single-user/single-team use cases.
 4. **HITL-first (Human-in-the-Loop)** — Every tool invocation can require human approval. The agent never executes destructive actions autonomously unless explicitly configured.
 5. **Stateless agent, stateful session** — The agent is ephemeral; conversation state, memory, and tool results live in PostgreSQL/Redis.
 6. **Fail closed** — On error, ambiguity, or policy violation, the agent defers to the human.
@@ -89,7 +89,7 @@ uv run alembic revision --autogenerate -m "description"
 | Element | Convention | Example |
 |---------|-----------|---------|
 | Modules | `snake_case` | `tool_registry.py` |
-| Functions/Methods | `snake_case` | `get_tenant_session()` |
+| Functions/Methods | `snake_case` | `get_session()` |
 | Classes/Models | `PascalCase` | `AgentState`, `ToolInvocation` |
 | Env vars | `UPPER_CASE` | `DATABASE_URL`, `REDIS_URL` |
 | Constants | `UPPER_CASE` | `MAX_RETRY_COUNT` |
@@ -116,33 +116,35 @@ See [docs/architecture.md](docs/architecture.md) for detailed architecture docum
 
 ---
 
-## Nested AGENTS.md Placeholders
+## Module Responsibilities
 
-### `src/nexus/agent/AGENTS.md`
+### `src/nexus/agent/` — LangGraph Orchestration
 
-This module owns the LangGraph orchestration graph. Key responsibilities:
-- Define `StateGraph` topologies for conversational + autonomous flows.
+This module owns the LangGraph StateGraph that implements a DAG-based Plan-and-Execute + Reflection reasoning loop. Key responsibilities:
+- Define `StateGraph` topology with 6 parent nodes + 3-node tool subgraph.
 - Manage graph lifecycle (compile, checkpoint, stream).
-- Provide `AgentExecutor` class that wires LLM, tools, memory, and human-in-the-loop.
-- Implement supervisor + sub-agent patterns via `StateGroup` / `subgraphs`.
+- Provide `AgentRunner` class that wires LLM, tools, memory, event bus, and session lock.
+- Human-in-the-Loop via `review_final_answer` / `review_plan` nodes and LangGraph `interrupt()`.
+- DAG-based parallel tool execution inside the tool subgraph via `Send()` API.
+- Self-reflection via `reflect_on_response` — scores responses and routes to clarification or regeneration.
 
-### `src/nexus/tools/AGENTS.md`
+### `src/nexus/tools/` — Tool Registration, Discovery & Invocation
 
-This module owns tool registration, discovery, and invocation. Key responsibilities:
-- `ToolRegistry` — Pydantic-backed registry of all known tools.
-- MCP client for discovering external MCP servers (discover, fetch schema).
-- Tool execution with timeout, retry, idempotency key, and audit logging.
-- Tool schema generation from Pydantic models (via Pydantic AI or manual JSON Schema).
-- HITL gate (require human approval before execution).
+This module owns the tool lifecycle. Key responsibilities:
+- `ToolRegistry` — Pydantic-backed registry of all known tools with automatic embedding generation.
+- MCP server via `fastapi-mcp` — exposes tool registry as MCP `tools/list` and `tools/call`.
+- `ToolExecutor` — resilient async HTTP execution with auth injection, schema validation, and retry.
+- `DynamicToolSelector` — semantic + LLM-reranked discovery with Redis caching.
+- HITL gate — approval checking before destructive/risky tool execution.
 
-### `src/nexus/api/AGENTS.md`
+### `src/nexus/api/` — FastAPI Application & Public API Layer
 
 This module owns the FastAPI application. Key responsibilities:
 - Route definitions: `/tools`, `/sessions`, `/chat`, `/approvals`, `/memory`, `/ws`.
-- SSE and WebSocket endpoints for streaming agent responses.
-- Middleware: tenant resolution, rate limiting, request ID, structured logging.
+- SSE and WebSocket endpoints for streaming agent responses with heartbeat keep-alive.
+- Middleware: CORS, rate limiting, request ID, structured logging, error handling, drain.
 
-### `src/nexus/memory/AGENTS.md`
+### `src/nexus/memory/` — Long-Term Memory System
 
 This module owns the two-tier memory system. Key responsibilities:
 - `AsyncPostgresSaver` checkpointer for LangGraph session state persistence.
@@ -150,15 +152,15 @@ This module owns the two-tier memory system. Key responsibilities:
 - `EpisodicSummarizer` that condenses conversation history via LLM.
 - Memory retrieval and importance scoring for relevant context injection.
 
-### `src/nexus/sessions/AGENTS.md`
+### `src/nexus/sessions/` — Conversation Session Management
 
 This module owns conversation session management. Key responsibilities:
 - Session CRUD — create, rename, fork, archive.
-- `ContextWindowManager` to track token usage and trigger summarization.
+- `ContextWindowManager` to track token usage and manage summarization.
 - `SystemPromptBuilder` that assembles dynamic system prompts with memory context.
 - Message persistence with branching support (`parent_message_id`).
 
-### `src/nexus/llm/AGENTS.md`
+### `src/nexus/llm/` — LLM Integration
 
 This module owns the LLM integration layer. Key responsibilities:
 - `LLMClient` — unified interface to 100+ providers via LiteLLM.
@@ -166,16 +168,15 @@ This module owns the LLM integration layer. Key responsibilities:
 - `ModelRouter` — routes task types (chat, embedding) to the appropriate model.
 - Fallback chains and retry policies for provider resilience.
 
-### `src/nexus/security/AGENTS.md`
+### `src/nexus/security/` — Rate Limiting & Auth
 
-This module owns rate limiting. Key responsibilities:
-- Tiered rate limiting per endpoint prefix via Redis.
-- Passthrough auth middleware (no JWT, no RBAC).
+This module owns rate limiting and passthrough auth. Key responsibilities:
+- Tiered rate limiting per endpoint prefix via Redis sliding window.
+- Passthrough auth middleware (no JWT, no RBAC) — injects default identity.
 
-### `src/nexus/middleware/AGENTS.md`
+### `src/nexus/middleware/` — ASGI Middleware Stack
 
 This module owns the ASGI middleware stack. Key responsibilities:
-- `AuthMiddleware` — passthrough (injects default user identity).
-- `TenantMiddleware` — extracts tenant ID from request state.
-- `TieredRateLimitMiddleware` — per-tenant sliding window rate limiter.
+- `AuthMiddleware` — passthrough (no identity injection).
+- `TieredRateLimitMiddleware` — per-IP sliding window rate limiter.
 - `DrainMiddleware` — graceful shutdown, rejects new requests during drain.

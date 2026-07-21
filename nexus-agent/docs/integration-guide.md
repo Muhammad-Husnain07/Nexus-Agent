@@ -1,33 +1,12 @@
 # Integration Guide
 
-This guide covers embedding the Nexus Agent chatbot in your application: authentication, SSE/WebSocket clients, event reference, and HITL UX patterns.
+This guide covers embedding the Nexus Agent chatbot in your application: SSE/WebSocket clients, event reference, and HITL UX patterns.
 
 ---
 
 ## Authentication
 
-### JWT Token Flow
-
-```bash
-# Login
-curl -X POST http://localhost:8000/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email": "admin@example.com"}'
-# → {"access_token":"eyJ...","refresh_token":"eyJ...","token_type":"bearer"}
-
-# Use in every request
-Authorization: Bearer eyJ...
-```
-
-### API Key Flow
-
-```bash
-# Set the key via the API or admin panel
-Authorization: Bearer eyJ...
-
-# Use the API key header instead
-X-API-Key: nxs_abc123...
-```
+No authentication required. All requests are treated as passthrough with a default user identity.
 
 ---
 
@@ -42,7 +21,6 @@ Use the native `EventSource` API. SSE is the recommended method for unidirection
   <div id="chat"></div>
   <script>
     const SESSION_ID = '<session-uuid>';
-    const TOKEN = '<jwt-or-api-key>';
     const chat = document.getElementById('chat');
 
     async function sendMessage(message) {
@@ -51,7 +29,6 @@ Use the native `EventSource` API. SSE is the recommended method for unidirection
         {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${TOKEN}`,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ message, stream: true }),
@@ -106,13 +83,12 @@ Use the native `EventSource` API. SSE is the recommended method for unidirection
 import json
 import httpx
 
-async def stream_chat(session_id: str, message: str, token: str):
+async def stream_chat(session_id: str, message: str):
     async with httpx.AsyncClient() as client:
         async with client.stream(
             "POST",
             f"http://localhost:8000/api/v1/sessions/{session_id}/chat",
             headers={
-                "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
             },
             json={"message": message, "stream": True},
@@ -168,59 +144,52 @@ data: {"type":"<type>","ts":"ISO-8601","payload":{...}}
 
 | Event | When | Payload |
 |-------|------|---------|
-| `plan_created` | Agent creates a plan | `{"steps": [{"id","description","tool_name","depends_on"}]}` |
-| `tool_call_started` | Agent begins tool execution | `{"tool_name": "str", "arguments": {...}}` |
-| `tool_call_completed` | Tool execution finished | `{"tool_name": "str", "status": "success", "data": {...}}` |
-| `clarification_needed` | Agent needs more information | `{"question": "What email address?"}` |
+| `tool_selected` | Intent parsed from user message | `{"intent": "str", "parameters": {...}}` |
+| `plan_created` | DAG plan generated with parallel tasks | `{"steps": [{"id","description","tool_name","depends_on"}]}` |
+| `tool_call_completed` | Tool execution finished | `{"tool_name": "str", "status": "success"|"error", "data": {...}}` |
+| `clarification_needed` | Agent needs more information | `{"question": "Which city?"}` |
 | `approval_required` | Tool requires HITL approval | See [HITL docs](hitl.md) for full payload |
 | `intermediate_preview` | Result ready for human review | `{"text": "..."}` |
-| `final_response` | Agent completes its turn | `{"text": "The email was sent."}` |
-| `error` | An error occurred | `{"message": "Tool timeout"}`, `{"errors": [...]}` |
+| `interrupt` | Graph paused for final answer review | `{"question": "Approve?", "source": "review_final_answer"}` |
+| `final_response` | Agent completes its turn | `{"text": "The temperature is 24°C."}` |
+| `reflection_result` | Self-evaluation score | `{"score": 8, "feedback": "str", "reflection_count": 1}` |
+| `error` | An error occurred | `{"message": "Tool timeout"}` |
 | `done` | Stream complete | `{}` |
 
 ---
 
 ## HITL UX Patterns
 
-### Rendering Approval Requests
+### Inline Approval Flow
 
-When you receive an `approval_required` event, the SSE stream **closes**. You must:
+When you receive an `approval_required` event the SSE stream **stays open** and delivers the event in-band. You must:
 
 1. Parse the payload to get the tool call details
-2. Render an approval dialog showing: tool name, inputs, risk level
-3. On user decision, call the decide endpoint
+2. Render Approve/Reject buttons directly in the chat UI
+3. On user decision, call the decide endpoint with `?stream=true`
 
 ```javascript
-async function showApprovalUI(payload) {
+async function showApprovalUI(payload, approvalId) {
   const { tool_call, risk_level, question } = payload;
 
-  // Render dialog
-  const approved = confirm(
-    `${question}\n\n` +
-    `Tool: ${tool_call.name}\n` +
-    `Inputs: ${JSON.stringify(tool_call.inputs)}\n` +
-    `Risk: ${risk_level}\n\n` +
-    `Click OK to approve, Cancel to reject`
-  );
-
-  if (approved) {
-    await decideApproval(approvalId, 'approve');
-  } else {
-    await decideApproval(approvalId, 'reject', 'User declined');
-  }
+  // Render inline buttons in the chat
+  const container = document.getElementById('approval-' + approvalId) || createApprovalContainer(approvalId);
+  container.innerHTML = `
+    <p><b>${question}</b></p>
+    <p>Tool: ${tool_call.name} | Risk: ${risk_level}</p>
+    <button onclick="decideApproval('${approvalId}', 'approve')">Approve</button>
+    <button onclick="decideApproval('${approvalId}', 'reject', 'User declined')">Reject</button>
+  `;
 }
 
 async function decideApproval(approvalId, action, comment) {
-  await fetch(`http://localhost:8000/api/v1/approvals/${approvalId}/decide`, {
+  const params = new URLSearchParams({ stream: 'true' });
+  await fetch(`http://localhost:8000/api/v1/approvals/${approvalId}/decide?${params}`, {
     method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${TOKEN}`,
-      'Content-Type': 'application/json',
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action, comment }),
   });
-  // Reconnect to SSE stream to get remaining events
-  sendMessage(document.getElementById('input').value);
+  // The existing SSE stream resumes with tool results and final response
 }
 ```
 
@@ -266,13 +235,4 @@ DELETE /api/v1/sessions/{id}
 GET /api/v1/sessions/{id}/messages?page=1&page_size=50
 ```
 
----
 
-## Multi-Tenant Headers
-
-```bash
-# Set tenant context via header
-X-Tenant-ID: 11111111-1111-4111-8111-111111111111
-```
-
-All queries are automatically scoped to the tenant. See [Architecture](architecture.md) for details.

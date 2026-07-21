@@ -56,12 +56,7 @@ uv run alembic upgrade head
 
 | File | Purpose |
 |------|---------|
-| ``0001_init.py`` | Initial schema (tenants, users, sessions, tools, memories) |
-| ``0002_tool_version.py`` | Tool versioning support |
-| ``0003_checkpoint_tables.py`` | LangGraph checkpoint tables |
-| ``0004_resilience.py`` | Agent run tracking and error resilience |
-| ``0005_tool_credential.py`` | Tool credential encryption |
-| ``0006_rate_limit_per_minute.py`` | Rate limiting configuration |
+| ``417bcd711761_init.py`` | Initial schema — all tables (single-tenant, no user_id) |
 
 ---
 
@@ -76,11 +71,10 @@ SQLAlchemy model with pgvector for semantic search.
 
 | Part | Value | Example |
 |------|-------|---------|
-| tenant_id | UUID string | ``"00000000-0000-0000-0000-000000000001"`` |
 | collection | fixed string | ``"memories"`` |
 | kind | memory type | ``"preference"``, ``"fact"``, ``"procedural"``, ``"episodic"`` |
 
-Full namespace: ``(tenant_id, "memories", memory_kind)``
+Full namespace: ``("memories", memory_kind)``
 
 ### Operations
 
@@ -102,12 +96,11 @@ The ``Memory`` table (from Phase 3) contains:
 | Column | Type | Description |
 |--------|------|-------------|
 | ``id`` | UUID | Primary key |
-| ``tenant_id`` | UUID (FK) | Multi-tenant isolation |
 | ``session_id`` | UUID (FK, nullable) | Source session |
 | ``kind`` | string | episodic, semantic, procedural, preference |
 | ``content`` | text | The memory text |
 | ``embedding`` | VECTOR(1536) | pgvector embedding for semantic search |
-| ``metadata_`` | JSONB | Arbitrary metadata (user_id, session_id, etc.) |
+| ``metadata_`` | JSONB | Arbitrary metadata (session_id, etc.) |
 | ``importance`` | float (0-1) | Salience score |
 | ``last_accessed_at`` | timestamp | For decay calculations |
 | ``created_at`` | timestamp | Row creation time |
@@ -138,8 +131,7 @@ Called during session setup to inject relevant memories into the system prompt:
 
 1. Generate embedding for the user's query
 2. Semantic search top-K memories (configurable via ``retrieval_top_k``)
-3. Filter by tenant_id and user_id
-4. Return results formatted for system prompt injection
+3. Return results formatted for system prompt injection
 
 ### `decay`
 
@@ -183,4 +175,4 @@ final outcome.  Used by the MemoryManager during ``extract_and_store``.
 | ``src/nexus/memory/store.py`` | MemoryStore with pgvector |
 | ``src/nexus/memory/manager.py`` | MemoryManager service |
 | ``src/nexus/memory/summarizer.py`` | EpisodicSummarizer |
-| ``alembic/versions/0003_checkpoint_tables.py`` | Checkpoint table migration |
+| ``alembic/versions/b0a16b06227f_add_interrupt_type_to_approval.py`` | Approval model extension |
