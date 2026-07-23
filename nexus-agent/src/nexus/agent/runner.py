@@ -97,7 +97,10 @@ async def _refresh_tool_cache(
             from nexus.tools.schemas import ToolList  # noqa: PLC0415
             async with session_factory() as session:
                 tl: ToolList = await selector._registry.list(session, page_size=1000)
-                _tool_cache = [t.model_dump(mode="json") for t in tl.items]
+                _tool_cache = [
+                    {k: v for k, v in t.model_dump(mode="json").items() if k != "embedding"}
+                    for t in tl.items
+                ]
                 _tool_cache_ts = _time.time()
         except Exception:
             logger.warning("runner.available_tools_prepopulate_failed")
