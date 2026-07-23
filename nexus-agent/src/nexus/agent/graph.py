@@ -60,6 +60,33 @@ def route_after_understand(state: AgentState) -> str:
     6. High confidence → discover_tools
     """
     resp_type: str = state.get("response_type", "tool")
+
+    # Follow-up override: if the LLM misclassifies a short follow-up
+    # question (e.g. "what is the age?") as a greeting, detect it by
+    # checking whether the conversation has prior tool interactions.
+    # Short follow-ups that are NOT one-word greetings should stay on
+    # the tool path so they can use MemoryScout or re-execute tools.
+    if resp_type == "greeting":
+        messages: list = list(state.get("messages", []))
+        last_user = ""
+        for m in reversed(messages):
+            if isinstance(m, dict) and m.get("role") == "user":
+                last_user = str(m.get("content", ""))
+                break
+        q = last_user.lower().strip()
+        one_word_greetings = {"hi", "hello", "hey", "howdy", "yo", "sup", "greetings", "good morning", "good afternoon", "good evening"}
+        # Not a one-word greeting → likely a short follow-up question
+        if q and q not in one_word_greetings and len(q) < 60:
+            # Check if there are prior assistant responses (evidence of
+            # conversation history with tool interactions)
+            has_assistant_msgs = any(
+                isinstance(m, dict) and m.get("role") == "assistant"
+                for m in messages
+            )
+            if has_assistant_msgs:
+                logger.info("route_after_understand.followup_override", query=q)
+                resp_type = "tool"
+
     if resp_type in ("greeting", "meta", "memory_query"):
         return "respond_without_tool"
     missing: list[str] = state.get("missing_info_slots") or []
