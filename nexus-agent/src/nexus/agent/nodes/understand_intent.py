@@ -251,8 +251,6 @@ async def understand_intent(
         "parameters": merged_params,
     }
 
-    new_messages.append(_openai_message("assistant", f"Parsed intent: {analysis.primary_goal}"))
-
     # Determine if this is a high-risk intent (tool requires approval)
     is_high_risk = False
     try:
