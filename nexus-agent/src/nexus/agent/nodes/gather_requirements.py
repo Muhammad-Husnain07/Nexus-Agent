@@ -42,7 +42,7 @@ async def gather_requirements(
     
     # Check for reflection issue context (from reflect_on_response approach_issue)
     gathered = state.get("gathered_requirements", {}) or {}
-    reflection_issue = gathered.pop("_reflection_issue", None) if isinstance(gathered, dict) else None
+    reflection_issue = gathered.get("_reflection_issue") if isinstance(gathered, dict) else None
 
     if not missing and not reflection_issue:
         return {"final_response": None, "missing_info_slots": []}
@@ -64,13 +64,45 @@ async def gather_requirements(
     questions_asked: int = state.get("questions_asked", 0)
     max_q = max(1, _MAX_QUESTIONS_PER_TURN - questions_asked)
 
-    system_prompt = prompt_manager.render(
+    example_context = {
+        "response_type": state.get("response_type", "tool"),
+        "intent": (state.get("intent") or {}).get("intent", ""),
+    }
+
+    system_prompt = prompt_manager.render_with_examples(
         "gather_requirements",
+        version="2.0",
+        context=example_context,
+        max_examples=3,
+        max_mistakes=3,
         missing_summary="\n".join(f"- {slot}" for slot in missing) if missing else (reflection_issue or "No data found"),
         max_questions=str(max_q),
         slots_detail=slots_detail or reflection_issue or "No additional details available.",
         reflection_context=reflection_issue or "",
     )
+
+    # Inject proactive memory context via Scout (TRIGGER_GATHER)
+    try:
+        from nexus.memory.scout import MemoryScout  # noqa: PLC0415
+        _scout = MemoryScout(llm=llm)
+        _memory_ctx = await _scout.scout(
+            trigger="gather",
+            context={"missing_slots": missing},
+        )
+        if _memory_ctx:
+            system_prompt = _memory_ctx + "\n\n" + system_prompt
+    except Exception:
+        pass
+
+    # Inject working memory context
+    try:
+        from nexus.memory.working import WorkingMemory  # noqa: PLC0415
+        wm = WorkingMemory.from_dict(state.get("working_memory"))
+        wm_ctx = wm.to_context(n=5)
+        if wm_ctx:
+            system_prompt = wm_ctx + "\n\n" + system_prompt
+    except Exception:
+        pass
 
     response = await llm.complete(
         model=model,
@@ -83,15 +115,28 @@ async def gather_requirements(
             ),
         ],
         temperature=0.7,
+        stop=["###", "User:", "user:", "<|im_end|>"],
     )
     question: str = response.content or "Could you please provide more details?"
 
     question_msg = _openai_message("assistant", question)
+
+    # Add working memory entry for the question asked
+    try:
+        from nexus.memory.working import WorkingMemory  # noqa: PLC0415
+        wm = WorkingMemory.from_dict(state.get("working_memory"))
+        if missing:
+            wm.add(key="asked_about", content=", ".join(missing), source="inference",
+                   importance=0.5, turn_id=questions_asked)
+        working_memory_update = wm.to_dict()
+    except Exception:
+        working_memory_update = state.get("working_memory", {"entries": []})
 
     return {
         "messages": [question_msg],
         "final_response": question,
         "missing_info_slots": missing,  # keep until user answers
         "questions_asked": questions_asked + 1,
+        "working_memory": working_memory_update,
         "_routing_decision": "ask",
     }

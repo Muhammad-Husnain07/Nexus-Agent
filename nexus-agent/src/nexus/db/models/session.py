@@ -34,7 +34,6 @@ class Session(Base):
     )
 
     messages = relationship("Message", back_populates="session", passive_deletes=True)
-    agent_runs = relationship("AgentRun", back_populates="session", passive_deletes=True)
 
 
 class Message(Base):

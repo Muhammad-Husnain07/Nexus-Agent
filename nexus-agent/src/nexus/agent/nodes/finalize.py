@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Callable
 from typing import Any
@@ -23,6 +24,18 @@ def _openai_message(role: str, content: str, **kwargs: Any) -> dict[str, Any]:
     return msg
 
 
+async def _persist_memory_background(
+    manager: MemoryManager,
+    session_id: str,
+    state: dict[str, Any],
+) -> None:
+    """Persist memories in background — does not block the response."""
+    try:
+        await manager.extract_and_store(session_id=session_id, agent_state=state)
+    except Exception as exc:
+        logger.warning("finalize.memory_persist_failed", error=str(exc))
+
+
 async def finalize(
     state: AgentState,
     llm: LLMClient,
@@ -38,23 +51,48 @@ async def finalize(
     Returns:
         Dict with ``final_response`` and updated ``messages``.
     """
-    results: list[dict[str, Any]] = state.get("tool_results", [])
+    all_results: list[dict[str, Any]] = state.get("tool_results", [])
     errors: list[str] = state.get("errors", [])
+
+    # Use tool results from current turn only. If no tool was executed
+    # this turn, discard stale results from previous turns.
+    tool_executed = state.get("_tool_executed_in_turn", False)
+    if tool_executed and all_results:
+        # Keep only results whose tool_name matches current dag_tasks
+        current_task_names = {
+            t.get("tool_name") for t in (state.get("dag_tasks") or [])
+            if t.get("tool_name")
+        }
+        if current_task_names:
+            results = [r for r in all_results if r.get("tool_name") in current_task_names]
+        else:
+            results = all_results
+    else:
+        results = []
 
     # If a final_response was already composed by a prior node (e.g.
     # respond_without_tool), use it directly — skip recomposition.
     existing_final: str | None = state.get("final_response")
-    if existing_final:
+    if existing_final and (state.get("response_type") in ("greeting", "meta") or not tool_executed):
         final = existing_final
     elif errors and not results:
         final = "I encountered some issues:\n" + "\n".join(f"- {e}" for e in errors)
-    elif results:
+    elif results and tool_executed:
+        def _truncate_data(d: Any, max_chars: int = 2000) -> Any:
+            if isinstance(d, str) and len(d) > max_chars:
+                return d[:max_chars] + "..."
+            if isinstance(d, dict):
+                return {k: _truncate_data(v, max_chars) for k, v in d.items()}
+            if isinstance(d, list):
+                return [_truncate_data(v, max_chars) for v in d[:5]] + (["..."] if len(d) > 5 else [])
+            return d
+
         tool_citations = json.dumps(
             [
                 {
                     "name": r.get("tool_name"),
                     "status": r.get("status"),
-                    "data": r.get("data"),
+                    "data": _truncate_data(r.get("data")),
                     "error": r.get("error"),
                 }
                 for r in results
@@ -76,50 +114,115 @@ async def finalize(
             else ""
         )
 
-        user_prompt = prompt_manager.render(
+        example_context = {
+            "response_type": state.get("response_type", "tool"),
+            "intent": (state.get("intent") or {}).get("intent", ""),
+        }
+
+        # Skip memory/working context for simple single-tool calls with no errors
+        is_simple = len(results) <= 1 and not errors and not reflection_feedback
+        if not is_simple:
+            try:
+                from nexus.memory.scout import MemoryScout  # noqa: PLC0415
+                _scout = MemoryScout(llm=llm)
+                _memory_ctx = await _scout.scout(
+                    trigger="finalize",
+                    context={"intent": example_context["intent"], "tool_results": results},
+                )
+            except Exception:
+                _memory_ctx = ""
+        else:
+            _memory_ctx = ""
+
+        # Inject working memory context
+        if not is_simple:
+            try:
+                from nexus.memory.working import WorkingMemory  # noqa: PLC0415
+                wm = WorkingMemory.from_dict(state.get("working_memory"))
+                wm_ctx = wm.to_context(n=5)
+            except Exception:
+                wm_ctx = ""
+        else:
+            wm_ctx = ""
+
+        system_prompt = prompt_manager.render_with_examples(
             "finalize",
-            version="2.0",
+            version="3.0",
+            context=example_context,
+            max_examples=2,
+            max_mistakes=2,
             tool_citations=tool_citations,
             errors_summary=errors_summary,
         )
+        if _memory_ctx:
+            system_prompt = _memory_ctx + "\n\n" + system_prompt
+        if wm_ctx:
+            system_prompt = wm_ctx + "\n\n" + system_prompt
         if reflection_context:
-            user_prompt = reflection_context + user_prompt
+            system_prompt = reflection_context + system_prompt
 
         response = await llm.complete(
             model=model,
-            messages=[_openai_message("user", user_prompt)],
+            messages=[
+                {"role": "system", "content": system_prompt},
+            ],
             temperature=0.7,
+            max_tokens=1024,
+            stop=["User:", "user:", "###"],
         )
         final = response.content or "Task completed."
     else:
         final = "No results were produced."
 
-    final_msg = _openai_message("assistant", final)
+    final_msg = _openai_message("assistant", final, _milestone=True)
 
-    # Persist to long-term memory via MemoryManager (skip for non-tool interactions)
-    mem_error: str | None = None
+    # Add working memory entry for the final response
+    try:
+        from nexus.memory.working import WorkingMemory  # noqa: PLC0415
+        wm = WorkingMemory.from_dict(state.get("working_memory"))
+        wm.add(
+            key="final_response",
+            content=final[:200],
+            source="inference",
+            importance=0.6,
+            turn_id=state.get("iteration_count", 0),
+        )
+        working_memory_update = wm.to_dict()
+
+        # Promote high-importance working memory entries to LTM
+        if session_factory and state.get("response_type") == "tool":
+            high_imp = wm.high_importance_entries(threshold=0.7)
+            if high_imp:
+                manager = MemoryManager(store=MemoryStore(), llm=llm)
+                for entry in high_imp:
+                    await manager._dedup_and_store(
+                        session_id=state.get("session_id", ""),
+                        kind="preference" if "preference" in entry.get("key", "") else "semantic",
+                        content=f"{entry['key']}: {entry['content']}",
+                        importance=entry.get("importance", 0.7),
+                    )
+    except Exception:
+        working_memory_update = state.get("working_memory", {"entries": []})
+
+    # Persist to long-term memory via MemoryManager (fire-and-forget — don't block response)
     if session_factory and state.get("response_type") == "tool":
         try:
-            manager = MemoryManager(
-                store=MemoryStore(),
-                llm=llm,
-            )
-            await manager.extract_and_store(
-                session_id=state.get("session_id", ""),
-                agent_state=dict(state),
-            )
-        except Exception as exc:
-            mem_error = str(exc)
-            logger.warning("finalize.memory_persist_failed", error=mem_error)
+            manager = MemoryManager(store=MemoryStore(), llm=llm)
+            sid = state.get("session_id", "")
+            state_snapshot = dict(state)
+            asyncio.ensure_future(_persist_memory_background(manager, sid, state_snapshot))
+        except Exception:
+            pass
 
     logger.info(
         "finalize.completed",
         result_length=len(final),
         errors=len(errors),
-        memory_error=mem_error is not None,
     )
+    result_msgs = [final_msg]
     return {
+        "messages": result_msgs,
         "final_response": final,
-        "messages": [final_msg],
+        "working_memory": working_memory_update,
         "_routing_decision": "finalize",
     }

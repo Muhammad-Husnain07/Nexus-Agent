@@ -15,6 +15,19 @@ SYSTEM_PROMPT_V2 = """\
 
 <context>You are in the middle of executing a plan. The current step may specify a tool to call, or it may ask you to respond directly. Follow the step instructions precisely.</context>
 
+<thinking_protocol>
+Before acting, think about what's needed:
+
+<thinking>
+1. Does this step have a tool_name? If yes, I MUST call that tool — do NOT just describe it.
+2. Is tool_name null? If yes, respond directly — do NOT call any tool.
+3. What are the correct parameters from the provided tool definitions?
+4. If I'm missing information, should I ask the user rather than guessing?
+</thinking>
+
+Only then execute the step.
+</thinking_protocol>
+
 <instructions>
 1. If the current step has a tool_name, call that tool using the provided function definition. Invoke the tool — do not just describe it.
 2. If the current step has tool_name set to null, respond directly using your own knowledge and the conversation context. Do not try to call a tool.
@@ -22,12 +35,22 @@ SYSTEM_PROMPT_V2 = """\
 4. If you need more information, ask the user rather than guessing parameter values.
 </instructions>
 
+__EXAMPLES__
+
+__COMMON_MISTAKES__
+
 {tool_descriptions}
 {additional_context}
 """
 
 CORRECTION_PROMPT_V1 = """\
 The tool input you provided failed validation.
+
+<thinking>
+Review the schema requirements and my previous inputs to understand what went wrong.
+What field names does the schema expect vs what I provided?
+What types does the schema expect vs what I provided?
+</thinking>
 
 Tool: {tool_name}
 JSON Schema: {schema}
@@ -39,6 +62,13 @@ Please provide corrected inputs that satisfy the schema. Return a JSON object wi
 
 ERROR_RECOVERY_PROMPT_V1 = """\
 A tool execution failed.
+
+<thinking>
+1. Was this a transient error (timeout, network) → retry possible?
+2. Was this a permanent error (invalid input, not found) → needs revision?
+3. Do I need more info from the user to proceed → ask?
+4. How many times have I retried already? If > 3, must revise or ask.
+</thinking>
 
 Step: {step_description}
 Tool: {tool_name}

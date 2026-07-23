@@ -1,4 +1,8 @@
-"""Per-tool HTTP retry policy — 5xx, 408, 429 with exponential backoff."""
+"""Per-tool HTTP retry policy — 5xx, 408, 429 with exponential backoff.
+
+Also provides category-aware delay calculation for use with
+``SemanticRetryHandler`` when error classification is available.
+"""
 
 from __future__ import annotations
 
@@ -69,6 +73,34 @@ def parse_retry_after(response: httpx.Response) -> float | None:
         return max(0.0, delay)
     except (ValueError, OSError):
         return None
+
+
+def category_retry_delay(category: str, attempt: int, retry_after_hint: float | None = None) -> float:
+    """Return an appropriate delay for the given error category.
+
+    Args:
+        category: Error category string (e.g. 'transient_network', 'rate_limit').
+        attempt: Zero-based retry attempt number.
+        retry_after_hint: Explicit delay hint from Retry-After header.
+
+    Returns:
+        Delay in seconds.
+    """
+    import random  # noqa: PLC0415
+
+    if retry_after_hint is not None and category == "transient_rate_limit":
+        return retry_after_hint
+
+    if category == "transient_rate_limit":
+        return min(BACKOFF_BASE_S * (2 ** attempt), BACKOFF_MAX_S) + random.uniform(0, 1)
+
+    if category in ("transient_network", "transient_service"):
+        return min(BACKOFF_BASE_S * (2 ** attempt), BACKOFF_MAX_S) + random.uniform(0, 1)
+
+    if category in ("permanent_schema", "permanent_argument"):
+        return 0.0  # retry immediately after param fix
+
+    return BACKOFF_BASE_S  # default fallback
 
 
 def http_retry_policy(

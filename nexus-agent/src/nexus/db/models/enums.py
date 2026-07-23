@@ -38,15 +38,6 @@ class ExecutionStatus(enum.Enum):
     INTERRUPTED = "interrupted"
 
 
-class AgentRunStatus(enum.Enum):
-    """Lifecycle state of an agent run."""
-
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    INTERRUPTED = "interrupted"
-    CANCELLED = "cancelled"
-
 
 class ApprovalStatus(enum.Enum):
     """Human-in-the-loop approval decision."""

@@ -1,24 +1,219 @@
-"""tool_executor node — execute a single DAG task directly (no LLM).
+"""tool_executor node — execute a single DAG task with speculative support.
 
 Receives a task slice via ``Send()`` with the task definition and
-available tools.  Resolves placeholders, validates inputs, makes the
-HTTP call, and returns the result — all without any LLM call.
+available tools.  If the task has multiple ``approaches`` (different tools
+or parameter variations), they are raced in parallel via speculative
+execution — the first successful result wins, and remaining approaches
+are cancelled.  Single-approach tasks execute directly (no change).
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+from collections.abc import Callable
 from typing import Any
 
 import structlog
-from httpx import AsyncClient
 
+from nexus.config.settings import get_settings
 from nexus.tools.executor import ExecutionContext, ToolExecutor
 from nexus.tools.result import ToolResult
 from nexus.tools.schemas import ToolRead
 
 logger = structlog.get_logger("nexus.agent.nodes.tool_executor")
+
+
+async def _auto_chain_tool(
+    tool_name: str,
+    raw_inputs: dict[str, Any],
+    available_tools: list[dict[str, Any]],
+    dag_results: dict[str, Any],
+    gathered: dict[str, Any],
+    task_id: str,
+    session: Any = None,
+) -> dict[str, Any]:
+    """Try to find and execute a prerequisite tool when required inputs are missing.
+
+    For example: if get_weather needs latitude/longitude but only a city name
+    is provided, automatically call get_geocoding first and merge its output.
+    """
+    input_schema = {}
+    for t in available_tools:
+        if t.get("name") == tool_name:
+            input_schema = t.get("input_schema", {})
+            break
+
+    schemas_props = input_schema.get("properties", {}) if isinstance(input_schema, dict) else {}
+    required = input_schema.get("required", []) if isinstance(input_schema, dict) else []
+    missing = [f for f in required if f not in raw_inputs and f not in dag_results]
+
+    if not missing:
+        return None
+
+    # Try chaining: execute any tool that can accept available inputs and return missing fields
+    for chained_name in [t["name"] for t in available_tools if t.get("name") != tool_name]:
+        chained_schema = next((t.get("output_schema", {}) for t in available_tools if t.get("name") == chained_name), {})
+        chained_keys = set(chained_schema.get("properties", {}).keys()) if isinstance(chained_schema, dict) else set()
+        # If output_schema is empty, try chaining anyway — the API may return matching fields
+        if not chained_keys:
+            chained_keys = set(missing)
+        missing_keys = set(missing)
+        if chained_keys & missing_keys:
+            chained_inputs = {k: v for k, v in raw_inputs.items() if k not in schemas_props}
+            if not chained_inputs:
+                chained_inputs = raw_inputs
+            chained = await _execute_single_approach(
+                {"tool_name": chained_name, "inputs": chained_inputs},
+                available_tools, dag_results, gathered, f"{task_id}_prereq",
+                session=session,
+            )
+            if chained.get("status") == "success" and isinstance(chained.get("data"), dict):
+                merged = {**raw_inputs, **chained["data"]}
+                return merged
+    return None
+
+
+async def _execute_single_approach(
+    approach: dict[str, Any],
+    available_tools: list[dict[str, Any]],
+    dag_results: dict[str, Any],
+    gathered: dict[str, Any],
+    task_id: str,
+    session: Any = None,
+) -> dict[str, Any]:
+    """Execute a single tool approach and return the result dict."""
+    tool_name: str | None = approach.get("tool_name")
+    if not tool_name:
+        return {"tool_name": None, "status": "success", "data": None, "error": None, "task_id": task_id}
+
+    raw_inputs: dict[str, Any] = approach.get("inputs", {})
+    resolved_inputs = _resolve_placeholders(raw_inputs, dag_results, gathered)
+
+    tool_dict = _find_tool(tool_name, available_tools)
+    if not tool_dict:
+        return {"tool_name": tool_name, "status": "error", "data": None, "error": f"Tool '{tool_name}' not found", "task_id": task_id}
+
+    # Auto-chain prerequisite tools for missing required inputs
+    chained = await _auto_chain_tool(tool_name, resolved_inputs, available_tools, dag_results, gathered, task_id, session)
+    if chained is not None:
+        resolved_inputs = chained
+
+    try:
+        tool_read = _tool_to_read(tool_dict)
+        executor = ToolExecutor()
+        context = ExecutionContext(session_id="", agent_run_id="")
+
+        result: ToolResult = await executor.execute(
+            tool_read, resolved_inputs, context,
+            skip_approval=not tool_read.requires_approval, session=session,
+        )
+
+        result_data = result.data if result.status == "success" else None
+        error = result.error if result.status != "success" else None
+
+        _META_KEYS = {"generationtime_ms", "utc_offset_seconds", "timezone", "timezone_abbreviation", "elevation"}
+        if result_data and isinstance(result_data, dict):
+            has_data_key = False
+            for _key in ("results", "data", "items"):
+                _items = result_data.get(_key)
+                if isinstance(_items, list):
+                    if len(_items) > 0:
+                        has_data_key = True
+                    else:
+                        result_data = None
+                        error = error or f"API returned no results for '{_key}'"
+                        break
+            if result_data is not None:
+                non_meta = [k for k in result_data if k not in _META_KEYS]
+                if not has_data_key and not non_meta:
+                    result_data = None
+                    error = error or "API returned no data"
+
+        return {
+            "tool_name": tool_name,
+            "status": result.status,
+            "data": result_data,
+            "error": error,
+            "task_id": task_id,
+            "duration_ms": result.duration_ms,
+        }
+    except Exception as exc:
+        return {"tool_name": tool_name, "status": "error", "data": None, "error": str(exc), "task_id": task_id}
+
+
+async def _speculative_execute(
+    approaches: list[dict[str, Any]],
+    available_tools: list[dict[str, Any]],
+    dag_results: dict[str, Any],
+    gathered: dict[str, Any],
+    task_id: str,
+    max_approaches: int = 3,
+    timeout: float = 15.0,
+    session: Any = None,
+) -> dict[str, Any]:
+    """Race multiple tool approaches via speculative execution.
+
+    Launches all approaches in parallel, returns the first successful result,
+    and cancels remaining approaches.  If none succeed, returns the first error.
+    """
+    if len(approaches) <= 1:
+        return await _execute_single_approach(
+            approaches[0] if approaches else {"tool_name": None, "inputs": {}},
+            available_tools, dag_results, gathered, task_id,
+            session=session,
+        )
+
+    bounded = approaches[:max_approaches]
+
+    async def _run_guarded(approach: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return await asyncio.wait_for(
+                _execute_single_approach(approach, available_tools, dag_results, gathered, task_id, session=session),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            return {"tool_name": approach.get("tool_name"), "status": "error",
+                    "data": None, "error": "Speculative branch timed out", "task_id": task_id}
+
+    tasks = {i: asyncio.create_task(_run_guarded(a)) for i, a in enumerate(bounded)}
+
+    # Wait for any to complete
+    done, pending = await asyncio.wait(
+        list(tasks.values()),
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+
+    # Check completed for a success
+    for t in done:
+        try:
+            result = t.result()
+            if result.get("status") == "success" and result.get("data") is not None:
+                for p in pending:
+                    p.cancel()
+                await asyncio.wait(pending, timeout=2.0)
+                logger.info("speculative.success", task_id=task_id, tool=result.get("tool_name"))
+                return result
+        except Exception:
+            continue
+
+    # No success yet — wait for all to finish
+    if pending:
+        await asyncio.wait(pending, timeout=timeout - 1.0)
+
+    # Return first successful result if any, otherwise first error
+    results: list[dict[str, Any]] = []
+    for t in tasks.values():
+        try:
+            r = t.result()
+            if r.get("status") == "success":
+                return r  # another succeeded while we were waiting
+            results.append(r)
+        except (asyncio.CancelledError, Exception):
+            continue
+
+    return results[0] if results else {"tool_name": None, "status": "error", "data": None, "error": "All speculative approaches failed", "task_id": task_id}
 
 
 def _find_tool(
@@ -152,10 +347,35 @@ def _tool_to_read(tool_dict: dict[str, Any]) -> ToolRead:
     )
 
 
+def _record_tool_affinity(
+    result: dict[str, Any],
+    all_task_names: list[str] | None = None,
+) -> None:
+    """Record tool execution in the affinity graph (fire-and-forget).
+
+    When multiple tasks run in the same DAG, passing all task names lets
+    the affinity graph learn co-occurrence patterns (e.g., get_geocoding
+    before get_weather).
+    """
+    try:
+        from nexus.tools.affinity import affinity_graph  # noqa: PLC0415
+        tool_name = result.get("tool_name")
+        if tool_name and result.get("status") == "success":
+            names = all_task_names or [tool_name]
+            affinity_graph.record_execution(names, success=True)
+    except Exception:
+        pass
+
+
 async def tool_executor(
     state: dict[str, Any],
+    session_factory: Callable[[], Any] | None = None,
 ) -> dict[str, Any]:
-    """Execute a single DAG task and return the result.
+    """Execute a single DAG task with optional speculative execution.
+
+    If the task has multiple ``approaches`` (list of dicts with tool_name + inputs),
+    they are raced in parallel via speculative execution.  Otherwise, a single
+    approach is constructed from the task's ``tool_name`` and ``inputs``.
 
     This node is invoked via ``Send()`` from ``route_dag``.  It receives
     a slice of state containing just the task and its context.
@@ -167,91 +387,58 @@ async def tool_executor(
     available_tools: list[dict[str, Any]] = state.get("available_tools", [])
     dag_results: dict[str, Any] = state.get("dag_results", {})
     gathered: dict[str, Any] = state.get("gathered_requirements", {})
-
-    tool_name: str | None = task.get("tool_name")
     task_id: str = task.get("id", "unknown")
-    logger.info("tool_executor.received", task_id=task_id, tool=tool_name, dag_keys=list(dag_results.keys()))
 
-    if not tool_name:
-        logger.info("tool_executor.no_tool", task_id=task_id)
-        return {
-            "tool_results": [{"tool_name": None, "status": "success", "data": None, "error": None, "task_id": task_id}],
-            "dag_results": {task_id: None},
-        }
+    # Collect all DAG task names for affinity tracking
+    dag_task_names = [t.get("tool_name") for t in state.get("dag_tasks", []) if t.get("tool_name")]
+    if session_factory:
+        async with session_factory() as session:
+            return await _execute_task(session, task, available_tools, dag_results, gathered, task_id, all_task_names=dag_task_names)
+    return await _execute_task(None, task, available_tools, dag_results, gathered, task_id, all_task_names=dag_task_names)
 
-    tool_dict = _find_tool(tool_name, available_tools)
-    if not tool_dict:
-        logger.warning("tool_executor.tool_not_found", task_id=task_id, tool_name=tool_name)
-        return {
-            "tool_results": [{"tool_name": tool_name, "status": "error", "data": None, "error": f"Tool '{tool_name}' not found", "task_id": task_id}],
-            "dag_results": {task_id: None},
-        }
 
-    raw_inputs: dict[str, Any] = task.get("inputs", {})
-    resolved_inputs = _resolve_placeholders(raw_inputs, dag_results, gathered)
-
-    try:
-        tool_read = _tool_to_read(tool_dict)
-        executor = ToolExecutor()
-        context = ExecutionContext(session_id=state.get("session_id", ""), agent_run_id="")
-
-        result: ToolResult = await executor.execute(
-            tool_read,
-            resolved_inputs,
-            context,
-            skip_approval=True,
-            session=None,
+async def _execute_task(
+    session: Any,
+    task: dict[str, Any],
+    available_tools: list[dict[str, Any]],
+    dag_results: dict[str, Any],
+    gathered: dict[str, Any],
+    task_id: str,
+    all_task_names: list[str] | None = None,
+) -> dict[str, Any]:
+    """Execute a single DAG task — extracted for proper session management."""
+    approaches: list[dict[str, Any]] = task.get("approaches", [])
+    if approaches:
+        adapt = get_settings().agent.adaptive_reflection
+        logger.info("tool_executor.speculative", task_id=task_id, count=len(approaches))
+        result = await _speculative_execute(
+            approaches, available_tools, dag_results, gathered, task_id,
+            max_approaches=adapt.max_speculative_approaches,
+            timeout=adapt.speculative_timeout_s,
+            session=session,
         )
-
-        result_data = result.data if result.status == "success" else None
-        error = result.error if result.status != "success" else None
-
-        # Treat responses with only metadata keys as empty (no meaningful data)
-        _META_KEYS = {"generationtime_ms", "utc_offset_seconds", "timezone", "timezone_abbreviation", "elevation"}
-        if result_data and isinstance(result_data, dict):
-            has_data_key = False
-            for _key in ("results", "data", "items"):
-                _items = result_data.get(_key)
-                if isinstance(_items, list):
-                    if len(_items) > 0:
-                        has_data_key = True
-                    else:
-                        result_data = None
-                        error = error or f"API returned no results for '{_key}'"
-                        break
-            if result_data is not None:
-                # Check if response has only metadata keys (no data)
-                non_meta = [k for k in result_data if k not in _META_KEYS]
-                if not has_data_key and not non_meta:
-                    result_data = None
-                    error = error or "API returned no data"
-
-        logger.info("tool_executor.completed", task_id=task_id, tool=tool_name, status=result.status)
-
+        _record_tool_affinity(result, all_task_names)
         return {
-            "tool_results": [
-                {
-                    "tool_name": tool_name,
-                    "status": result.status,
-                    "data": result_data,
-                    "error": error,
-                    "task_id": task_id,
-                    "duration_ms": result.duration_ms,
-                }
-            ],
-            "dag_results": {task_id: result_data},
+            "tool_results": [result],
+            "dag_results": {task_id: result.get("data")},
+            "_tool_executed_in_turn": True if result.get("tool_name") else False,
         }
-    except Exception as exc:
-        logger.error("tool_executor.failed", task_id=task_id, tool=tool_name, error=str(exc))
-        return {
-            "tool_results": [
-                {
-                    "tool_name": tool_name,
-                    "status": "error",
-                    "data": None,
-                    "error": str(exc),
-                    "task_id": task_id,
-                }
-            ],
-            "dag_results": {task_id: None},
-        }
+
+    single_approach = {
+        "tool_name": task.get("tool_name"),
+        "inputs": task.get("inputs", {}),
+    }
+    if single_approach["tool_name"]:
+        result = await _execute_single_approach(
+            single_approach, available_tools, dag_results, gathered, task_id,
+            session=session,
+        )
+    else:
+        result = {"tool_name": None, "status": "success", "data": None, "error": None, "task_id": task_id}
+
+    _record_tool_affinity(result, all_task_names)
+    return {
+        "tool_results": [result],
+        "dag_results": {task_id: result.get("data")},
+        "_tool_executed_in_turn": True if result.get("tool_name") else False,
+    }

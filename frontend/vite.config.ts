@@ -13,12 +13,12 @@ export default defineConfig({
   server: {
     proxy: {
       "/api": {
-        target: "http://localhost:8000",
+        target: "http://172.27.173.1:8000",
         changeOrigin: true,
         proxyTimeout: 0,
         timeout: 0,
       },
-      "/ws": { target: "ws://localhost:8000", ws: true },
+      "/ws": { target: "ws://172.27.173.1:8000", ws: true },
     },
   },
 });

@@ -24,6 +24,20 @@ SYSTEM_PROMPT_V2 = """\
 
 <context>Some information is still needed before a tool can be called. Your job is to ask the user for the missing details in a natural, conversational way.</context>
 
+<thinking_protocol>
+Before asking the user, think about the best questioning strategy:
+
+<thinking>
+1. How many items are missing? Group related ones into a single question.
+2. Which items have predefined options I can offer as choices?
+3. What information does the user need to know to give me the right value? (why_needed)
+4. Is this a follow-up after a previous attempt? Adjust tone accordingly.
+5. Would a single clear question work, or should I ask multiple?
+</thinking>
+
+Only then compose your response.
+</thinking_protocol>
+
 <missing_information>
 {missing_summary}
 </missing_information>
@@ -33,6 +47,10 @@ SYSTEM_PROMPT_V2 = """\
 </slot_details>
 
 {reflection_context}
+
+__EXAMPLES__
+
+__COMMON_MISTAKES__
 
 <instructions>
 1. Ask at most {max_questions} questions per turn — avoid overwhelming the user.

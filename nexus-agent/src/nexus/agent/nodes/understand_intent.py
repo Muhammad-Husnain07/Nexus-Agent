@@ -11,15 +11,60 @@ import structlog
 from nexus.agent.nodes import msg_content, msg_role
 from nexus.agent.prompts import prompt_manager
 from nexus.agent.state import AgentState, IntentAnalysis
+from nexus.config.settings import get_settings
 from nexus.llm.client import LLMClient
+from nexus.utils.json_extractor import JsonExtractor
 
 logger = structlog.get_logger("nexus.agent.nodes.understand_intent")
+
+_json_extractor = JsonExtractor()
 
 
 def _openai_message(role: str, content: str, **kwargs: Any) -> dict[str, Any]:
     msg: dict[str, Any] = {"role": role, "content": content}
     msg.update(kwargs)
     return msg
+
+
+def _is_complex_query(query: str) -> bool:
+    """Detect compound/multi-intent queries — purely heuristic, no tool names.
+
+    Returns True for queries that likely contain multiple distinct requests
+    requiring deeper reasoning (conjunctions, long text, multiple questions).
+    """
+    q = query.lower().strip()
+    if not q:
+        return False
+    # Long queries or those with explicit conjunctions
+    conjunctions = {" and ", " also ", " too ", " plus "}
+    has_conj = any(c in q for c in conjunctions)
+    # Multiple question marks or imperative verbs suggesting separate intents
+    multi_intent = q.count("?") > 1 or q.count(".") > 1
+    # Follow-up short queries are NOT complex
+    is_followup = len(q) < 15 and not has_conj
+    if is_followup:
+        return False
+    return len(q) > 60 or has_conj or multi_intent
+
+
+def _compute_task_difficulty(analysis: IntentAnalysis, last_user: str) -> float:
+    """Estimate task difficulty from 0 (easy) to 1 (hard).
+
+    Factors:
+    - Number of missing info slots (0 → 0, 3+ → 0.3)
+    - Number of implied actions (0 → 0, 3+ → 0.2)
+    - Query length (very short <10 chars → 0.2 ambiguous)
+    - Confidence inversely (1 - confidence) * 0.3
+    """
+    difficulty = 0.0
+    n_missing = len(analysis.missing_info_slots)
+    difficulty += min(n_missing / 10.0, 0.3)
+    n_actions = len(analysis.implied_actions)
+    difficulty += min(n_actions / 10.0, 0.2)
+    if len(last_user.strip()) < 10:
+        difficulty += 0.2
+    difficulty += (1.0 - analysis.confidence) * 0.3
+    return min(difficulty, 1.0)
 
 
 async def understand_intent(
@@ -29,13 +74,17 @@ async def understand_intent(
 ) -> dict[str, Any]:
     """Parse the latest user message into structured intent via prompt templates.
 
-    Merges ``gathered_requirements`` from prior turns into the context so
-    the LLM can re-evaluate what is still missing.  If confidence < 0.5
-    the node routes to clarification with a meta-question.
+    Uses multi-level confidence bands for routing:
+    - confidence >= 0.9: proceed directly
+    - 0.7 <= confidence < 0.9: proceed with enhanced reflection
+    - 0.5 <= confidence < 0.7: self-consistency sampling
+    - confidence < 0.5: ask for clarification
+
+    Also computes task_difficulty for adaptive reflection thresholding.
 
     Returns:
         Dict with ``intent``, ``missing_info_slots``, ``messages``,
-        ``intent_analysis``, and ``_routing_decision`` updates.
+        ``intent_analysis``, ``task_difficulty``, and ``_routing_decision``.
     """
     messages: list = list(state.get("messages", []))
     new_messages: list[dict[str, Any]] = []
@@ -54,12 +103,12 @@ async def understand_intent(
     )
     context_messages: list[dict[str, Any]] = []
     if first_user:
-        context_messages.append({"role": "user", "content": first_user[:800]})
-    for m in all_msgs[-8:]:
+        context_messages.append({"role": "user", "content": first_user[:400]})
+    for m in all_msgs[-4:]:
         role = msg_role(m)
         if role in ("user", "assistant", "system", "tool"):
-            text = msg_content(m)[:500]
-            if text and text != first_user[:500]:
+            text = msg_content(m)[:300]
+            if text and text != first_user[:300]:
                 context_messages.append({"role": role, "content": text})
 
     gathered: dict[str, Any] = state.get("gathered_requirements", {})
@@ -69,27 +118,61 @@ async def understand_intent(
         else "\nNo information has been gathered yet.\n"
     )
 
-    _tmpl = prompt_manager.get("understand_intent", version="3.0")
-    system_prompt = prompt_manager.render(
+    # Build context for dynamic example selection
+    intent_text = (state.get("intent") or {}).get("intent", last_user[:100])
+    example_context = {
+        "response_type": state.get("response_type", "tool"),
+        "intent": intent_text,
+    }
+
+    # Dynamic prompt depth — no hardcoded tools, purely heuristic
+    is_complex = _is_complex_query(last_user)
+    version = "4.0-complex" if is_complex else "4.0-simple"
+    n_examples = 2 if is_complex else 0
+    n_mistakes = 2 if is_complex else 0
+
+    system_prompt = prompt_manager.render_with_examples(
         "understand_intent",
-        version="3.0",
-        examples=_tmpl.metadata.get("few_shot", ""),
+        version=version,
+        context=example_context,
+        max_examples=n_examples,
+        max_mistakes=n_mistakes,
     )
     system_prompt = system_prompt.replace(
         "<output_format>",
         f"{gathered_context}\n<output_format>",
     )
 
-    # Inject relevant long-term memories into the system prompt
+    # Inject available tools context for accurate needs_tool routing
+    available_tools = state.get("available_tools", [])
+    if available_tools:
+        tool_names = ", ".join(t.get("name", "") for t in available_tools)
+        system_prompt = (
+            f"<available_tools>{tool_names}</available_tools>\n\n{system_prompt}"
+        )
+
+    # Inject relevant long-term memories via MemoryScout (proactive, multi-trigger)
     try:
-        from nexus.memory.manager import MemoryManager  # noqa: PLC0415
-        from nexus.memory.store import MemoryStore  # noqa: PLC0415
-        _memory_mgr = MemoryManager(store=MemoryStore(), llm=llm)
-        _memory_ctx = await _memory_mgr.retrieve_formatted(query=last_user)
+        from nexus.memory.scout import MemoryScout  # noqa: PLC0415
+        _scout = MemoryScout(llm=llm)
+        _memory_ctx = await _scout.scout(
+            trigger="intent",
+            context={"intent": intent_text, "query": last_user},
+        )
         if _memory_ctx:
             system_prompt = _memory_ctx + "\n\n" + system_prompt
     except Exception:
         logger.warning("memory.injection_failed", exc_info=True)
+
+    # Inject working memory context
+    try:
+        from nexus.memory.working import WorkingMemory  # noqa: PLC0415
+        wm = WorkingMemory.from_dict(state.get("working_memory"))
+        wm_ctx = wm.to_context(n=5)
+        if wm_ctx:
+            system_prompt = wm_ctx + "\n\n" + system_prompt
+    except Exception:
+        logger.warning("memory.wm_injection_failed", exc_info=True)
 
     # Inject reflection feedback when re-entering from a reflection revise
     reflection_feedback = state.get("reflection_feedback", "") or ""
@@ -107,13 +190,13 @@ async def understand_intent(
             _openai_message("user", last_user),
         ],
         temperature=0,
+        max_tokens=512,
+        response_format={"type": "json_object"},
     )
 
-    content = (response.content or "").strip()
-    # Try to extract JSON from a larger response (handle LLM preamble)
-    json_match = re.search(r"\{[\s\S]*\}", content)
-    if json_match:
-        content = json_match.group(0).strip()
+    content = _json_extractor.extract(response.content or "")
+
+    # Strip markdown code fences if present
     if content.startswith("```"):
         content = re.sub(r"^```[a-zA-Z]*\n?", "", content)
         content = re.sub(r"\n```$", "", content)
@@ -140,6 +223,9 @@ async def understand_intent(
             urgency="normal",
         )
 
+    # Compute task difficulty for adaptive reflection
+    task_difficulty = _compute_task_difficulty(analysis, last_user)
+
     # Populate gathered_requirements from known_parameters and resolved missing slots
     prev_missing: list[str] = state.get("missing_info_slots") or []
     new_missing_names: list[str] = [s.name for s in analysis.missing_info_slots]
@@ -148,13 +234,11 @@ async def understand_intent(
     if resolved and last_user:
         for name in resolved:
             gathered[name] = last_user
-    # Add any known_parameters extracted by the LLM
     known_vals: dict[str, str] = analysis.known_parameters
     for name, val in known_vals.items():
         gathered[name] = val
 
     missing_slot_names = new_missing_names
-    # Build parameters: known values merged with null placeholders for truly missing ones
     merged_params: dict[str, Any] = dict(known_vals)
     for s in analysis.missing_info_slots:
         if s.name not in merged_params:
@@ -166,12 +250,25 @@ async def understand_intent(
 
     new_messages.append(_openai_message("assistant", f"Parsed intent: {analysis.primary_goal}"))
 
-    # Determine response type from the analysis
+    # Add working memory entry for parsed intent
+    try:
+        from nexus.memory.working import WorkingMemory  # noqa: PLC0415
+        wm = WorkingMemory.from_dict(state.get("working_memory"))
+        wm.add(
+            key="intent",
+            content=analysis.primary_goal,
+            source="inference",
+            importance=analysis.confidence,
+            turn_id=state.get("iteration_count", 0),
+        )
+        working_memory_update = wm.to_dict()
+    except Exception:
+        working_memory_update = state.get("working_memory", {"entries": []})
+
     response_type = analysis.response_type if hasattr(analysis, "response_type") else "tool"
     needs_tool = analysis.needs_tool if hasattr(analysis, "needs_tool") else True
 
-    # Non-tool queries (greeting, meta, memory) route to respond_without_tool
-    # regardless of confidence — these don't need tool discovery
+    # Non-tool queries route to respond_without_tool regardless of confidence
     if not needs_tool:
         return {
             "messages": new_messages,
@@ -181,14 +278,22 @@ async def understand_intent(
             "response_type": response_type,
             "iteration_count": state.get("iteration_count", 0) + 1,
             "gathered_requirements": gathered,
+            "task_difficulty": task_difficulty,
+            "working_memory": working_memory_update,
+            "_routing_decision": "respond_without_tool",
         }
 
-    if analysis.confidence < 0.5:
+    # ── Multi-level confidence routing ──
+    adapt = get_settings().agent.adaptive_reflection
+    confidence = analysis.confidence
+
+    if confidence < adapt.confidence_low:
+        # < 0.5: Ask for clarification
         meta_question = (
             f"I'm not entirely sure I understand. "
             f'You said: "{last_user[:100]}". '
             f"I think you want to {analysis.primary_goal}, "
-            f"but I'm not confident (score: {analysis.confidence:.2f}). "
+            f"but I'm not confident (score: {confidence:.2f}). "
             f"Could you rephrase or clarify?"
         )
         new_messages.append(_openai_message("assistant", meta_question))
@@ -201,9 +306,29 @@ async def understand_intent(
             "response_type": "tool",
             "iteration_count": state.get("iteration_count", 0) + 1,
             "gathered_requirements": gathered,
+            "task_difficulty": task_difficulty,
+            "confidence": confidence,
+            "working_memory": working_memory_update,
             "_routing_decision": "ask",
         }
 
+    if confidence < adapt.confidence_moderate:
+        # 0.5–0.7: Self-consistency sampling (multi-path routing)
+        return {
+            "messages": new_messages,
+            "intent": intent_dict,
+            "missing_info_slots": missing_slot_names,
+            "intent_analysis": analysis.model_dump(mode="json"),
+            "response_type": "tool",
+            "iteration_count": state.get("iteration_count", 0) + 1,
+            "gathered_requirements": gathered,
+            "task_difficulty": task_difficulty,
+            "confidence": confidence,
+            "working_memory": working_memory_update,
+            "_routing_decision": "self_consistency",
+        }
+
+    # confidence >= confidence_moderate (0.7): proceed normally
     return {
         "messages": new_messages,
         "intent": intent_dict,
@@ -212,4 +337,7 @@ async def understand_intent(
         "response_type": "tool",
         "iteration_count": state.get("iteration_count", 0) + 1,
         "gathered_requirements": gathered,
+        "task_difficulty": task_difficulty,
+        "confidence": confidence,
+        "working_memory": working_memory_update,
     }

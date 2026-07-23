@@ -50,8 +50,32 @@ class DynamicToolSelector:
         results = await self._registry.search_semantic(session, query_text, k=k)
 
         tools = [r.tool for r in results]
-        if len(tools) > MAX_TOOLS_FOR_LLM_RERANK:
+        # Skip LLM rerank if the top result already has high confidence (>0.9 similarity)
+        needs_rerank = len(tools) > MAX_TOOLS_FOR_LLM_RERANK
+        if needs_rerank and results:
+            top_sim = results[0].similarity if hasattr(results[0], "similarity") else 0
+            if top_sim and top_sim >= 0.9:
+                needs_rerank = False
+                logger.info("tools.skipped_rerank", top_similarity=top_sim, count=len(tools))
+        if needs_rerank:
             tools = await self._llm_rerank(message, tools)
+
+        # Apply performance-weighted ranking (boost reliable tools, penalize degrading ones)
+        try:
+            from nexus.tools.performance import performance_tracker  # noqa: PLC0415
+            tools.sort(
+                key=lambda t: performance_tracker.composite_score(
+                    tool_id=t.name,
+                    relevance=1.0,  # semantic relevance already handled
+                ),
+                reverse=True,
+            )
+            # Filter out degraded tools unless they're the only option
+            healthy = [t for t in tools if not performance_tracker.is_degraded(t.name)]
+            if healthy:
+                tools = healthy + [t for t in tools if t not in healthy]
+        except Exception:
+            pass
 
         await self._set_cache(cache_key, tools)
         return tools

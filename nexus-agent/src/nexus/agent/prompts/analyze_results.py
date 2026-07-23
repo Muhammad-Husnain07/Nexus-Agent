@@ -46,6 +46,20 @@ SYSTEM_PROMPT_V3 = """\
 
 <context>The step has completed and produced a result. Your analysis determines whether to continue the plan, revise it, ask the user for clarification, show intermediate results for feedback, or finalize.</context>
 
+<thinking_protocol>
+Before deciding, evaluate the outcome step-by-step:
+
+<thinking>
+1. Did the tool return the expected data successfully?
+2. Are there more steps remaining in the plan?
+3. Did the step produce a user-visible artifact (draft, generated content) that the user should review before proceeding?
+4. If the step failed, is a different approach likely to work, or do I need more input from the user?
+5. If no more steps remain, the answer is always "finalize", no matter the outcome.
+</thinking>
+
+Then map to the appropriate next_action.
+</thinking_protocol>
+
 <step_details>
 Description: {step_description}
 Expected outcome: {expected_outcome}
@@ -58,22 +72,12 @@ Actual result: {tool_result}
 - Result partially matches AND a different approach might work → "revise"
 - Result failed AND not enough information → "ask" the user
 - Plan is complete OR no more steps remain → "finalize"
+- Result was empty/no data (e.g., search found nothing) AND more steps remain → "continue" (the step completed successfully, just no results)
 </decision_rules>
 
-<examples>
-<example>
-Goal: Step was \"Draft an article about AI\", tool returned valid content, more steps remain.
-Decision: {"outcome": "success", "next_action": "preview", "reasoning": "Draft created, show user before publishing"}
-</example>
-<example>
-Goal: Step was \"Publish article\", succeeded, no more steps.
-Decision: {"outcome": "success", "next_action": "finalize", "reasoning": "All steps complete"}
-</example>
-<example>
-Goal: Step was \"Search for weather in Berlin\", returned data, more steps remain.
-Decision: {"outcome": "success", "next_action": "continue", "reasoning": "Weather fetched, proceed to next step"}
-</example>
-</examples>
+__EXAMPLES__
+
+__COMMON_MISTAKES__
 
 <output_format>
 {
@@ -87,6 +91,10 @@ Decision: {"outcome": "success", "next_action": "continue", "reasoning": "Weathe
 ENRICHED_ANALYSIS_PROMPT = """\
 You are a result analyzer. The following step has completed with partial or unexpected results.
 Evaluate what happened and whether to regenerate the remaining plan.
+
+<thinking>
+Think about what went wrong and whether the remaining plan needs adjustment.
+</thinking>
 
 Step: {step_description}
 Expected: {expected_outcome}

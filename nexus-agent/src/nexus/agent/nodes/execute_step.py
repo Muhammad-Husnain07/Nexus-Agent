@@ -271,7 +271,20 @@ async def execute_step(  # noqa: PLR0912, PLR0913, PLR0915
 
     tool_desc_list = [{"name": t["name"], "description": t.get("description", "")} for t in tools]
     tool_descriptions = json.dumps(tool_desc_list, indent=2) if tool_desc_list else "No tools available."
-    system_content = prompt_manager.render("execute_step", version="2.0", tool_descriptions=tool_descriptions, additional_context="")
+
+    example_context = {
+        "response_type": "tool",
+        "intent": (state.get("intent") or {}).get("intent", ""),
+    }
+    system_content = prompt_manager.render_with_examples(
+        "execute_step",
+        version="2.0",
+        context=example_context,
+        max_examples=3,
+        max_mistakes=3,
+        tool_descriptions=tool_descriptions,
+        additional_context="",
+    )
 
     # Inject relevant long-term memories into system prompt
     try:
@@ -386,8 +399,11 @@ async def execute_step(  # noqa: PLR0912, PLR0913, PLR0915
                 input_schema = tool_def.get("input_schema")
                 validation_error = _validate_inputs(func_args, input_schema)
                 if validation_error:
-                    correction_prompt = prompt_manager.render(
+                    correction_prompt = prompt_manager.render_with_examples(
                         "execute_step_correction",
+                        context={"response_type": "tool", "intent": f"correct_{func_name}"},
+                        max_examples=2,
+                        max_mistakes=2,
                         tool_name=func_name,
                         schema=json.dumps(input_schema, indent=2),
                         inputs=json.dumps(func_args, indent=2),
@@ -480,8 +496,11 @@ async def execute_step(  # noqa: PLR0912, PLR0913, PLR0915
                     )
 
                     # Error recovery — decide retry / revise / ask
-                    recovery_prompt = prompt_manager.render(
+                    recovery_prompt = prompt_manager.render_with_examples(
                         "execute_step_error_recovery",
+                        context={"response_type": "tool", "intent": f"recover_{func_name}"},
+                        max_examples=2,
+                        max_mistakes=2,
                         step_description=step_description,
                         tool_name=func_name,
                         error=str(exc),

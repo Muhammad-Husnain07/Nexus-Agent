@@ -3,16 +3,28 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
+
+class ContextOverflowError(Exception):
+    """Raised when prompt tokens exceed the model's context window."""
+
 import httpx
 import litellm
 from pydantic import BaseModel, Field
 
+from nexus.llm.format_adapter import PromptAdapter
+from nexus.llm.format_adapter.transformers import get_transformer
+from nexus.llm.format_detector import cached_detect_format, set_cached_format
+from nexus.llm.format_detector.engine import detect_format_sync
+from nexus.llm.format_detector.fallback import get_fallback_format
+from nexus.llm.format_detector.probe import PROBE_KWARGS, PROBE_MESSAGE
 from nexus.llm.provider import ProviderRegistry
+from nexus.observability.tracing import get_tracer
 
 log = logging.getLogger(__name__)
 
@@ -128,6 +140,7 @@ class LLMClient:
         temperature: float | None = None,
         max_tokens: int | None = None,
         stream: bool = False,
+        stop: list[str] | None = None,
     ) -> LLMResponse | AsyncIterator[LLMChunk]:
         """Send a completion request to the LLM.
 
@@ -164,30 +177,97 @@ class LLMClient:
         if api_key_val:
             kwargs["api_key"] = api_key_val
 
-        # Ollama-specific handling — dynamically detect chat API support
+        # Dynamic prompt format detection and adaptation
+        fmt = provider.config.prompt_format
+        if fmt == "auto":
+            cached = cached_detect_format(model)
+            if cached:
+                fmt = cached
+            else:
+                fmt = get_fallback_format(model)
+                if fmt == "raw":
+                    import litellm as _litellm  # noqa: PLC0415
+                    try:
+                        _probe_kw = {**kwargs, "messages": PROBE_MESSAGE, **PROBE_KWARGS}
+                        _resp = await _litellm.acompletion(**_probe_kw)
+                        _content = (_resp.choices[0].message.content or "").strip() if _resp.choices else ""
+                        fmt = detect_format_sync(_content) if _content else "raw"
+                    except Exception:
+                        fmt = "raw"
+                set_cached_format(model, fmt)
+
+        # Adapt system prompts to the detected/configured format
+        # Passthrough formats skip adaptation (they handle XML natively)
+        if not get_transformer(fmt).is_passthrough:
+            adapter = PromptAdapter(format_name=fmt)
+            adapted = adapter.adapt(
+                system=kwargs["messages"][0]["content"] if kwargs["messages"] and kwargs["messages"][0].get("role") == "system" else None,
+                messages=kwargs["messages"],
+            )
+            if adapted:
+                kwargs["messages"] = adapted
+
+        # Ollama-specific: tool capability detection
         if provider_name == "ollama":
-            kwargs["keep_alive"] = "30m"
             supports_tools = await _ollama_supports_tools(model, provider.config.base_url or "")
             if not supports_tools:
-                # Fallback to raw mode for models without tool support
                 kwargs["extra_body"] = {"raw": True}
-                prompt = _format_raw_prompt(messages)
+                prompt = _format_raw_prompt(kwargs["messages"])
                 kwargs["messages"] = [{"role": "user", "content": prompt}]
                 kwargs.pop("response_format", None)
 
         if tools:
             kwargs["tools"] = tools
         if response_format:
-            kwargs["response_format"] = response_format
+            # Dynamic per-model detection — works with ALL providers, no hardcoded names
+            try:
+                from litellm import get_supported_openai_params  # noqa: PLC0415
+                _params = get_supported_openai_params(model) or []
+                if "response_format" in _params:
+                    kwargs["response_format"] = response_format
+                else:
+                    log.info("response_format.unsupported model=%s", model)
+            except Exception:
+                if provider.config.supports_structured_output:
+                    kwargs["response_format"] = response_format
         temp = temperature
         if temp is None:
             temp = getattr(provider.config, "temperature", _LITELLM_TEMPERATURE)
         kwargs["temperature"] = temp
         kwargs["max_tokens"] = max_tokens if max_tokens is not None else provider.config.max_tokens
+        if stop is not None:
+            kwargs["stop"] = stop
+
+        # Quick estimate: skip expensive context management for small prompts
+        prompt_text = " ".join(m.get("content", "") or "" for m in kwargs.get("messages", []))
+        small_prompt = len(prompt_text) < 4000
+        if not small_prompt:
+            try:
+                from litellm.utils import trim_messages  # noqa: PLC0415
+                trimmed = trim_messages(kwargs.get("messages", []), model=model, trim_ratio=0.75)
+                if trimmed:
+                    kwargs["messages"] = trimmed
+            except Exception:
+                pass
+            try:
+                capped, pt = await self._enforce_context_window(kwargs, provider)
+                log.info("context_window.enforced prompt_tokens=%s max_tokens=%s context_window=%s", pt, capped, self._get_context_window(model, provider))
+            except ContextOverflowError:
+                raise
 
         if stream:
             return self._stream_complete(kwargs, model, provider_name)
-        return await self._complete(kwargs, model, provider_name, start)
+        try:
+            return await self._complete(kwargs, model, provider_name, start)
+        except litellm.ContextWindowExceededError:
+            # Retry once with trimmed messages
+            msgs = kwargs.get("messages", [])
+            if len(msgs) > 2:
+                trim = max(1, len(msgs) // 4)
+                kwargs["messages"] = msgs[:1] + msgs[trim + 1:]
+                log.warning("context_window.retry_trimmed trimmed=%s original=%s", trim, len(msgs))
+                return await self._complete(kwargs, model, provider_name, start)
+            raise
 
     async def _complete(
         self,
@@ -196,9 +276,22 @@ class LLMClient:
         provider_name: str,
         start: float,
     ) -> LLMResponse:
-        response = await litellm.acompletion(**kwargs)
-        latency_ms = (time.monotonic() - start) * 1000
-        return self._build_response(response, model, provider_name, latency_ms)
+        tracer = get_tracer()
+        with tracer.start_as_current_span("llm.complete") as span:
+            span.set_attribute("llm.model", model)
+            span.set_attribute("llm.provider", provider_name)
+            span.set_attribute("llm.temperature", str(kwargs.get("temperature", "")))
+            response = await litellm.acompletion(**kwargs)
+            latency_ms = (time.monotonic() - start) * 1000
+            usage = response.usage if hasattr(response, "usage") else None
+            if usage:
+                pt = usage.prompt_tokens or 0
+                ct = usage.completion_tokens or 0
+                span.set_attribute("llm.token.prompt", pt)
+                span.set_attribute("llm.token.completion", ct)
+                span.set_attribute("llm.token.total", pt + ct)
+            span.set_attribute("llm.latency_ms", latency_ms)
+            return self._build_response(response, model, provider_name, latency_ms)
 
     async def _stream_complete(
         self,
@@ -271,6 +364,102 @@ class LLMClient:
 
         return embeddings
 
+    @staticmethod
+    def _get_context_window(model: str, provider: Any) -> int:
+        """Look up model context window from LiteLLM registry, with fallback.
+
+        Uses litellm.model_cost (300+ models, community-maintained) to find
+        the model's max_input_tokens. Falls back to provider config if the
+        model is not in the registry. No hardcoded model names.
+        """
+        from litellm import model_cost  # noqa: PLC0415
+        # Try exact match, then suffix match (strip provider prefix)
+        model_key = model.split("/", 1)[-1] if "/" in model else model
+        entry = model_cost.get(model, {}) or model_cost.get(model_key, {})
+        ctx = entry.get("max_input_tokens") if entry else None
+        if ctx is None:
+            ctx = provider.config.max_input_tokens
+        return ctx
+
+    @staticmethod
+    async def _count_prompt_tokens(model: str, messages: list[dict[str, Any]]) -> int:
+        """Count tokens in the prompt using LiteLLM's provider-aware counter.
+
+        Falls back to tiktoken if the provider doesn't support token counting.
+        """
+        try:
+            from litellm import acount_tokens  # noqa: PLC0415
+            count = await acount_tokens(model=model, messages=messages)
+            return count.total_tokens or 0
+        except Exception:
+            # Fallback: tiktoken or rough estimate
+            text = " ".join(m.get("content", "") or "" for m in messages)
+            return len(text) // 4 or 1
+
+    async def _enforce_context_window(
+        self,
+        kwargs: dict[str, Any],
+        provider: Any,
+    ) -> tuple[int, int]:
+        """Dynamically enforce context window limits.
+
+        Returns (capped_max_tokens, prompt_tokens) for logging.
+        Raises ContextOverflowError if prompt exceeds the window.
+        """
+        messages = kwargs.get("messages", [])
+        model = kwargs.get("model", "")
+        requested_max = kwargs.get("max_tokens")
+
+        ctx = self._get_context_window(model, provider)
+        prompt_tokens = await self._count_prompt_tokens(model, messages)
+
+        if prompt_tokens > ctx:
+            raise ContextOverflowError(
+                f"Prompt has {prompt_tokens} tokens but {model}'s context "
+                f"window is {ctx}. Start a new session or reduce history."
+            )
+
+        # Reserve 20% of remaining for output — prevents "requested X but only Y free" errors
+        remaining = ctx - prompt_tokens
+        output_budget = int(remaining * 0.8) if remaining > 0 else 0
+
+        if requested_max is None or requested_max > output_budget:
+            kwargs["max_tokens"] = max(1, output_budget)
+
+        return kwargs["max_tokens"], prompt_tokens
+
+    @staticmethod
+    def _sanitize_output(text: str) -> str:
+        """Strip common LLM artifacts from response text.
+
+        Patterns stripped (trailing only to avoid damaging legitimate content):
+        - ### and any sequence of # characters
+        - Qwen/chat template tokens: <|im_end|>, <|endoftext|>
+        - Unclosed XML structural tags at the end
+        - Trailing whitespace/newlines
+        """
+        # Strip trailing whitespace first
+        text = text.rstrip()
+        # Strip trailing ## delimiters (common in Qwen output)
+        text = re.sub(r"\n?#+\s*$", "", text)
+        # Strip trailing chat template tokens
+        text = re.sub(r"<\|im_end\|>\s*$", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"<\|endoftext\|>\s*$", "", text, flags=re.IGNORECASE)
+        # Strip trailing XML structural tags that are clearly artifacts
+        text = re.sub(
+            r"</?(role|context|instructions|thinking|output|output_format|"
+            r"thinking_protocol|rules|rule|criterion|step_details|"
+            r"decision_rules|available_tools|examples|common_mistakes|"
+            r"missing_information|slot_details|reflection_context|"
+            r"tool_results|errors|when_to_split|when_not_to_split|"
+            r"memories|improvement_feedback|example|mistake|wrong_output|"
+            r"correction|input|right|explanation|scenario)>"
+            r"\s*$",
+            "", text, flags=re.IGNORECASE,
+        )
+        # Final trim
+        return text.strip()
+
     def _build_response(
         self,
         response: Any,
@@ -306,8 +495,11 @@ class LLMClient:
             completion_tokens,
         )
 
+        raw_text = getattr(content, "content", None) if content else None
+        sanitized = self._sanitize_output(raw_text) if raw_text else None
+
         return LLMResponse(
-            content=getattr(content, "content", None) if content else None,
+            content=sanitized,
             tool_calls=tool_calls,
             usage=UsageInfo(
                 prompt_tokens=prompt_tokens or 0,

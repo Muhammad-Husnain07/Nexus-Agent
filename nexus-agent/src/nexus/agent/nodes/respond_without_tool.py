@@ -54,7 +54,7 @@ async def respond_without_tool(
     else:
         final = await _handle_greeting(state, llm, model, query)
 
-    final_msg = _openai_message("assistant", final)
+    final_msg = _openai_message("assistant", final, _milestone=True)
     logger.info("respond_without_tool.completed", response_type=response_type, length=len(final))
     return {
         "final_response": final,
@@ -75,29 +75,42 @@ def _build_tool_list(tools: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+_GREETINGS = [
+    "Hello! How can I help you today?",
+    "Hi there! How can I assist you?",
+    "Hello! I'm here to help. What can I do for you?",
+    "Hey! How can I help you today?",
+]
+
+
 async def _handle_greeting(
     state: dict[str, Any],
     llm: LLMClient,
     model: str,
     query: str,
 ) -> str:
-    """Friendly greeting response — no tools, no memory needed."""
-    prompt = (
-        "<role>You are Nexus Agent, a helpful AI assistant.</role>\n"
-        "<context>The user is greeting you or making casual conversation. "
-        "Respond warmly and briefly, then offer assistance.</context>\n"
-        "<instructions>\n"
-        "1. Acknowledge the user's greeting or message naturally.\n"
-        "2. Keep your response to 1-2 sentences.\n"
-        "3. End with a brief offer of help (e.g., 'How can I assist you today?').\n"
-        "</instructions>\n"
-    )
-    response = await llm.complete(
-        model=model,
-        messages=[_openai_message("user", prompt + f"\nUser message: {query}")],
-        temperature=0.7,
-    )
-    return response.content or "Hello! How can I help you today?"
+    """Friendly greeting response — no tools, no memory needed (static template)."""
+    import random
+    return random.choice(_GREETINGS)
+
+
+def _format_tool_list(tools: list[dict[str, Any]]) -> str:
+    """Build a human-readable tool listing grouped by category."""
+    if not tools:
+        return ""
+    by_cat: dict[str, list[str]] = {}
+    for t in tools:
+        cat = t.get("category") or "other"
+        name = t.get("name", "unknown")
+        desc = t.get("description", "")
+        line = f"  - **{name}**: {desc}" if desc else f"  - **{name}**"
+        by_cat.setdefault(cat, []).append(line)
+
+    parts: list[str] = []
+    for cat in sorted(by_cat):
+        parts.append(f"**{cat.capitalize()}**:")
+        parts.extend(by_cat[cat])
+    return "\n".join(parts)
 
 
 async def _handle_meta(
@@ -106,29 +119,43 @@ async def _handle_meta(
     model: str,
     query: str,
 ) -> str:
-    """Describe agent capabilities using the dynamically discovered tools list."""
-    tools = state.get("available_tools", [])
-    tool_listing = _build_tool_list(tools)
+    """Describe agent capabilities using the dynamically discovered tools list.
 
-    prompt = (
-        "<role>You are Nexus Agent, an AI assistant that helps users by calling "
-        "external tools and APIs.</role>\n"
-        "<context>The user is asking about what you can do. Describe your "
-        "capabilities based on the tools you have access to.</context>\n"
-        "<instructions>\n"
-        "1. Greet the user and explain your role briefly.\n"
-        "2. List the capabilities you have based on the available tools below.\n"
-        "3. Keep your response conversational and concise (3-5 sentences).\n"
-        "4. If no tools are configured, explain that you're a conversational assistant.\n"
-        "</instructions>\n"
-        f"<available_tools>\n{tool_listing}\n</available_tools>\n"
+    Uses template-based tool listing (no LLM) for speed and accuracy.
+    Falls back to _meta_fallback only if no tools are registered.
+    """
+    tools = state.get("available_tools", [])
+    tool_count = len(tools)
+    categories = set()
+    for t in tools:
+        cat = t.get("category") or t.get("tags", [None])[0] if t.get("tags") else None
+        if cat:
+            categories.add(cat)
+    cats_str = ", ".join(sorted(categories)) if categories else "various"
+
+    if not tools:
+        return _meta_fallback(tool_count, cats_str)
+
+    try:
+        tool_lines = _format_tool_list(tools)
+        return (
+            f"I'm Nexus Agent, and I have {tool_count} tools available "
+            f"across {cats_str} categories:\n\n{tool_lines}\n\n"
+            "What would you like help with?"
+        )
+    except Exception:
+        return _meta_fallback(tool_count, cats_str)
+
+
+def _meta_fallback(tool_count: int, categories: str) -> str:
+    """Fallback when LLM call fails — no API needed."""
+    if tool_count == 0:
+        return "I'm Nexus Agent, your conversational AI assistant. I can chat, answer questions, and help with various tasks."
+    return (
+        f"I'm Nexus Agent, and I have {tool_count} tools available across "
+        f"{categories} categories. I can search the web, manage bookmarks, "
+        f"look up information, and more. What would you like help with?"
     )
-    response = await llm.complete(
-        model=model,
-        messages=[_openai_message("user", prompt + f"\nUser question: {query}")],
-        temperature=0.7,
-    )
-    return response.content or "I'm Nexus Agent, your AI assistant. I can help you with various tasks."
 
 
 async def _handle_memory_query(
@@ -166,5 +193,7 @@ async def _handle_memory_query(
         model=model,
         messages=[_openai_message("user", prompt + f"\nUser question: {query}")],
         temperature=0.7,
+        max_tokens=200,
+        stop=["User:", "user:", "###"],
     )
     return response.content or "I don't have any relevant memories to share."

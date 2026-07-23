@@ -5,8 +5,30 @@ from __future__ import annotations
 from operator import add
 from typing import Annotated, Any, Literal, TypedDict
 
-from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
+
+
+def _any_true(a: bool, b: bool) -> bool:
+    return a or b
+
+
+def milestone_reducer(
+    current: list[dict[str, Any]],
+    update: list[dict[str, Any]] | dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Rolling window reducer — keeps last 10 messages + milestone-tagged ones.
+
+    Replaces ``add_messages`` to prevent O(N²) context growth.  Critical
+    messages (system prompt, first user query, tool results) are tagged
+    with ``_milestone=True`` and survive the window.
+    """
+    full = (current or []) + (update if isinstance(update, list) else [update])
+    cutoff = max(0, len(full) - 10)
+    kept: list[dict[str, Any]] = []
+    for i, msg in enumerate(full):
+        if i >= cutoff or isinstance(msg, dict) and msg.get("_milestone"):
+            kept.append(msg)
+    return kept
 
 
 def _merge_results(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
@@ -14,6 +36,13 @@ def _merge_results(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any
     merged = dict(left)
     merged.update(right)
     return merged
+
+
+def _merge_reflection_history(
+    left: list[dict[str, Any]], right: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Accumulate reflection history entries across rounds."""
+    return left + right
 
 
 class PlanStep(BaseModel):
@@ -70,6 +99,8 @@ answered directly via greeting / meta / memory-query."""
 class IntentAnalysis(BaseModel):
     """Structured analysis of user intent from the understand_intent node."""
 
+    model_config = {"extra": "ignore"}  # tolerate extra fields from LLM
+
     primary_goal: str = Field(description="The user's main objective")
     implied_actions: list[str] = Field(
         default_factory=list, description="Actions implied but not explicitly stated"
@@ -115,7 +146,7 @@ class AgentState(TypedDict):
     checkpointing.  Messages use the ``add_messages`` reducer.
     """
 
-    messages: Annotated[list, add_messages]
+    messages: Annotated[list[dict[str, Any]], milestone_reducer]
     session_id: str
     user_context: dict[str, Any]
     plan: list[dict[str, Any]] | None
@@ -139,7 +170,21 @@ class AgentState(TypedDict):
     reflection_score: float
     reflection_feedback: str
     reflection_count: int
+    working_memory: dict[str, Any]
+    reflection_history: Annotated[list[dict[str, Any]], _merge_reflection_history]
+    task_difficulty: float | None
+    total_cost_usd: float
+    _cost_breakdown: dict[str, Any]
+    _total_tokens: int
+    _prompt_versions: dict[str, str]
+    self_consistency_samples: list[dict[str, Any]] | None
+    calibration_data: dict[str, Any]
+    _max_concurrent_tasks: int | None
+    _active_speculations: dict[str, Any] | None
+    _pending_splits: list[dict[str, Any]]
+    _dag_generation: int
     dag_tasks: list[dict[str, Any]]
     dag_results: Annotated[dict[str, Any], _merge_results]
     dag_phase: str
     _routing_decision: str
+    _tool_executed_in_turn: Annotated[bool, _any_true]

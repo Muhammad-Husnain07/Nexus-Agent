@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -37,6 +38,11 @@ class MemoryStore:
         """Store a memory entry."""
         mid = memory_id or uuid.uuid4()
 
+        # Sanitize content before persisting — strip LLM artifacts
+        content = re.sub(r"###\s*$", "", content.strip())
+        content = re.sub(r"<\|im_end\|>\s*$", "", content.strip())
+        content = re.sub(r"<\|endoftext\|>\s*$", "", content.strip())
+
         async with async_session() as session:
             repo = GenericRepository(session, Memory)
             existing = await repo.get(mid)
@@ -48,6 +54,7 @@ class MemoryStore:
                 if embedding is not None:
                     existing.embedding = embedding
             else:
+                now = datetime.now(UTC)
                 await repo.create(
                     id=mid,
                     session_id=uuid.UUID(session_id) if session_id else None,
@@ -56,6 +63,11 @@ class MemoryStore:
                     embedding=embedding,
                     metadata_=metadata or {},
                     importance=importance,
+                    status="active",
+                    access_count=0,
+                    base_importance=importance,
+                    current_importance=importance,
+                    created_at=now,
                 )
             await session.commit()
         return mid
@@ -126,10 +138,14 @@ class MemoryStore:
             }
             output.append(d)
 
-        # Update last_accessed_at for retrieved memories
+        # Update last_accessed_at and access_count for retrieved memories
         if rows:
             ids = [str(r[0]) for r in rows]
-            update_sql = "UPDATE memory SET last_accessed_at = NOW() WHERE id = ANY(:ids)"
+            update_sql = (
+                "UPDATE memory SET last_accessed_at = NOW(), "
+                "access_count = COALESCE(access_count, 0) + 1 "
+                "WHERE id = ANY(:ids)"
+            )
             async with async_session() as session:
                 await session.execute(text(update_sql), {"ids": ids})
                 await session.commit()
@@ -156,4 +172,8 @@ class MemoryStore:
             "importance": row.importance,
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "last_accessed_at": row.last_accessed_at.isoformat() if row.last_accessed_at else None,
+            "status": row.status,
+            "access_count": row.access_count,
+            "base_importance": row.base_importance,
+            "current_importance": row.current_importance,
         }

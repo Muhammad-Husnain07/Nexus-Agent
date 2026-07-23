@@ -99,8 +99,8 @@ class ToolExecution(Base):
     )
     agent_run_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("agent_run.id", ondelete="SET NULL"),
         nullable=True,
+        comment="Agent run identifier (optional — no FK constraint)",
     )
     request_payload: Mapped[dict[str, Any]] = mapped_column(
         JSONB, default=dict, comment="Input arguments sent to the tool"

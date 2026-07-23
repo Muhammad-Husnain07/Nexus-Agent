@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from pgvector.sqlalchemy import VECTOR
-from sqlalchemy import DateTime, Float, ForeignKey, String, Text, func
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -45,3 +45,20 @@ class Memory(Base):
         comment="Last time this memory was retrieved",
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    # Consolidation fields
+    status: Mapped[str | None] = mapped_column(
+        String(20), default="active", comment="active | deprecated | archived"
+    )
+    consolidated_from: Mapped[list[str] | None] = mapped_column(
+        JSONB, default=list, comment="UUIDs of source memories merged into this one"
+    )
+    access_count: Mapped[int] = mapped_column(
+        Integer, default=0, comment="Number of times this memory was retrieved"
+    )
+    base_importance: Mapped[float | None] = mapped_column(
+        Float, default=None, comment="Original importance score (before decay)"
+    )
+    current_importance: Mapped[float | None] = mapped_column(
+        Float, default=None, comment="Current importance score (after decay)"
+    )

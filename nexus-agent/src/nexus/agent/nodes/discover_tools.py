@@ -19,13 +19,44 @@ async def discover_tools(
     selector: DynamicToolSelector,
     session_factory: Callable[[], Any] | None = None,
 ) -> dict[str, Any]:
-    """Discover relevant tools for the user's intent."""
+    """Discover relevant tools for the user's intent.
+
+    Fast path: if the intent directly matches a tool name or purpose,
+    return it immediately without semantic search.
+    """
     intent: dict[str, Any] = state.get("intent") or {}
     query: str = intent.get("intent", "") or msg_content(state.get("messages", [{}])[-1])
+    query_lower = query.lower()
 
-    session = session_factory() if session_factory else None
-    tools = await selector.select(session, message=query)
+    # Fast path: direct tool match by name or purpose
+    pre_populated = state.get("available_tools", [])
+    direct_matches = []
+    for t in pre_populated:
+        name = t.get("name", "").lower()
+        purpose = t.get("purpose", "").lower()
+        desc = t.get("description", "").lower()
+        # Match if query contains the tool name (underscores as spaces) or
+        # the tool purpose contains key intent words
+        if name.replace("_", " ") in query_lower or any(
+            word in purpose for word in query_lower.split() if len(word) > 3
+        ) or any(word in desc for word in query_lower.split() if len(word) > 3):
+            direct_matches.append(t)
+
+    # Normal path: semantic search via selector
+    if session_factory:
+        async with session_factory() as session:
+            tools = await selector.select(session, message=query)
+    else:
+        tools = await selector.select(None, message=query)
     tool_dicts: list[dict[str, Any]] = [t.model_dump(mode="json") for t in tools]
 
-    logger.info("tools.discovered", count=len(tool_dicts), query=query[:50])
-    return {"available_tools": tool_dicts}
+    # Merge direct matches into semantic results to ensure prerequisite
+    # tools (e.g. get_geocoding for get_weather) are not missed
+    semantic_names = {t.get("name") for t in tool_dicts if t.get("name")}
+    merged = list(tool_dicts)
+    for t in direct_matches:
+        if t.get("name") not in semantic_names:
+            merged.append(t)
+
+    logger.info("tools.discovered", count=len(merged), query=query[:50], direct=len(direct_matches))
+    return {"available_tools": merged}

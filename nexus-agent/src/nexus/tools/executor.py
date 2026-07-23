@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexus.config.secrets import EnvSecretResolver, SecretResolver
 from nexus.config.settings import get_settings
+from nexus.observability.tracing import get_tracer
 from nexus.db.models.tool import ToolExecution
 from nexus.redis_client.client import get_redis_client
 from nexus.redis_client.pubsub import EventBus, tool_channel
@@ -27,7 +28,7 @@ from nexus.redis_client.rate_limiter import RateLimitError, TokenBucketRateLimit
 from nexus.tools.approval_gate import ApprovalRequiredInterrupt, check_approval_required
 from nexus.tools.mcp_client import MCPClient
 from nexus.tools.result import ToolResult
-from nexus.tools.retries import http_retry_policy, is_retryable_status, parse_retry_after
+from nexus.tools.retries import category_retry_delay, http_retry_policy, is_retryable_status, parse_retry_after
 from nexus.tools.sandbox import (
     SandboxBlockedError,
     SandboxConfig,
@@ -79,6 +80,27 @@ def _check_python_code_fields(tool: ToolRead) -> str | None:
                             f"'{prop_key}' in {field_name}.properties — rejected"
                         )
     return None
+
+
+_COMMON_FIELD_MAP: dict[str, str] = {
+    "q": "query", "query": "q",
+    "name": "title", "title": "name",
+    "id": "identifier", "identifier": "id",
+    "email": "email_address", "email_address": "email",
+    "lat": "latitude", "latitude": "lat",
+    "lon": "longitude", "longitude": "lon", "long": "lon",
+    "city": "location", "location": "city",
+}
+
+
+def _semantic_fix_inputs(inputs: dict[str, Any], error_fields: list[str]) -> dict[str, Any]:
+    """Attempt to fix input parameters based on field names in error messages."""
+    fixed = dict(inputs)
+    for field in error_fields:
+        lower = field.lower()
+        if lower in _COMMON_FIELD_MAP and _COMMON_FIELD_MAP[lower] in fixed:
+            fixed[field] = fixed.pop(_COMMON_FIELD_MAP[lower])
+    return fixed
 
 
 class ExecutionContext:
@@ -280,7 +302,7 @@ class ToolExecutor:
                         duration_ms=0,
                     )
 
-        # 9. HTTP call with retry
+        # 9. HTTP call with retry (semantic-aware)
         retry_policy = http_retry_policy(
             max_attempts=self._max_retries,
             backoff_base_s=self._retry_backoff_s,
@@ -288,6 +310,7 @@ class ToolExecutor:
 
         HTTP_429_TOO_MANY: int = 429
         total_attempts = 0
+        _sem_classifier = None
 
         try:
             async for attempt in retry_policy:
@@ -305,20 +328,45 @@ class ToolExecutor:
                         if not is_retryable_status(response.status_code):
                             last_exc = exc
                             raise
+                        # Semantic-aware delay and param modification
+                        if _sem_classifier is None:
+                            from nexus.tools.error_recovery import SemanticErrorClassifier  # noqa: PLC0415
+                            _sem_classifier = SemanticErrorClassifier()
+                        err_text = str(exc)
+                        category = _sem_classifier.classify(err_text)
+
                         if response.status_code == HTTP_429_TOO_MANY:
                             retry_after = parse_retry_after(response)
-                            if retry_after is not None:
-                                await asyncio.sleep(retry_after)
+                            delay = category_retry_delay(category.value, attempt.retry_state.attempt_number - 1, retry_after)
+                            if delay > 0:
+                                await asyncio.sleep(delay)
+                        else:
+                            delay = category_retry_delay(category.value, attempt.retry_state.attempt_number - 1)
+                            if delay > 0:
+                                await asyncio.sleep(delay)
+
+                        # For schema errors, try to fix inputs and retry
+                        if category.name == "PERMANENT_SCHEMA":
+                            fields = _sem_classifier.extract_fields(err_text)
+                            if fields:
+                                fixed = _semantic_fix_inputs(inputs, fields)
+                                if fixed != inputs:
+                                    logger.info("tool.schema_retry_fix", tool=tool.name, fields=fields)
+                                    inputs = fixed
                         raise
                     except (httpx.TimeoutException, httpx.TransportError) as exc:
                         last_exc = exc
                         raise
         except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.TransportError):
-            # All retries exhausted or non-retryable — response/last_exc already set
             pass
 
         retried = total_attempts > 1
         duration_ms = int((time.perf_counter() - start) * 1000)
+
+        # Tracing span for this tool execution
+        _span_tool = get_tracer().start_span("tool.execute")
+        _span_tool.set_attribute("tool.name", tool.name)
+        _span_tool.set_attribute("tool.type", tool.tool_type)
 
         # Build result
         result = self._build_result(tool, response, last_exc, duration_ms, retried)
@@ -341,6 +389,18 @@ class ToolExecutor:
         # 9. Publish event
         await self._publish_event(context, result)
 
+        # Record performance metrics (fire-and-forget, non-blocking)
+        try:
+            from nexus.tools.performance import performance_tracker  # noqa: PLC0415
+            performance_tracker.record_call(
+                tool_id=tool.name,
+                latency_ms=result.duration_ms or 0,
+                success=result.status == "success",
+                error_type=result.status if result.status != "success" else None,
+            )
+        except Exception:
+            pass
+
         logger.info(
             "tool.executed",
             tool=tool.name,
@@ -349,6 +409,10 @@ class ToolExecutor:
             duration_ms=result.duration_ms,
             headers=masked_log_headers,
         )
+
+        _span_tool.set_attribute("tool.status", result.status)
+        _span_tool.set_attribute("tool.duration_ms", result.duration_ms or 0)
+        _span_tool.end()
         return result
 
     async def _resolve_auth(self, tool: ToolRead) -> dict[str, str]:

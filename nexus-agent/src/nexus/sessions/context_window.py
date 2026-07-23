@@ -241,6 +241,7 @@ class ContextWindowManager:
             messages=summarization_messages,
             temperature=0.3,
             max_tokens=2048,
+            stop=["###", "<|im_end|>"],
         )
         summary = response.content or ""
         logger.info(

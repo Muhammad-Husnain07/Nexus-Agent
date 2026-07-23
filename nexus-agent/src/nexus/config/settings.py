@@ -1,7 +1,12 @@
 """Application settings via Pydantic BaseSettings with nested groups."""
 
 from functools import lru_cache
-from typing import Literal
+from typing import Any, Literal, get_args
+
+# Supported prompt format identifiers — fully dynamic, no hardcoded model mappings
+_PROMPT_FORMATS = Literal["auto", "anthropic", "openai", "gemini", "deepseek", "llama", "qwen", "mistral", "raw"]
+PROMPT_FORMAT_VALUES: tuple[str, ...] = get_args(_PROMPT_FORMATS)
+PROMPT_FORMATS: tuple[str, ...] = PROMPT_FORMAT_VALUES  # public alias
 
 from pydantic import BaseModel, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -73,6 +78,7 @@ class ProviderConfig(BaseModel):
     cost_per_1k_input: float = Field(default=0.0, ge=0, description="Input cost per 1K tokens")
     cost_per_1k_output: float = Field(default=0.0, ge=0, description="Output cost per 1K tokens")
     max_tokens: int = Field(default=4096, ge=1, description="Default max tokens for responses")
+    max_input_tokens: int = Field(default=128000, ge=1, description="Max input context window (fallback if model not in LiteLLM registry)")
     supports_streaming: bool = Field(default=True, description="Supports streaming responses")
     supports_tools: bool = Field(default=True, description="Supports tool/function calling")
     supports_structured_output: bool = Field(
@@ -83,6 +89,14 @@ class ProviderConfig(BaseModel):
     )
     default_headers: dict[str, str] = Field(
         default_factory=dict, description="Default HTTP headers for API requests"
+    )
+    extra_kwargs: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Extra kwargs passed to the provider (e.g. {\"options\": {\"think\": false}} for Qwen)",
+    )
+    prompt_format: str = Field(
+        default="auto",
+        description="Prompt format for this provider. 'auto' = runtime probe detect. Options: " + ", ".join(PROMPT_FORMAT_VALUES),
     )
 
 
@@ -119,6 +133,23 @@ class LLMSettings(BaseModel):
 
 
 
+class ExperimentSettings(BaseModel):
+    """Configuration for A/B experiments and prompt version testing.
+
+    Fields:
+        ab_test_enabled: Master switch for A/B experiment assignments.
+        experiment_id: Current experiment identifier for outcome tracking.
+        variant_weights: Per-prompt-name mapping of version → probability weights.
+    """
+
+    ab_test_enabled: bool = Field(default=False, description="Enable A/B experiment tracking")
+    experiment_id: str | None = Field(default=None, description="Current experiment ID")
+    variant_weights: dict[str, dict[str, float]] = Field(
+        default_factory=dict,
+        description="Prompt name → {version: weight} for A/B assignment",
+    )
+
+
 class ObservabilitySettings(BaseModel):
     """Observability, tracing, and logging configuration.
 
@@ -140,7 +171,7 @@ class ObservabilitySettings(BaseModel):
 
 
 class MemorySettings(BaseModel):
-    """Long-term memory and checkpointer configuration.
+    """Long-term memory, working memory, and consolidation configuration.
 
     Fields:
         enabled: Enable memory extraction and retrieval.
@@ -148,6 +179,17 @@ class MemorySettings(BaseModel):
         importance_threshold: Minimum importance score for memories to retain.
         similarity_threshold: Cosine similarity threshold for deduplication (0-1).
         checkpointer_type: Checkpointer backend — postgres or memory.
+        working_memory_max_entries: Max working memory entries before eviction.
+        working_memory_inject_count: Number of recent entries to inject into prompts.
+        scout_enabled: Enable proactive memory retrieval at multiple trigger points.
+        scout_max_injection_tokens: Max tokens per memory injection.
+        scout_mmr_lambda: MMR diversity weight (0=all diverse, 1=all relevant).
+        consolidation_interval_minutes: Minutes between consolidation runs.
+        consolidation_cluster_eps: DBSCAN epsilon for memory clustering.
+        consolidation_min_cluster: Minimum cluster size for consolidation.
+        decay_base_rate: Base decay rate for adaptive memory decay.
+        decay_importance_floor: Minimum importance before potential archival.
+        decay_archive_threshold: Importance below which memories are archived.
     """
 
     enabled: bool = Field(default=True, description="Enable memory extraction and retrieval")
@@ -162,6 +204,83 @@ class MemorySettings(BaseModel):
         default="postgres", description="Checkpointer backend: postgres or memory"
     )
 
+    # Working memory
+    working_memory_max_entries: int = Field(
+        default=50, ge=10, le=500, description="Max working memory entries"
+    )
+    working_memory_inject_count: int = Field(
+        default=10, ge=1, le=50, description="Recent entries to inject into prompts"
+    )
+
+    # Proactive scout
+    scout_enabled: bool = Field(default=True, description="Enable proactive memory retrieval")
+    scout_max_injection_tokens: int = Field(
+        default=800, ge=0, le=8000, description="Max tokens per memory injection"
+    )
+    scout_mmr_lambda: float = Field(
+        default=0.7, ge=0, le=1, description="MMR diversity-relevance tradeoff"
+    )
+
+    # Consolidation
+    consolidation_interval_minutes: int = Field(
+        default=30, ge=5, le=1440, description="Minutes between consolidation runs"
+    )
+    consolidation_cluster_eps: float = Field(
+        default=0.3, ge=0.05, le=1.0, description="DBSCAN epsilon for clustering"
+    )
+    consolidation_min_cluster: int = Field(
+        default=2, ge=2, le=20, description="Minimum cluster size for merge"
+    )
+
+    # Decay
+    decay_base_rate: float = Field(
+        default=0.05, ge=0.001, le=1.0, description="Base adaptive decay rate"
+    )
+    decay_importance_floor: float = Field(
+        default=0.1, ge=0, le=1, description="Minimum importance before archival"
+    )
+    decay_archive_threshold: float = Field(
+        default=0.05, ge=0, le=1, description="Archive memories below this importance"
+    )
+
+
+class AdaptiveReflectionSettings(BaseModel):
+    """Adaptive reflection, self-consistency, and uncertainty-aware routing config.
+
+    Fields:
+        base_threshold: Base acceptance threshold for reflection score (0-1).
+        domain_thresholds: Per-response-type threshold overrides.
+        convergence_delta: Minimum score improvement to continue refining.
+        convergence_window: Number of consecutive rounds with <delta improvement to stop.
+        max_escalation_rounds: Rounds before attempting model escalation.
+        self_consistency_k: Number of parallel samples for moderate confidence.
+        self_consistency_early_stop: Stop sampling if first k-1 agree.
+        max_concurrent_tasks: Default max parallel tool executions.
+        cost_budget_usd: Max API cost per task before accepting best-so-far.
+        confidence_high: Threshold for direct proceed (>= this).
+        confidence_moderate: Threshold for self-consistency band.
+        confidence_low: Threshold for clarification (< this).
+    """
+
+    base_threshold: float = Field(default=0.7, ge=0, le=1, description="Base acceptance score threshold")
+    domain_thresholds: dict[str, float] = Field(
+        default_factory=lambda: {"tool": 0.8, "greeting": 0.5, "meta": 0.6, "memory_query": 0.7},
+        description="Per-response-type threshold overrides",
+    )
+    convergence_delta: float = Field(default=0.02, ge=0, le=1, description="Min score delta to continue")
+    convergence_window: int = Field(default=2, ge=1, description="Rounds of low delta to stop")
+    max_escalation_rounds: int = Field(default=2, ge=0, description="Rounds before model escalation")
+    self_consistency_k: int = Field(default=3, ge=1, le=10, description="Parallel samples for uncertainty")
+    self_consistency_early_stop: bool = Field(default=True, description="Stop early if samples agree")
+    max_concurrent_tasks: int = Field(default=5, ge=1, le=50, description="Max parallel tool calls")
+    cost_budget_usd: float = Field(default=0.50, ge=0, description="Max API cost per task")
+    max_speculative_approaches: int = Field(default=3, ge=1, le=10, description="Max parallel speculative branches per task")
+    speculative_timeout_s: float = Field(default=15.0, ge=1, description="Timeout per speculative branch")
+    max_dag_generations: int = Field(default=3, ge=1, le=10, description="Max recursive DAG expansion depth")
+    confidence_high: float = Field(default=0.9, ge=0, le=1, description="Proceed directly threshold")
+    confidence_moderate: float = Field(default=0.7, ge=0, le=1, description="Self-consistency band start")
+    confidence_low: float = Field(default=0.5, ge=0, le=1, description="Clarification threshold")
+
 
 class AgentSettings(BaseModel):
     """LangGraph agent execution configuration.
@@ -174,6 +293,7 @@ class AgentSettings(BaseModel):
         hitl_default: Require human approval for tool calls by default.
         hitl_tool_patterns: Regex patterns for tools requiring HITL approval.
         approval_timeout_hours: Auto-reject pending approvals after this many hours.
+        adaptive_reflection: Adaptive reflection and uncertainty settings.
     """
 
     max_iterations: int = Field(default=25, ge=1, description="Max iterations per turn")
@@ -214,10 +334,14 @@ class AgentSettings(BaseModel):
         default=False,
         description="Skip the present_preview node (routes directly to finalize)",
     )
+    adaptive_reflection: AdaptiveReflectionSettings = Field(
+        default_factory=AdaptiveReflectionSettings,
+        description="Adaptive reflection and uncertainty settings",
+    )
 
 
 class ToolSettings(BaseModel):
-    """Tool execution and sandbox configuration.
+    """Tool execution, affinity, performance, and error recovery configuration.
 
     Fields:
         execution_timeout_s: Max execution time per tool call in seconds.
@@ -225,6 +349,13 @@ class ToolSettings(BaseModel):
         retry_backoff_s: Base backoff in seconds between retries.
         sandbox_enabled: Enable sandboxed tool execution.
         allowed_hosts: List of allowed external hosts for tool HTTP calls.
+        affinity_window_size: Co-occurrence window for affinity graph.
+        performance_weight: Weight of performance vs relevance in tool ranking (0-1).
+        performance_window_minutes: Sliding window for performance metrics.
+        degradation_error_rate: Error rate threshold for degradation detection.
+        degradation_latency_multiplier: Latency multiplier threshold for degradation.
+        degradation_min_samples: Minimum samples before degradation check.
+        degradation_cooldown_minutes: Cooldown before auto-recovery.
     """
 
     execution_timeout_s: int = Field(default=30, ge=1, description="Tool execution timeout")
@@ -238,6 +369,31 @@ class ToolSettings(BaseModel):
         default=None, description="HTTP proxy URL for tool calls (e.g. http://proxy:8080)"
     )
     http2_enabled: bool = Field(default=True, description="Enable HTTP/2 for tool calls")
+
+    # Tool affinity graph
+    affinity_window_size: int = Field(default=5, ge=1, le=20, description="Co-occurrence window for affinity")
+
+    # Performance-aware selection
+    performance_weight: float = Field(default=0.4, ge=0, le=1, description="Performance vs relevance weight")
+    performance_window_minutes: int = Field(default=60, ge=1, description="Sliding window for metrics")
+
+    # Degradation detection
+    degradation_error_rate: float = Field(default=0.3, ge=0, le=1, description="Error rate threshold for degradation")
+    degradation_latency_multiplier: float = Field(default=3.0, ge=1, description="Latency multiplier threshold")
+    degradation_min_samples: int = Field(default=5, ge=1, description="Min samples before degradation check")
+    degradation_cooldown_minutes: int = Field(default=15, ge=1, description="Cooldown before auto-recovery")
+
+    # JSON extraction pipeline for LLM outputs (dynamic, model-agnostic)
+    # Ordered list of strategy names to try. Options: output_tags, brace_counting, json5
+    json_extraction_pipeline: list[str] = Field(
+        default=["output_tags", "brace_counting", "json5"],
+        description="JSON extraction strategy pipeline (order matters)",
+    )
+    # Tags to strip from LLM output before JSON extraction falls back to preprocess
+    json_extraction_strip_tags: list[str] = Field(
+        default=["thinking", "think", "output"],
+        description="XML/HTML tags to strip before JSON extraction",
+    )
 
 
 class ServerSettings(BaseModel):
@@ -295,6 +451,9 @@ class Settings(BaseSettings):
     )
     server: ServerSettings = Field(
         default_factory=ServerSettings, description="Server configuration"
+    )
+    experiment: ExperimentSettings = Field(
+        default_factory=ExperimentSettings, description="A/B experiment configuration"
     )
 
 

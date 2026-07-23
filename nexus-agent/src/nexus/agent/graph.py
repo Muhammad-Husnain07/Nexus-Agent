@@ -27,6 +27,7 @@ from nexus.agent.nodes import (
     reflect_on_response,
     respond_without_tool,
     review_final_answer,
+    self_consistency,
     understand_intent,
 )
 from nexus.agent.state import AgentState
@@ -44,12 +45,14 @@ from nexus.tools.executor import ToolExecutor
 
 
 def route_after_understand(state: AgentState) -> str:
-    """Route based on response type and missing info.
+    """Route based on response type, missing info, and confidence band.
 
     Priority:
     1. Non-tool queries (greeting/meta/memory) → respond_without_tool
     2. Missing info slots → gather_requirements (clarify)
-    3. Tool queries → discover_tools
+    3. Low confidence (< 0.5) → gather_requirements
+    4. Moderate confidence (0.5–0.7) → self_consistency
+    5. High confidence → discover_tools
     """
     resp_type: str = state.get("response_type", "tool")
     if resp_type in ("greeting", "meta", "memory_query"):
@@ -57,6 +60,12 @@ def route_after_understand(state: AgentState) -> str:
     missing: list[str] = state.get("missing_info_slots") or []
     if missing:
         return "gather_requirements"
+
+    # Check routing decision set by understand_intent
+    routing: str = state.get("_routing_decision", "")
+    if routing == "self_consistency":
+        return "self_consistency"
+
     return "discover_tools"
 
 
@@ -126,6 +135,7 @@ def build_agent_graph(  # noqa: PLR0913
     graph.add_node("tool_subgraph", tool_subgraph)
 
     graph.add_node("understand_intent", _node(understand_intent, _llm, _model))
+    graph.add_node("self_consistency", _node(self_consistency, _llm, _model))
     graph.add_node("respond_without_tool", _node(respond_without_tool, _llm, _model))
     graph.add_node("gather_requirements", _node(gather_requirements, _llm, _model))
     graph.add_node("finalize", _node(finalize, _llm, _model, session_factory))
@@ -141,6 +151,17 @@ def build_agent_graph(  # noqa: PLR0913
             "respond_without_tool": "respond_without_tool",
             "gather_requirements": "gather_requirements",
             "discover_tools": "tool_subgraph",
+            "self_consistency": "self_consistency",
+        },
+    )
+
+    # Self-consistency routes based on agreement
+    graph.add_conditional_edges(
+        "self_consistency",
+        lambda s: s.get("_routing_decision", "ask"),
+        {
+            "proceed": "tool_subgraph",
+            "ask": "gather_requirements",
         },
     )
 

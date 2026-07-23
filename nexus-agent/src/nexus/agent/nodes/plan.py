@@ -13,8 +13,11 @@ from nexus.agent.prompts import prompt_manager
 from nexus.agent.state import AgentState, Plan
 from nexus.config.settings import AgentSettings
 from nexus.llm.client import LLMClient
+from nexus.utils.json_extractor import JsonExtractor
 
 logger = structlog.get_logger("nexus.agent.nodes.plan")
+
+_json_extractor = JsonExtractor()
 
 
 def _openai_message(role: str, content: str, **kwargs: Any) -> dict[str, Any]:
@@ -74,10 +77,17 @@ async def plan(
         indent=2,
     )
 
+    example_context = {
+        "response_type": "tool",
+        "intent": intent.get("intent", ""),
+    }
 
-    system_prompt = prompt_manager.render(
+    system_prompt = prompt_manager.render_with_examples(
         "plan",
         version="3.0",
+        context=example_context,
+        max_examples=2,
+        max_mistakes=2,
         tool_descriptions=tool_descriptions,
     )
 
@@ -91,7 +101,7 @@ async def plan(
 
     )
 
-    content = (response.content or "").strip()
+    content = _json_extractor.extract(response.content or "")
     # Strip markdown code fences if present
     if content.startswith("```"):
         content = re.sub(r"^```[a-zA-Z]*\n?", "", content)

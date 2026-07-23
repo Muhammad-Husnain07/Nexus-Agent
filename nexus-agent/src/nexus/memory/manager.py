@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -128,6 +129,11 @@ class MemoryManager:
         importance: float,
     ) -> str | None:
         """Deduplicate against existing memories, then store."""
+        # Sanitize content — strip LLM artifacts before persistence
+        content = re.sub(r"###\s*$", "", content.strip())
+        content = re.sub(r"<\|im_end\|>\s*$", "", content.strip())
+        content = re.sub(r"<\|endoftext\|>\s*$", "", content.strip())
+
         mid = uuid.uuid4()
         embedding = await self._generate_embedding(content)
 
@@ -181,6 +187,65 @@ class MemoryManager:
             query_embedding=embedding,
             top_k=k,
         )
+
+    async def retrieve_mmr(
+        self,
+        query: str,
+        top_k: int | None = None,
+        mmr_lambda: float | None = None,
+    ) -> list[dict[str, Any]]:
+        """Retrieve memories with Maximum Marginal Relevance for diversity.
+
+        Args:
+            query: Search query text.
+            top_k: Number of results (default from settings).
+            mmr_lambda: MMR diversity weight (0=all diverse, 1=all relevant).
+
+        Returns:
+            List of diverse, relevant memory dicts.
+        """
+        if not self._memory_settings.enabled:
+            return []
+
+        k = top_k or self._memory_settings.retrieval_top_k
+        lam = mmr_lambda if mmr_lambda is not None else self._memory_settings.scout_mmr_lambda
+
+        embedding = await self._generate_embedding(query)
+        if embedding is None:
+            return []
+
+        # Get larger candidate pool for MMR
+        candidates = await self._store.search(
+            query_embedding=embedding,
+            top_k=k * 4,
+        )
+        if not candidates:
+            return []
+        if len(candidates) <= k:
+            return candidates
+
+        selected: list[dict[str, Any]] = []
+        remaining = list(candidates)
+        selected.append(remaining.pop(0))
+
+        while len(selected) < k and remaining:
+            best_idx = 0
+            best_score = -float("inf")
+
+            for i, cand in enumerate(remaining):
+                relevance = cand.get("similarity", 0)
+                max_sim = max(
+                    (sel.get("similarity", 0) for sel in selected),
+                    default=0,
+                )
+                mmr = lam * relevance - (1 - lam) * max_sim
+                if mmr > best_score:
+                    best_score = mmr
+                    best_idx = i
+
+            selected.append(remaining.pop(best_idx))
+
+        return selected
 
     async def retrieve_formatted(
         self,

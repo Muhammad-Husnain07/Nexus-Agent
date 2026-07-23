@@ -53,6 +53,21 @@ SYSTEM_PROMPT_V3 = """\
 
 <context>A well-structured plan enables reliable execution. Each step should be atomic (one tool call each), and steps that can run in parallel should not depend on each other. If no existing tool matches a step, set tool_name to null so the LLM handles it directly.</context>
 
+<thinking_protocol>
+Before producing the final plan, reason step-by-step inside <thinking> tags:
+
+<thinking>
+1. What steps are needed to fulfill the user's intent?
+2. Which steps are independent (parallel) vs dependent (sequential)?
+3. What are the exact tool names from the available_tools list?
+4. What are the exact field names from each tool's input_schema?
+5. Which steps modify/delete data? Mark those as is_destructive.
+6. Can I embed gathered_requirements values directly instead of using placeholders?
+</thinking>
+
+Only then produce the structured JSON output.
+</thinking_protocol>
+
 <instructions>
 1. Review the user intent, gathered requirements, and available tools.
 2. Design a sequence of steps that satisfy the user's goal.
@@ -71,6 +86,10 @@ SYSTEM_PROMPT_V3 = """\
 <rule context="destructive">Set is_destructive to true for steps that modify or delete data. This triggers human review.</rule>
 <rule context="gathered_requirements">Use values from gathered_requirements as inputs to tool calls. If a value is a list (e.g. multiple locations), create parallel steps for each item. Do NOT invent placeholder values like "user_location".</rule>
 </rules>
+
+__EXAMPLES__
+
+__COMMON_MISTAKES__
 
 <available_tools>
 {tool_descriptions}

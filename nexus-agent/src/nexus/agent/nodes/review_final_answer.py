@@ -53,7 +53,14 @@ async def review_final_answer(
         }
 
     if action == "edit":
-        edited = decision.get("modifications", {}) or decision.get("edited_response") or decision.get("edited_inputs", {})
+        edited = decision.get("modifications")
+        if edited is None:
+            edited = decision.get("edited_response")
+        if edited is None:
+            edited = decision.get("edited_inputs")
+        if edited is None:
+            logger.warning("review_final.unrecognized_edit", decision_keys=list(decision.keys()))
+            edited = final
         if isinstance(edited, dict):
             edited_text = edited.get("response") or edited.get("text") or final
         else:

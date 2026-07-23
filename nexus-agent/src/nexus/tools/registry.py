@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 import uuid
@@ -406,10 +407,31 @@ class ToolRegistry:
         )
 
     async def _generate_embedding(self, text: str) -> list[float] | None:
+        # Check text-hash cache in Redis
+        text_hash = hashlib.sha256(text.encode()).hexdigest()
+        cache_key = f"embed:{text_hash}"
+        try:
+            from nexus.redis_client.client import get_redis_client  # noqa: PLC0415
+            redis = get_redis_client()
+            if redis is not None:
+                import json as _json
+                cached = await redis.get(cache_key)
+                if cached:
+                    return _json.loads(cached)
+        except Exception:
+            pass
         try:
             embeddings = await self._llm.embed(EMBEDDING_MODEL, [text])
             if embeddings and embeddings[0]:
-                return embeddings[0]
+                result = embeddings[0]
+                # Cache in Redis (TTL 1 hour)
+                try:
+                    import json as _json
+                    if redis is not None:
+                        await redis.setex(cache_key, 3600, _json.dumps(result))
+                except Exception:
+                    pass
+                return result
         except Exception:
             logger.warning("embedding.failed", exc_info=True)
         return None

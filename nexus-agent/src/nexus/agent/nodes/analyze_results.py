@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import structlog
@@ -10,8 +11,11 @@ import structlog
 from nexus.agent.prompts import prompt_manager
 from nexus.agent.state import AgentState, AnalysisResult
 from nexus.llm.client import LLMClient
+from nexus.utils.json_extractor import JsonExtractor
 
 logger = structlog.get_logger("nexus.agent.nodes.analyze_results")
+
+_json_extractor = JsonExtractor()
 
 
 def _openai_message(role: str, content: str, **kwargs: Any) -> dict[str, Any]:
@@ -76,9 +80,16 @@ async def analyze_results(
                     "analysis_result": {"decision": "finalize"},
                 }
 
-            system_prompt = prompt_manager.render(
+            example_context = {
+                "response_type": state.get("response_type", "tool"),
+            }
+
+            system_prompt = prompt_manager.render_with_examples(
                 "analyze_results",
                 version="2.0",
+                context=example_context,
+                max_examples=3,
+                max_mistakes=3,
                 step_description=step_description,
                 expected_outcome=expected_outcome,
                 tool_result=tool_result_data,
@@ -106,7 +117,8 @@ async def analyze_results(
             )
 
             try:
-                parsed: dict[str, Any] = json.loads(response.content or "{}")
+                content = _json_extractor.extract(response.content or "{}")
+                parsed: dict[str, Any] = json.loads(content or "{}")
                 analysis = AnalysisResult(**parsed)
                 decision = _map_next_action(analysis.next_action, next_idx, len(plan))
             except Exception as exc:

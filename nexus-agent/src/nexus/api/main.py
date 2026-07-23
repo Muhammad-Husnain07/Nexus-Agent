@@ -160,6 +160,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger_factory=structlog.stdlib.LoggerFactory(),
         cache_logger_on_first_use=True,
     )
+
+    # Initialize OpenTelemetry tracing + structlog trace context
+    from nexus.observability.tracing import add_trace_context_to_structlog, setup_tracing  # noqa: PLC0415
+    setup_tracing()
+    add_trace_context_to_structlog()
+
+    # Wire A/B experiment weights into PromptManager if configured
+    if settings.experiment.ab_test_enabled and settings.experiment.variant_weights:
+        from nexus.agent.prompts import prompt_manager  # noqa: PLC0415
+        prompt_manager._ab_test_weights = settings.experiment.variant_weights
+        stdlib_logging.getLogger("nexus.api.main").info(
+            "experiment.ab_test_enabled", extra={"experiment_id": settings.experiment.experiment_id}
+        )
+
     stdlib_logging.captureWarnings(True)
 
     await init_redis()

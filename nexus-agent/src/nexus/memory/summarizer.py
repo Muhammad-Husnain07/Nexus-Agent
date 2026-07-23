@@ -60,6 +60,7 @@ class EpisodicSummarizer:
                 {"role": "user", "content": transcript},
             ],
             temperature=0.3,
+            stop=["###", "<|im_end|>"],
         )
 
         summary = (response.content or "").strip()

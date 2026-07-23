@@ -21,13 +21,18 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
 
+import time as time_module
+
 import structlog
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command
 
 from nexus.agent.graph import build_agent_graph
 from nexus.agent.state import AgentState
+from nexus.config.settings import get_settings
 from nexus.llm.client import LLMClient
+from nexus.observability.outcomes import InvocationOutcome, persist_outcome
+from nexus.observability.tracing import get_tracer
 from nexus.redis_client.client import get_redis_client
 from nexus.redis_client.pubsub import EventBus, agent_channel
 from nexus.tools.discovery import DynamicToolSelector
@@ -46,6 +51,8 @@ AGENT_EVENT_TYPES = frozenset(
         "intermediate_preview",
         "final_response",
         "error",
+        "reflection_result",
+        "self_consistency_result",
     }
 )
 
@@ -63,6 +70,38 @@ if redis.call('GET', KEYS[1]) == ARGV[1] then
 end
 return 0
 """
+
+
+# Module-level cache for available tools (avoids DB query per request)
+_tool_cache: list[dict[str, Any]] = []
+_tool_cache_ts: float = 0
+_TOOL_CACHE_TTL: int = 60
+
+
+def _get_cached_tools() -> list[dict[str, Any]]:
+    global _tool_cache, _tool_cache_ts
+    import time as _time
+    if _tool_cache and (_time.time() - _tool_cache_ts) < _TOOL_CACHE_TTL:
+        return _tool_cache
+    return []
+
+
+async def _refresh_tool_cache(
+    selector: DynamicToolSelector | None,
+    session_factory: Callable[[], Any] | None,
+) -> list[dict[str, Any]]:
+    global _tool_cache, _tool_cache_ts
+    import time as _time
+    if selector is not None and session_factory is not None:
+        try:
+            from nexus.tools.schemas import ToolList  # noqa: PLC0415
+            async with session_factory() as session:
+                tl: ToolList = await selector._registry.list(session, page_size=1000)
+                _tool_cache = [t.model_dump(mode="json") for t in tl.items]
+                _tool_cache_ts = _time.time()
+        except Exception:
+            logger.warning("runner.available_tools_prepopulate_failed")
+    return _tool_cache
 
 
 class AgentEvent:
@@ -199,14 +238,29 @@ class AgentRunner:
         except Exception:
             pass
 
+        # Tag first-ever user message as milestone (survives rolling window)
+        user_msg: dict[str, Any] = {"role": "user", "content": user_message}
+        is_first_turn = not prior_messages
+        if is_first_turn:
+            user_msg["_milestone"] = True
+
+        _settings = get_settings()
+
+        # Pre-populate available_tools (cache with 60s TTL — avoid DB query per request)
+        available_tools = _get_cached_tools()
+        if not available_tools and self._selector is not None and self._session_factory is not None:
+            available_tools = await _refresh_tool_cache(self._selector, self._session_factory)
+
         initial_state: AgentState = {
-            "messages": prior_messages + [{"role": "user", "content": user_message}],
+            "messages": prior_messages + [user_msg],
             "session_id": sid,
+            "_model": _settings.llm.default_model,
             "user_context": {},
             "plan": None,
             "current_step_index": 0,
             "gathered_requirements": prior_state.values.get("gathered_requirements", {}) if prior_state else {},
-            "available_tools": [],
+            "available_tools": available_tools,
+            "_tool_executed_in_turn": False,
             "pending_approval": None,
             "iteration_count": 0,
             "scratchpad": "",
@@ -224,6 +278,19 @@ class AgentRunner:
             "reflection_score": 0.0,
             "reflection_feedback": "",
             "reflection_count": 0,
+            "working_memory": {"entries": []},
+            "reflection_history": [],
+            "task_difficulty": None,
+            "total_cost_usd": 0.0,
+            "_cost_breakdown": {},
+            "_total_tokens": 0,
+            "_prompt_versions": {},
+            "self_consistency_samples": None,
+            "calibration_data": {},
+            "_max_concurrent_tasks": None,
+            "_active_speculations": None,
+            "_pending_splits": [],
+            "_dag_generation": 0,
             "dag_tasks": [],
             "dag_results": {},
             "dag_phase": "",
@@ -237,9 +304,7 @@ class AgentRunner:
         heartbeat_task: asyncio.Task[None] | None = None
 
         if redis is not None:
-            from nexus.config.settings import get_settings  # noqa: PLC0415
-
-            ttl = get_settings().agent.run_lock_ttl_s
+            ttl = _settings.agent.run_lock_ttl_s
             lock_token, lock_acquired = await self._try_acquire_lock(redis, lock_key, ttl)
             if not lock_acquired:
                 error_event = AgentEvent(
@@ -252,10 +317,21 @@ class AgentRunner:
                 self._renew_lock(redis, lock_key, lock_token, ttl)
             )
 
+        _tracer = get_tracer()
+        _start_ts = time_module.perf_counter()
+        _last_state: dict[str, Any] = {}
+        _error_msg: str | None = None
+
+        span = _tracer.start_span("agent.invoke")
+        span.set_attribute("session_id", sid)
+        span.set_attribute("model", initial_state.get("_model", ""))
+
         try:
             async for event in graph.astream(initial_state, run_config, stream_mode="updates"):
                 node_name: str = next(iter(event))
                 state_update: dict[str, Any] = event[node_name]
+                _last_state.update(state_update)
+
                 agent_events = self._translate(node_name, state_update)
                 for agent_event in agent_events:
                     if self._event_bus:
@@ -264,15 +340,28 @@ class AgentRunner:
                             agent_event.to_dict(),
                         )
                     yield agent_event
+
         except asyncio.CancelledError:
             logger.info("agent.run.cancelled", session_id=sid)
         except Exception as exc:
+            _error_msg = str(exc)
             logger.error("agent.run.failed", exc_info=exc)
-            error_event = AgentEvent("error", {"message": str(exc)})
+            error_event = AgentEvent("error", {"message": _error_msg})
             if self._event_bus:
                 await self._event_bus.publish(agent_channel(sid), error_event.to_dict())
             yield error_event
         finally:
+            span.end()
+            # Persist outcome record (fire-and-forget)
+            latency = int((time_module.perf_counter() - _start_ts) * 1000)
+            try:
+                outcome = InvocationOutcome.from_state(
+                    _last_state, latency, error_message=_error_msg
+                )
+                # Fire and forget
+                asyncio.ensure_future(persist_outcome(outcome))
+            except Exception:
+                pass
             if heartbeat_task is not None:
                 heartbeat_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -316,8 +405,6 @@ class AgentRunner:
         heartbeat_task: asyncio.Task[None] | None = None
 
         if redis is not None:
-            from nexus.config.settings import get_settings  # noqa: PLC0415
-
             ttl = get_settings().agent.run_lock_ttl_s
             lock_token, lock_acquired = await self._try_acquire_lock(redis, lock_key, ttl)
             if not lock_acquired:
@@ -413,6 +500,14 @@ class AgentRunner:
                 event_type = "clarification_needed" if inner_name == "review_plan" else "interrupt"
                 events.append(AgentEvent(event_type, {"question": fr, "source": inner_name}))
 
+        elif inner_name == "self_consistency":
+            samples = state_update.get("self_consistency_samples")
+            if samples:
+                events.append(AgentEvent("self_consistency_result", {"samples": samples}))
+            final = state_update.get("final_response")
+            if final:
+                events.append(AgentEvent("clarification_needed", {"question": final}))
+
         elif inner_name == "gather_requirements":
             final = state_update.get("final_response")
             if final:
@@ -428,6 +523,13 @@ class AgentRunner:
             plan = state_update.get("plan")
             if plan:
                 events.append(AgentEvent("plan_created", {"steps": plan}))
+
+        elif inner_name == "dag_splitter":
+            # Emit splitter event when new tasks are dynamically created
+            new_tasks = state_update.get("_routing_decision")
+            if new_tasks == "split":
+                dag_gen = state_update.get("_dag_generation", 0)
+                events.append(AgentEvent("plan_created", {"steps": state_update.get("dag_tasks", []), "generation": dag_gen}))
 
         elif inner_name == "tool_executor":
             # Emit tool_call_completed for each new tool result
