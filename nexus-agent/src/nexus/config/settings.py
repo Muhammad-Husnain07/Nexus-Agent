@@ -341,7 +341,7 @@ class AgentSettings(BaseModel):
 
 
 class ToolSettings(BaseModel):
-    """Tool execution, affinity, performance, and error recovery configuration.
+    """Tool execution, performance, and error recovery configuration.
 
     Fields:
         execution_timeout_s: Max execution time per tool call in seconds.
@@ -349,7 +349,6 @@ class ToolSettings(BaseModel):
         retry_backoff_s: Base backoff in seconds between retries.
         sandbox_enabled: Enable sandboxed tool execution.
         allowed_hosts: List of allowed external hosts for tool HTTP calls.
-        affinity_window_size: Co-occurrence window for affinity graph.
         performance_weight: Weight of performance vs relevance in tool ranking (0-1).
         performance_window_minutes: Sliding window for performance metrics.
         degradation_error_rate: Error rate threshold for degradation detection.
@@ -369,9 +368,6 @@ class ToolSettings(BaseModel):
         default=None, description="HTTP proxy URL for tool calls (e.g. http://proxy:8080)"
     )
     http2_enabled: bool = Field(default=True, description="Enable HTTP/2 for tool calls")
-
-    # Tool affinity graph
-    affinity_window_size: int = Field(default=5, ge=1, le=20, description="Co-occurrence window for affinity")
 
     # Performance-aware selection
     performance_weight: float = Field(default=0.4, ge=0, le=1, description="Performance vs relevance weight")

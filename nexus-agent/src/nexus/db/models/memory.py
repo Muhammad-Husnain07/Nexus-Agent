@@ -1,4 +1,4 @@
-"""Memory model for episodic, semantic, procedural, and preference storage."""
+"""Memory model for episodic, semantic, and procedural storage."""
 
 from __future__ import annotations
 
@@ -27,11 +27,11 @@ class Memory(Base):
     kind: Mapped[str] = mapped_column(
         String(50),
         nullable=False,
-        comment="Memory kind: episodic | semantic | procedural | preference",
+        comment="Memory kind: episodic | semantic | procedural",
     )
     content: Mapped[str] = mapped_column(Text, nullable=False, comment="Memory content text")
     embedding: Mapped[list[float] | None] = mapped_column(
-        VECTOR(768), nullable=True, comment="Vector embedding for semantic search"
+        VECTOR(4096), nullable=True, comment="Vector embedding for semantic search"
     )
     metadata_: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, default=dict, comment="Arbitrary memory metadata"

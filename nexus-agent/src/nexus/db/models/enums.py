@@ -54,4 +54,3 @@ class MemoryKind(enum.Enum):
     EPISODIC = "episodic"
     SEMANTIC = "semantic"
     PROCEDURAL = "procedural"
-    PREFERENCE = "preference"

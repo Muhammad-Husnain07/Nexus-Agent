@@ -16,6 +16,20 @@ logger = structlog.get_logger("nexus.api.memory")
 
 router = APIRouter(prefix="/memory", tags=["memory"])
 
+# Map canonical kind values to legacy kinds still in the DB
+KIND_LEGACY_MAP: dict[str, list[str]] = {
+    "episodic": [],
+    "semantic": ["fact", "preference"],
+    "procedural": ["procedure", "decision"],
+}
+
+
+def _expand_kind(kind: str) -> list[str]:
+    """Expand canonical kind to include legacy DB values."""
+    kinds = [kind]
+    kinds.extend(KIND_LEGACY_MAP.get(kind, []))
+    return kinds
+
 
 @router.get("")
 async def list_memories(
@@ -25,30 +39,28 @@ async def list_memories(
     page_size: int = Query(20, ge=1, le=100),
 ) -> list[dict[str, Any]]:
     """List/search memories."""
-    async with async_session() as session:
-        if q:
-            from sqlalchemy import text
+    from sqlalchemy import text
 
-            sql = text(
-                "SELECT id, session_id, kind, content, metadata_, importance, "
-                "created_at, last_accessed_at "
-                "FROM memory "
-                + (" WHERE kind = :kind" if kind else "")
-                + " ORDER BY last_accessed_at DESC NULLS LAST "
-                "LIMIT :limit OFFSET :offset"
-            )
-            params: dict[str, Any] = {"limit": page_size, "offset": (page - 1) * page_size}
-            if kind:
-                params["kind"] = kind
-            result = await session.execute(sql, params)
-            rows = result.fetchall()
-        else:
-            repo = GenericRepository(session, Memory)
-            if kind:
-                memories = await repo.find(kind=kind)
-            else:
-                memories = await repo.find()
-            rows = memories
+    kind_list = _expand_kind(kind) if kind else None
+    async with async_session() as session:
+        where_clause = ""
+        params: dict[str, Any] = {"limit": page_size, "offset": (page - 1) * page_size}
+        if kind_list:
+            placeholders = ", ".join(f":k{i}" for i in range(len(kind_list)))
+            where_clause = f" WHERE kind IN ({placeholders})"
+            for i, k in enumerate(kind_list):
+                params[f"k{i}"] = k
+
+        sql = text(
+            "SELECT id, session_id, kind, content, metadata_, importance, "
+            "created_at, last_accessed_at "
+            "FROM memory"
+            + where_clause
+            + " ORDER BY last_accessed_at DESC NULLS LAST "
+            "LIMIT :limit OFFSET :offset"
+        )
+        result = await session.execute(sql, params)
+        rows = result.fetchall()
 
         return [_memory_to_dict(m) for m in rows]
 
@@ -81,14 +93,23 @@ async def delete_memory(
         await session.commit()
 
 
+_REVERSE_KIND_MAP: dict[str, str] = {}
+for canonical, legacy in KIND_LEGACY_MAP.items():
+    for lk in legacy:
+        _REVERSE_KIND_MAP[lk] = canonical
+
+
+def _normalize_kind(kind: str) -> str:
+    """Map legacy kind values to canonical ones."""
+    return _REVERSE_KIND_MAP.get(kind, kind)
+
+
 def _memory_to_dict(mem: Any) -> dict[str, Any]:
-    if hasattr(mem, "_mapping"):
-        mem = mem._mapping
     if isinstance(mem, Memory):
         return {
             "id": str(mem.id),
             "session_id": str(mem.session_id) if mem.session_id else None,
-            "kind": mem.kind,
+            "kind": _normalize_kind(mem.kind),
             "content": mem.content,
             "metadata_": mem.metadata_,
             "importance": mem.importance,
@@ -97,12 +118,12 @@ def _memory_to_dict(mem: Any) -> dict[str, Any]:
         }
     # Row from raw SQL query
     return {
-        "id": str(mem[0]),
-        "session_id": str(mem[1]) if mem[1] else None,
-        "kind": mem[2],
-        "content": mem[3],
-        "metadata_": mem[4],
-        "importance": mem[5],
-        "created_at": mem[6].isoformat() if mem[6] else None,
-        "last_accessed_at": mem[7].isoformat() if mem[7] else None,
+        "id": str(mem.id),
+        "session_id": str(mem.session_id) if mem.session_id else None,
+        "kind": _normalize_kind(mem.kind),
+        "content": mem.content,
+        "metadata_": mem.metadata_,
+        "importance": mem.importance,
+        "created_at": mem.created_at.isoformat() if mem.created_at else None,
+        "last_accessed_at": mem.last_accessed_at.isoformat() if mem.last_accessed_at else None,
     }

@@ -197,7 +197,7 @@ async def finalize(
                 for entry in high_imp:
                     await manager._dedup_and_store(
                         session_id=state.get("session_id", ""),
-                        kind="preference" if "preference" in entry.get("key", "") else "semantic",
+                        kind="semantic",
                         content=f"{entry['key']}: {entry['content']}",
                         importance=entry.get("importance", 0.7),
                     )

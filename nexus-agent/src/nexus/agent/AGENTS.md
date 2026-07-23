@@ -60,7 +60,7 @@ This module owns the LangGraph StateGraph that implements a hybrid DAG-based Pla
 | **10** | **Tool cache with 60s TTL** | `runner.py:78-86` | Caches all tool definitions from DB, refreshes every 60s instead of per-request | **+100-500ms** per request from DB query. No impact on accuracy. |
 | **11** | **Embedding text hash cache** | `registry.py:419-428** | Caches embedding vectors by text hash in Redis (TTL 1h) | **+200-1000ms** per cache-miss query. Duplicate queries re-compute embeddings. |
 | **12** | **Skip LLM rerank at high confidence** | `discovery.py:53-59** | Skips LLM rerank when top-1 cosine similarity > 0.9 | **+500-2000ms** when top result is already correct. Unnecessary LLM call. |
-| **13** | **Affinity graph multi-tool tracking** | `tool_executor.py:350-358** | Records all DAG task names for co-occurrence learning | **Tool affinity graph learns nothing**. Can't recommend get_geocoding before get_weather. |
+| **13** | **Affinity graph multi-tool tracking** | *(removed)* | Dead code — `affinity.py` deleted, `_record_tool_affinity` removed. | N/A — previously learned nothing. |
 | **14** | **Dynamic prompt depth** | `understand_intent.py:110-118** | Uses short prompt for simple queries, full thinking protocol for complex ones | **Simple queries get slower** (full thinking protocol always used). Complex queries stay correct. |
 | **15** | **DB connection cleanup (async with)** | `runner.py:225`, `discover_tools.py:48`, `tool_executor.py:388` | Wraps DB sessions in `async with` context managers | **Connection pool exhaustion** after 6 concurrent requests. "QueuePool limit exceeded" errors. |
 

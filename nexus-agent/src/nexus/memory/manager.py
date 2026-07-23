@@ -26,13 +26,13 @@ You are a memory extraction system. Review the agent run transcript below and
 extract salient information that should be remembered for future interactions.
 
 For each memory, identify:
-- **kind**: one of "preference", "fact", "decision", or "procedure"
+- **kind**: one of "semantic" (general facts), "episodic" (event summaries), or "procedural" (step-by-step how-to)
 - **content**: 1-2 sentence description of what to remember
 - **importance**: 0.0-1.0 score (1.0 = critical, 0.3 = minor detail)
 
 Return a JSON list:
 [
-  {"kind": "preference|fact|decision|procedure", "content": "...", "importance": 0.0},
+  {"kind": "semantic|episodic|procedural", "content": "...", "importance": 0.0},
   ...
 ]
 
@@ -144,7 +144,7 @@ class MemoryManager:
                 top_k=1,
             )
             sim = self._memory_settings.similarity_threshold
-            if similar and similar[0].get("similarity", 0) >= sim:
+            if similar and (similar[0].get("similarity") or 0) >= sim:
                 existing_id = uuid.UUID(similar[0]["id"])
                 logger.info("memory.dedup_merged", existing_id=str(existing_id), kind=kind)
                 await self._store.put(
@@ -271,11 +271,11 @@ class MemoryManager:
                 lines.append(f"Context: {content}")
                 lines.append("")
 
-            elif kind in ("preference", "fact", "semantic"):
+            elif kind == "semantic":
                 lines.append(f"- Known: {content}")
                 lines.append("")
 
-            elif kind in ("decision", "procedure"):
+            elif kind == "procedural":
                 lines.append(f"- Rule: {content}")
                 lines.append("")
 

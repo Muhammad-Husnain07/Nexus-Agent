@@ -7,16 +7,16 @@ import { useMemories, useDeleteMemory } from "@/hooks/use-memory"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { formatDate } from "@/lib/utils"
-
-const tabs = ["episodic", "semantic", "procedural"]
+import type { Memory, MemoryKind } from "@/types/memory"
+import { MEMORY_KINDS } from "@/types/memory"
 
 export default function MemoryPage() {
-  const [tab, setTab] = useState("episodic")
+  const [tab, setTab] = useState<MemoryKind>("episodic")
   const [search, setSearch] = useState("")
   const { data: memories, isLoading, refetch } = useMemories(search ? { q: search, kind: tab } : { kind: tab })
   const deleteMemory = useDeleteMemory()
 
-  const list = Array.isArray(memories) ? memories : []
+  const list: Memory[] = Array.isArray(memories) ? memories : []
 
   const handleDelete = (id: string) => {
     deleteMemory.mutate(id, {
@@ -33,10 +33,10 @@ export default function MemoryPage() {
       </div>
 
       <div className="flex gap-1 bg-muted rounded-lg p-1 w-fit">
-        {tabs.map((t) => (
-          <button key={t} onClick={() => setTab(t)}
-            className={cn("px-4 py-1.5 text-sm rounded-md transition-colors capitalize", tab === t ? "bg-background shadow-sm font-medium" : "text-muted-foreground hover:text-foreground")}>
-            {t}
+        {MEMORY_KINDS.map(({ value, label }) => (
+          <button key={value} onClick={() => setTab(value)}
+            className={cn("px-4 py-1.5 text-sm rounded-md transition-colors", tab === value ? "bg-background shadow-sm font-medium" : "text-muted-foreground hover:text-foreground")}>
+            {label}
           </button>
         ))}
       </div>
@@ -57,12 +57,13 @@ export default function MemoryPage() {
             </div>
           ) : (
             <div className="divide-y">
-              {list.map((m: any) => (
+              {list.map((m) => (
                 <div key={m.id} className="px-6 py-4">
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex-1 min-w-0">
                       <p className="text-sm">{m.content}</p>
                       <div className="flex items-center gap-3 mt-1">
+                        <span className="text-xs font-medium text-primary capitalize">{m.kind}</span>
                         <span className="text-xs text-muted-foreground">Importance: {(m.importance ?? 0).toFixed(2)}</span>
                         <span className="text-xs text-muted-foreground">{formatDate(m.created_at)}</span>
                         {m.session_id && <span className="text-xs text-muted-foreground truncate">Session: {m.session_id.slice(0, 8)}...</span>}

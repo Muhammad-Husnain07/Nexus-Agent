@@ -347,26 +347,6 @@ def _tool_to_read(tool_dict: dict[str, Any]) -> ToolRead:
     )
 
 
-def _record_tool_affinity(
-    result: dict[str, Any],
-    all_task_names: list[str] | None = None,
-) -> None:
-    """Record tool execution in the affinity graph (fire-and-forget).
-
-    When multiple tasks run in the same DAG, passing all task names lets
-    the affinity graph learn co-occurrence patterns (e.g., get_geocoding
-    before get_weather).
-    """
-    try:
-        from nexus.tools.affinity import affinity_graph  # noqa: PLC0415
-        tool_name = result.get("tool_name")
-        if tool_name and result.get("status") == "success":
-            names = all_task_names or [tool_name]
-            affinity_graph.record_execution(names, success=True)
-    except Exception:
-        pass
-
-
 async def tool_executor(
     state: dict[str, Any],
     session_factory: Callable[[], Any] | None = None,
@@ -389,12 +369,10 @@ async def tool_executor(
     gathered: dict[str, Any] = state.get("gathered_requirements", {})
     task_id: str = task.get("id", "unknown")
 
-    # Collect all DAG task names for affinity tracking
-    dag_task_names = [t.get("tool_name") for t in state.get("dag_tasks", []) if t.get("tool_name")]
     if session_factory:
         async with session_factory() as session:
-            return await _execute_task(session, task, available_tools, dag_results, gathered, task_id, all_task_names=dag_task_names)
-    return await _execute_task(None, task, available_tools, dag_results, gathered, task_id, all_task_names=dag_task_names)
+            return await _execute_task(session, task, available_tools, dag_results, gathered, task_id)
+    return await _execute_task(None, task, available_tools, dag_results, gathered, task_id)
 
 
 async def _execute_task(
@@ -404,7 +382,6 @@ async def _execute_task(
     dag_results: dict[str, Any],
     gathered: dict[str, Any],
     task_id: str,
-    all_task_names: list[str] | None = None,
 ) -> dict[str, Any]:
     """Execute a single DAG task — extracted for proper session management."""
     approaches: list[dict[str, Any]] = task.get("approaches", [])
@@ -417,7 +394,6 @@ async def _execute_task(
             timeout=adapt.speculative_timeout_s,
             session=session,
         )
-        _record_tool_affinity(result, all_task_names)
         return {
             "tool_results": [result],
             "dag_results": {task_id: result.get("data")},
@@ -436,7 +412,6 @@ async def _execute_task(
     else:
         result = {"tool_name": None, "status": "success", "data": None, "error": None, "task_id": task_id}
 
-    _record_tool_affinity(result, all_task_names)
     return {
         "tool_results": [result],
         "dag_results": {task_id: result.get("data")},

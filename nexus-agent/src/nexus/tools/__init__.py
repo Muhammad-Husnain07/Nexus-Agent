@@ -1,6 +1,5 @@
 """Tool registry, discovery, executor, MCP, and API."""
 
-from nexus.tools.affinity import ToolAffinityGraph, affinity_graph
 from nexus.tools.api import router as tools_router
 from nexus.tools.approval_gate import ApprovalRequiredInterrupt, check_approval_required
 from nexus.tools.discovery import DynamicToolSelector
@@ -27,8 +26,6 @@ __all__ = [
     "PerformanceTracker",
     "SemanticErrorClassifier",
     "SemanticRetryHandler",
-    "ToolAffinityGraph",
-    "affinity_graph",
     "check_approval_required",
     "DynamicToolSelector",
     "EMBEDDING_MODEL",

@@ -16,7 +16,7 @@ from nexus.db.repositories.base import GenericRepository
 
 logger = structlog.get_logger("nexus.memory.store")
 
-MemoryKind = Literal["episodic", "semantic", "procedural", "preference"]
+MemoryKind = Literal["episodic", "semantic", "procedural"]
 
 
 class MemoryStore:
@@ -97,7 +97,7 @@ class MemoryStore:
         sql = "SELECT id, session_id, kind, content, metadata_, importance, "
         sql += "created_at, last_accessed_at, "
         sql += f"1 - (embedding <=> '{vec_literal}'::vector) AS similarity "
-        sql += "FROM memory WHERE 1=1 "
+        sql += "FROM memory WHERE embedding IS NOT NULL "
         params: dict[str, Any] = {}
 
         if kind:

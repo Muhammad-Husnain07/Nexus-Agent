@@ -68,7 +68,7 @@ class Tool(Base):
         Integer, nullable=True, default=None, comment="Max requests per minute (null = unlimited)"
     )
     embedding: Mapped[list[float] | None] = mapped_column(
-        VECTOR(768), nullable=True, comment="Semantic embedding for discovery"
+        VECTOR(4096), nullable=True, comment="Semantic embedding for discovery"
     )
     version: Mapped[int] = mapped_column(Integer, default=1, comment="Tool definition version")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

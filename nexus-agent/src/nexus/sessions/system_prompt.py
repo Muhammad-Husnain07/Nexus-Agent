@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import uuid
 from datetime import UTC, datetime
 from typing import Any
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nexus.db.models.memory import Memory as MemoryModel
-from nexus.db.repositories import GenericRepository
 from nexus.llm.client import LLMClient
 
 logger = structlog.get_logger("nexus.sessions.system_prompt")
@@ -69,14 +66,3 @@ class SystemPromptBuilder:
         parts.append(_OUTPUT_GUIDELINES)
 
         return "\n\n".join(parts)
-
-    async def _load_preferences(
-        self,
-        session_db: AsyncSession,
-    ) -> str | None:
-        """Load user preference memory entries and format as text."""
-        repo = GenericRepository(session_db, MemoryModel)
-        memories = await repo.find(kind="preference")
-        if not memories:
-            return None
-        return "; ".join(m.content for m in memories)
