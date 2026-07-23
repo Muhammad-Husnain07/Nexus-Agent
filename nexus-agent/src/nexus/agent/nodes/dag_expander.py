@@ -139,27 +139,27 @@ async def dag_expander(
             )
 
             response = await llm.complete(
-            model=model,
-            messages=[
-                _openai_message("system", system_prompt),
-                _openai_message("user", user_context),
-            ],
-            temperature=0,
-            max_tokens=4096,
-            response_format={"type": "json_object"},
-        )
+                model=model,
+                messages=[
+                    _openai_message("system", system_prompt),
+                    _openai_message("user", user_context),
+                ],
+                temperature=0,
+                max_tokens=4096,
+                response_format={"type": "json_object"},
+            )
 
-        content = _json_extractor.extract(response.content or "")
+            content = _json_extractor.extract(response.content or "")
 
-        try:
-            parsed: dict[str, Any] = json.loads(content)
-            tasks: list[dict[str, Any]] = parsed.get("tasks", [])
-            if not tasks:
-                raise ValueError("No tasks in plan")
-            await _set_cached_plan(intent_key, tasks)
-        except (json.JSONDecodeError, ValueError) as exc:
-            logger.warning("dag_expander.parse_failed", error=str(exc), content=content[:200])
-            tasks = _fallback_plan(intent, gathered)
+            try:
+                parsed: dict[str, Any] = json.loads(content)
+                tasks: list[dict[str, Any]] = parsed.get("tasks", [])
+                if not tasks:
+                    raise ValueError("No tasks in plan")
+                await _set_cached_plan(intent_key, tasks)
+            except (json.JSONDecodeError, ValueError) as exc:
+                logger.warning("dag_expander.parse_failed", error=str(exc), content=content[:200])
+                tasks = _fallback_plan(intent, gathered)
 
     _span_dag = get_tracer().start_span("agent.dag_expand")
     _span_dag.set_attribute("dag.task_count", len(tasks))
@@ -170,6 +170,7 @@ async def dag_expander(
         "dag_tasks": tasks,
         "dag_results": {},
         "dag_phase": "expanding",
+        "dag_iteration": state.get("dag_iteration", 0) + 1,
         "plan": [
             {
                 "id": t["id"],
@@ -234,7 +235,20 @@ def route_dag(state: AgentState) -> list[Send] | str:
     ``tool_executor``.  Respects ``_max_concurrent_tasks`` bound.
 
     When no tasks remain, routes to ``finalize``.
+    Aborts with ``ask`` if plan validation failed.
     """
+    # Check plan validity (set by plan_validator node)
+    if state.get("_plan_valid") is False:
+        logger.warning("dag_expander.route_dag_aborted_invalid_plan")
+        return "ask"
+
+    # Enforce hard loop bound
+    iter_count: int = state.get("dag_iteration", 0)
+    max_iter: int = state.get("max_dag_iterations", 0) or get_settings().agent.max_sub_iterations
+    if iter_count >= max_iter:
+        logger.warning("dag_expander.max_iterations_reached", current=iter_count, max=max_iter)
+        return "finalize"
+
     tasks: list[dict[str, Any]] = state.get("dag_tasks", [])
     results: dict[str, Any] = state.get("dag_results", {})
 

@@ -188,3 +188,11 @@ class AgentState(TypedDict):
     dag_phase: str
     _routing_decision: str
     _tool_executed_in_turn: Annotated[bool, _any_true]
+    _safety_result: dict[str, Any]
+    _plan_valid: bool
+    _plan_validation_failures: list[dict[str, Any]]
+    _invalid_results: list[dict[str, Any]]
+    dag_iteration: int
+    max_dag_iterations: int
+    reflection_revisions: int
+    max_reflection_revisions: int

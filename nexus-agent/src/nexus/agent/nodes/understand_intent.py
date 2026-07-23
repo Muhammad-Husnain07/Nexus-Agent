@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any
@@ -152,17 +153,19 @@ async def understand_intent(
         )
 
     # Inject relevant long-term memories via MemoryScout (proactive, multi-trigger)
+    _memory_ctx: str = ""
     try:
         from nexus.memory.scout import MemoryScout  # noqa: PLC0415
         _scout = MemoryScout(llm=llm)
-        _memory_ctx = await _scout.scout(
-            trigger="intent",
-            context={"intent": intent_text, "query": last_user},
-        )
-        if _memory_ctx:
-            system_prompt = _memory_ctx + "\n\n" + system_prompt
+        # Skip scout for greetings to save cost (no memory needed)
+        if state.get("response_type") not in ("greeting", "meta"):
+            _memory_ctx = await _scout.scout(
+                trigger="intent", context={"intent": intent_text, "query": last_user}
+            ) or ""
     except Exception:
-        logger.warning("memory.injection_failed", exc_info=True)
+        pass
+    if _memory_ctx:
+        system_prompt = _memory_ctx + "\n\n" + system_prompt
 
     # Inject working memory context
     try:

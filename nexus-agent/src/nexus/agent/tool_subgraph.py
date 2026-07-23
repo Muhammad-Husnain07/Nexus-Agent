@@ -21,6 +21,8 @@ from langgraph.graph import END, StateGraph
 from nexus.agent.nodes import dag_expander as _dag_expander_fn
 from nexus.agent.nodes import dag_splitter as _dag_splitter_fn
 from nexus.agent.nodes import discover_tools as _discover_tools_fn
+from nexus.agent.nodes import plan_validator as _plan_validator_fn
+from nexus.agent.nodes import result_validator as _result_validator_fn
 from nexus.agent.nodes import route_dag as _route_dag_fn
 from nexus.agent.nodes import tool_executor as _tool_exec_fn
 from nexus.agent.state import AgentState
@@ -61,7 +63,9 @@ def build_tool_subgraph(
     # Add nodes
     builder.add_node("discover_tools", _node(_discover_tools_fn, tool_selector, session_factory))
     builder.add_node("dag_expander", _node(_dag_expander_fn, llm_client, model))
+    builder.add_node("plan_validator", _node(_plan_validator_fn))
     builder.add_node("tool_executor", _node(_tool_exec_fn, session_factory))
+    builder.add_node("result_validator", _node(_result_validator_fn))
     builder.add_node("dag_splitter", _node(_dag_splitter_fn, llm_client, model))
 
     builder.set_entry_point("discover_tools")
@@ -69,19 +73,28 @@ def build_tool_subgraph(
     # Discover tools → then expand DAG
     builder.add_edge("discover_tools", "dag_expander")
 
-    # After dag_expander, route_dag fans out via Send or routes to exit
+    # After dag_expander, validate plan before execution
+    builder.add_edge("dag_expander", "plan_validator")
+
+    # After validation, route_dag fans out via Send() to tool_executor
+    # Route: plan_validator → route_dag → Send(tool_executor) or → END
+    # This reuses route_dag's Send() logic which reads dag_tasks/dag_results
+    # and creates parallel fan-outs.
     builder.add_conditional_edges(
-        "dag_expander",
+        "plan_validator",
         _route_dag_fn,
         {
             "tool_executor": "tool_executor",
-            "finalize": "dag_splitter",  # route through splitter before exiting
+            "finalize": "dag_splitter",
             "ask": END,
         },
     )
 
-    # After tool_executor (parallel), route through dag_splitter
-    builder.add_edge("tool_executor", "dag_splitter")
+    # After tool_executor (parallel), validate results
+    builder.add_edge("tool_executor", "result_validator")
+
+    # Then route through dag_splitter
+    builder.add_edge("result_validator", "dag_splitter")
 
     # After dag_splitter, either loop back to dag_expander (if split) or exit
     def route_after_splitter(state: AgentState) -> str:

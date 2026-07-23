@@ -40,6 +40,9 @@ from nexus.agent.nodes.respond_without_tool import respond_without_tool
 from nexus.agent.nodes.review_final_answer import review_final_answer
 from nexus.agent.nodes.review_plan import review_plan
 from nexus.agent.nodes.select_and_bind_tools import select_and_bind_tools
+from nexus.agent.nodes.plan_validator import plan_validator
+from nexus.agent.nodes.result_validator import result_validator
+from nexus.agent.nodes.safety_check import safety_and_policy_check
 from nexus.agent.nodes.tool_executor import tool_executor
 from nexus.agent.nodes.understand_intent import understand_intent
 
@@ -55,6 +58,9 @@ __all__ = [
     "dag_expander",
     "dag_splitter",
     "route_dag",
+    "plan_validator",
+    "result_validator",
+    "safety_and_policy_check",
     "reflect_on_response",
     "respond_without_tool",
     "review_final_answer",

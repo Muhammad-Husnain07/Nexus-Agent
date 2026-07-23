@@ -27,9 +27,11 @@ from nexus.agent.nodes import (
     reflect_on_response,
     respond_without_tool,
     review_final_answer,
+    safety_and_policy_check,
     self_consistency,
     understand_intent,
 )
+import structlog
 from nexus.agent.state import AgentState
 from nexus.agent.tool_subgraph import build_tool_subgraph
 from nexus.config.settings import get_settings
@@ -38,6 +40,8 @@ from nexus.redis_client.pubsub import EventBus
 
 from nexus.tools.discovery import DynamicToolSelector
 from nexus.tools.executor import ToolExecutor
+
+logger = structlog.get_logger("nexus.agent.graph")
 
 # ---------------------------------------------------------------------------
 # Routing
@@ -71,6 +75,11 @@ def route_after_understand(state: AgentState) -> str:
 
 def route_after_reflection(state: AgentState) -> str:
     """Route based on reflection decision or max rounds reached."""
+    # Enforce hard bound on reflection revisions
+    revisions: int = state.get("reflection_revisions", 0)
+    max_revisions: int = state.get("max_reflection_revisions", 0) or get_settings().agent.max_reflection_rounds
+    if revisions >= max_revisions:
+        return "finalize"
     decision: str = state.get("_routing_decision", "finalize")
     if decision == "clarify":
         return "clarify"
@@ -134,6 +143,7 @@ def build_agent_graph(  # noqa: PLR0913
     )
     graph.add_node("tool_subgraph", tool_subgraph)
 
+    graph.add_node("safety_and_policy_check", _node(safety_and_policy_check))
     graph.add_node("understand_intent", _node(understand_intent, _llm, _model))
     graph.add_node("self_consistency", _node(self_consistency, _llm, _model))
     graph.add_node("respond_without_tool", _node(respond_without_tool, _llm, _model))
@@ -142,7 +152,25 @@ def build_agent_graph(  # noqa: PLR0913
     graph.add_node("review_final_answer", _node(review_final_answer))
     graph.add_node("reflect_on_response", _node(reflect_on_response, _llm, _model))
 
-    graph.set_entry_point("understand_intent")
+    graph.set_entry_point("safety_and_policy_check")
+
+    # Safety check → reject or proceed to understand_intent
+    def route_after_safety(state: AgentState) -> str:
+        result = state.get("_safety_result", {})
+        action = result.get("action", "")
+        if action == "reject":
+            logger.warning("graph.safety_rejected", reason=result.get("reason", ""))
+            return "rejected"
+        return "understand_intent"
+
+    graph.add_conditional_edges(
+        "safety_and_policy_check",
+        route_after_safety,
+        {
+            "understand_intent": "understand_intent",
+            "rejected": "finalize",
+        },
+    )
 
     graph.add_conditional_edges(
         "understand_intent",

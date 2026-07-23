@@ -188,19 +188,6 @@ async def finalize(
             turn_id=state.get("iteration_count", 0),
         )
         working_memory_update = wm.to_dict()
-
-        # Promote high-importance working memory entries to LTM
-        if session_factory and state.get("response_type") == "tool":
-            high_imp = wm.high_importance_entries(threshold=0.7)
-            if high_imp:
-                manager = MemoryManager(store=MemoryStore(), llm=llm)
-                for entry in high_imp:
-                    await manager._dedup_and_store(
-                        session_id=state.get("session_id", ""),
-                        kind="semantic",
-                        content=f"{entry['key']}: {entry['content']}",
-                        importance=entry.get("importance", 0.7),
-                    )
     except Exception:
         working_memory_update = state.get("working_memory", {"entries": []})
 

@@ -330,6 +330,7 @@ async def reflect_on_response(
         "reflection_score": score,
         "reflection_feedback": feedback,
         "reflection_count": reflection_count + 1,
+        "reflection_revisions": state.get("reflection_revisions", 0) + 1,
         "reflection_history": [new_round],
         "working_memory": wm_update,
         "_routing_decision": "revise_finalize",

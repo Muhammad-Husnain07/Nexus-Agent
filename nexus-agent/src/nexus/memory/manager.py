@@ -71,11 +71,15 @@ class MemoryManager:
 
         stored_ids: list[str] = []
         for mem in memories_raw:
+            composite_imp = self._composite_importance(
+                llm_score=mem.get("importance", 0.5),
+                agent_state=agent_state,
+            )
             mid = await self._dedup_and_store(
                 session_id=session_id,
                 kind=mem["kind"],
                 content=mem["content"],
-                importance=min(1.0, max(0.0, mem.get("importance", 0.5))),
+                importance=composite_imp,
             )
             if mid:
                 stored_ids.append(mid)
@@ -374,3 +378,33 @@ class MemoryManager:
             parts.append(f"Errors: {'; '.join(errors[-3:])}")
 
         return "\n".join(parts)
+
+    @staticmethod
+    def _composite_importance(llm_score: float, agent_state: dict[str, Any] | None = None) -> float:
+        """Combine LLM-assigned importance with contextual signals.
+
+        Factors:
+        - LLM score (40%): the model's own assessment
+        - User explicit (30%): 1.0 if user said 'remember this' or similar
+        - Task relevant (30%): 1.0 if a tool was executed, 0.5 otherwise
+        """
+        if not agent_state:
+            return min(1.0, max(0.0, llm_score))
+
+        messages = agent_state.get("messages", [])
+        last_user = ""
+        for m in reversed(messages):
+            if isinstance(m, dict) and m.get("role") == "user":
+                last_user = str(m.get("content", ""))
+                break
+
+        user_explicit = 1.0 if any(
+            phrase in last_user.lower()
+            for phrase in ["remember this", "remember that", "don't forget", "keep this", "save this"]
+        ) else 0.0
+
+        tool_executed = bool(agent_state.get("_tool_executed_in_turn"))
+        task_relevant = 1.0 if tool_executed else 0.5
+
+        composite = 0.4 * llm_score + 0.3 * user_explicit + 0.3 * task_relevant
+        return min(1.0, max(0.0, composite))
