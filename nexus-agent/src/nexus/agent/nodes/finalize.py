@@ -72,9 +72,15 @@ async def finalize(
 
     # If a final_response was already composed by a prior node (e.g.
     # respond_without_tool), use it directly — skip recomposition.
+    # Don't return messages — prior node already appended them via reducer.
     existing_final: str | None = state.get("final_response")
     if existing_final and (state.get("response_type") in ("greeting", "meta") or not tool_executed):
-        final = existing_final
+        return {
+            "messages": [],
+            "final_response": existing_final,
+            "working_memory": state.get("working_memory", {"entries": []}),
+            "_routing_decision": "finalize",
+        }
     elif errors and not results:
         final = "I encountered some issues:\n" + "\n".join(f"- {e}" for e in errors)
     elif results and tool_executed:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from operator import add
 from typing import Annotated, Any, Literal, TypedDict
 
@@ -21,11 +22,35 @@ def milestone_reducer(
     Replaces ``add_messages`` to prevent O(N²) context growth.  Critical
     messages (system prompt, first user query, tool results) are tagged
     with ``_milestone=True`` and survive the window.
+
+    Deduplicates by message ID (like LangGraph's ``add_messages``):
+    if a message has the same ID as an existing one, the later replaces
+    the earlier.  Messages without an ID get a UUID assigned.
     """
     full = (current or []) + (update if isinstance(update, list) else [update])
-    cutoff = max(0, len(full) - 10)
+
+    # Assign stable IDs to messages missing them
+    for m in full:
+        if isinstance(m, dict):
+            m.setdefault("id", str(uuid.uuid4()))
+
+    # Dedup by ID — later message replaces earlier one with same ID
+    seen: dict[str, int] = {}
+    deduped: list[dict[str, Any]] = []
+    for m in full:
+        if isinstance(m, dict):
+            mid = m.get("id")
+            if mid and mid in seen:
+                deduped[seen[mid]] = m  # replace
+                continue
+            if mid:
+                seen[mid] = len(deduped)
+        deduped.append(m)
+
+    # Rolling window: keep last 10 + milestone-tagged
+    cutoff = max(0, len(deduped) - 10)
     kept: list[dict[str, Any]] = []
-    for i, msg in enumerate(full):
+    for i, msg in enumerate(deduped):
         if i >= cutoff or isinstance(msg, dict) and msg.get("_milestone"):
             kept.append(msg)
     return kept
