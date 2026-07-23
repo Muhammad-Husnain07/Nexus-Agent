@@ -131,9 +131,16 @@ async def _execute_single_approach(
                     result_data = None
                     error = error or "API returned no data"
 
+        # Mark null/empty results as errors so the agent can respond
+        # informatively instead of silently dropping the tool output.
+        final_status = result.status
+        if result_data is None and final_status == "success" and tool_name:
+            error = error or f"Tool '{tool_name}' returned empty data"
+            final_status = "error"
+
         return {
             "tool_name": tool_name,
-            "status": result.status,
+            "status": final_status,
             "data": result_data,
             "error": error,
             "task_id": task_id,

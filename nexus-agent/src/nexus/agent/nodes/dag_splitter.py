@@ -141,11 +141,24 @@ async def dag_splitter(
                 if approaches:
                     parent_tool = approaches[0].get("tool_name")
 
-            subtasks = _generate_subtasks(task, items, parent_tool)
-            if subtasks:
-                logger.info("dag_splitter.list_expansion",
-                            parent=task_id, count=len(subtasks), tool=parent_tool)
-                new_tasks.extend(subtasks)
+            # Recursion guard: if this tool was already split in this DAG
+            # generation (tracked via _split_tools), skip to prevent infinite
+            # loops.  Splitting a tool's results into subtasks that call the
+            # same tool again creates a recursive expansion e.g. geocoding
+            # returns a list of cities → split each → geocode each city →
+            # each returns another list → split again → ...
+            split_tools: list[str] = list(state.get("_split_tools", []))
+            if parent_tool and parent_tool in split_tools:
+                logger.info("dag_splitter.skip_recursive",
+                            parent=task_id, tool=parent_tool)
+            else:
+                subtasks = _generate_subtasks(task, items, parent_tool)
+                if subtasks:
+                    if parent_tool and parent_tool not in split_tools:
+                        split_tools.append(parent_tool)
+                    logger.info("dag_splitter.list_expansion",
+                                parent=task_id, count=len(subtasks), tool=parent_tool)
+                    new_tasks.extend(subtasks)
 
         # Strategy 2: LLM-based split decision for complex results
         if not items and llm is not None and model is not None and isinstance(result_data, dict) and len(result_data) > 1:
@@ -212,7 +225,12 @@ async def dag_splitter(
     wm_final = _wm.to_dict() if _wm is not None else state.get("working_memory", {"entries": []})
 
     if not new_tasks:
-        return {"_routing_decision": "continue", "_pending_splits": processed, "working_memory": wm_final}
+        return {
+            "_routing_decision": "continue",
+            "_pending_splits": processed,
+            "working_memory": wm_final,
+            "_split_tools": list(state.get("_split_tools", [])),
+        }
 
     # Append new tasks to dag_tasks so dag_expander can process them
     existing_tasks: list[dict[str, Any]] = list(state.get("dag_tasks", []))
@@ -225,5 +243,6 @@ async def dag_splitter(
         "_pending_splits": processed,
         "_dag_generation": dag_generation + 1,
         "working_memory": wm_final,
+        "_split_tools": list(state.get("_split_tools", [])),
         "_routing_decision": "split",
     }

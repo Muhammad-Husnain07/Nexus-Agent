@@ -113,11 +113,24 @@ async def understand_intent(
                 context_messages.append({"role": role, "content": text})
 
     gathered: dict[str, Any] = state.get("gathered_requirements", {})
+    # Extract entities from previous user messages for cross-turn context
+    prior_entities: dict[str, str] = {}
+    for m in all_msgs[:-1]:  # exclude current message
+        if msg_role(m) == "user":
+            text = msg_content(m)
+            # Extract "about X" or "tell me about X" patterns
+            import re as _re
+            for match in _re.finditer(r'(?:about|for|of|regarding)\s+["\']?(\w+(?:\s+\w+){0,3})["\']?', text, _re.I):
+                val = match.group(1).strip()
+                if val and len(val) > 1:
+                    prior_entities[f"known_{len(prior_entities)}"] = val
     gathered_context = (
         f"\nAlready gathered information: {json.dumps(gathered)}\n"
         if gathered
         else "\nNo information has been gathered yet.\n"
     )
+    if prior_entities:
+        gathered_context += f"\nHistorical context (from previous turns): {json.dumps(prior_entities)}\n"
 
     # Build context for dynamic example selection
     intent_text = (state.get("intent") or {}).get("intent", last_user[:100])

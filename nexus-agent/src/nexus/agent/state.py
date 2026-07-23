@@ -135,6 +135,7 @@ _EPHEMERAL_FIELDS: list[str] = [
     "_active_speculations",
     "_pending_splits",
     "_dag_generation",
+    "_split_tools",
 ]
 
 RESPONSE_TYPES = Literal["tool", "greeting", "meta", "memory_query"]
@@ -244,5 +245,6 @@ class AgentState(TypedDict):
     max_reflection_revisions: int
     is_high_risk: bool
     _plan_repair_count: int
+    _split_tools: list[str]
     tool_results_ref: str
     _ephemeral_keys: list[str]
