@@ -179,7 +179,7 @@ def build_agent_graph(  # noqa: PLR0913
     graph.add_node("tool_subgraph", tool_subgraph)
 
     graph.add_node("safety_and_policy_check", _node(safety_and_policy_check))
-    graph.add_node("understand_intent", _node(understand_intent, _llm, _model))
+    graph.add_node("understand_intent", _node(understand_intent, _llm, _model, session_factory))
     graph.add_node("lightweight_verify", _node(lightweight_verify, _llm, _model))
     graph.add_node("respond_without_tool", _node(respond_without_tool, _llm, _model))
     graph.add_node("gather_requirements", _node(gather_requirements, _llm, _model))

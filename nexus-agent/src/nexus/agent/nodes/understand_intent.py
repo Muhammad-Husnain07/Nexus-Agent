@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from collections.abc import Callable
 from typing import Any
 
 import structlog
@@ -72,6 +73,7 @@ async def understand_intent(
     state: AgentState,
     llm: LLMClient,
     model: str,
+    session_factory: Callable[[], Any] | None = None,
 ) -> dict[str, Any]:
     """Parse the latest user message into structured intent via prompt templates.
 
@@ -238,6 +240,25 @@ async def understand_intent(
             confidence=0.0,
             urgency="normal",
         )
+
+    # Fallback: if LLM returned empty/zero-confidence intent, use
+    # embedding-based tool matching via ToolRegistry (no extra LLM call).
+    # This handles cases where the model doesn't recognize entity names
+    # (e.g. "Husnain", "PKR") but the tools can still handle them.
+    if (not analysis.primary_goal or analysis.confidence == 0.0) and last_user.strip() and session_factory is not None:
+        try:
+            from nexus.tools.registry import ToolRegistry  # noqa: PLC0415
+            reg = ToolRegistry(llm=llm)
+            async with session_factory() as sess:
+                results = await reg.search_semantic(sess, last_user, k=3)
+            if results:
+                matched = [(r.tool.name, r.score) for r in results if r.score >= 0.4]
+                if matched:
+                    analysis.primary_goal = ", ".join(t[0] for t in matched)
+                    analysis.confidence = 0.6
+                    logger.info("intent.fallback_embedding_success", tools=matched)
+        except Exception:
+            logger.warning("intent.fallback_embedding_failed")
 
     # Compute task difficulty for adaptive reflection
     task_difficulty = _compute_task_difficulty(analysis, last_user)
