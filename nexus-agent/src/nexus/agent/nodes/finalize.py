@@ -191,15 +191,41 @@ async def finalize(
     except Exception:
         working_memory_update = state.get("working_memory", {"entries": []})
 
-    # Persist to long-term memory via MemoryManager (fire-and-forget — don't block response)
+    # Persist to long-term memory (Redis Stream if available, else in-process)
     if session_factory and state.get("response_type") == "tool":
+        _tried_stream = False
         try:
-            manager = MemoryManager(store=MemoryStore(), llm=llm)
-            sid = state.get("session_id", "")
-            state_snapshot = dict(state)
-            asyncio.ensure_future(_persist_memory_background(manager, sid, state_snapshot))
+            import json as _json
+            from nexus.redis_client.client import get_redis_client  # noqa: PLC0415
+            _r = get_redis_client()
+            if _r is not None:
+                _sid = state.get("session_id", "")
+                _state_snapshot = dict(state)
+                _state_snapshot.pop("messages", None)
+                _state_snapshot.pop("dag_tasks", None)
+                _state_snapshot.pop("dag_results", None)
+                _state_snapshot.pop("available_tools", None)
+                _state_snapshot.pop("tool_results", None)
+                # Test connection with ping before xadd
+                await _r.ping()
+                _r.xadd(
+                    "memory_extraction_queue",
+                    {
+                        "session_id": _sid,
+                        "agent_state": _json.dumps(_state_snapshot),
+                    },
+                    maxlen=1000,
+                )
+                _tried_stream = True
         except Exception:
             pass
+
+        if not _tried_stream:
+            try:
+                manager = MemoryManager(store=MemoryStore(), llm=llm)
+                asyncio.ensure_future(_persist_memory_background(manager, state.get("session_id", ""), dict(state)))
+            except Exception:
+                pass
 
     logger.info(
         "finalize.completed",

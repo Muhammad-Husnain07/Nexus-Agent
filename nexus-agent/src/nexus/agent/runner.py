@@ -28,7 +28,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command
 
 from nexus.agent.graph import build_agent_graph
-from nexus.agent.state import AgentState
+from nexus.agent.state import AgentState, _EPHEMERAL_FIELDS
 from nexus.config.settings import get_settings
 from nexus.llm.client import LLMClient
 from nexus.observability.outcomes import InvocationOutcome, persist_outcome
@@ -235,6 +235,10 @@ class AgentRunner:
             prior_state = await graph.aget_state(run_config)
             if prior_state is not None and prior_state.values:
                 prior_messages = list(prior_state.values.get("messages", []))
+                # Clear ephemeral fields from prior state — they belong to the previous turn
+                for ef in _EPHEMERAL_FIELDS:
+                    if ef in prior_state.values and ef not in prior_state.values.get("messages", []):
+                        prior_state.values.pop(ef, None)
         except Exception:
             pass
 
@@ -295,6 +299,18 @@ class AgentRunner:
             "dag_results": {},
             "dag_phase": "",
             "_routing_decision": "continue",
+            "tool_results_ref": "",
+            "_ephemeral_keys": _EPHEMERAL_FIELDS,
+            "is_high_risk": False,
+            "_plan_repair_count": 0,
+            "_safety_result": {"passed": True, "action": "allow", "reason": ""},
+            "_plan_valid": True,
+            "_plan_validation_failures": [],
+            "_invalid_results": [],
+            "dag_iteration": 0,
+            "reflection_revisions": 0,
+            "max_dag_iterations": 5,
+            "max_reflection_revisions": 3,
         }
 
         redis = get_redis_client()

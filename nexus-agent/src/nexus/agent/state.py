@@ -91,6 +91,27 @@ class MissingSlot(BaseModel):
     )
 
 
+# Fields that are cleared between turns — not persisted across checkpoints
+_EPHEMERAL_FIELDS: list[str] = [
+    "_routing_decision",
+    "_tool_executed_in_turn",
+    "_safety_result",
+    "_plan_valid",
+    "_plan_validation_failures",
+    "_invalid_results",
+    "_plan_repair_count",
+    "dag_tasks",
+    "dag_results",
+    "dag_phase",
+    "dag_iteration",
+    "tool_results_ref",
+    "errors",
+    "pending_approval",
+    "_active_speculations",
+    "_pending_splits",
+    "_dag_generation",
+]
+
 RESPONSE_TYPES = Literal["tool", "greeting", "meta", "memory_query"]
 """Supported response type categories — a query either needs a tool or can be
 answered directly via greeting / meta / memory-query."""
@@ -198,3 +219,5 @@ class AgentState(TypedDict):
     max_reflection_revisions: int
     is_high_risk: bool
     _plan_repair_count: int
+    tool_results_ref: str
+    _ephemeral_keys: list[str]
