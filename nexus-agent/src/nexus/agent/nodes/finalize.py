@@ -208,7 +208,7 @@ async def finalize(
                 _state_snapshot.pop("tool_results", None)
                 # Test connection with ping before xadd
                 await _r.ping()
-                _r.xadd(
+                await _r.xadd(
                     "memory_extraction_queue",
                     {
                         "session_id": _sid,
