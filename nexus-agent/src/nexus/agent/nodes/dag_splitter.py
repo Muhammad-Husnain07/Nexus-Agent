@@ -149,13 +149,17 @@ async def dag_splitter(
             # each returns another list → split again → ...
             split_tools: list[str] = list(state.get("_split_tools", []))
             if parent_tool and parent_tool in split_tools:
+                # Already split this tool in this DAG generation — skip to
+                # prevent infinite loop (geocoding → split → geocode each → ...)
                 logger.info("dag_splitter.skip_recursive",
                             parent=task_id, tool=parent_tool)
             else:
+                # Register BEFORE creating subtasks so the guard is active
+                # before any subtask completes and triggers another split.
+                if parent_tool and parent_tool not in split_tools:
+                    split_tools.append(parent_tool)
                 subtasks = _generate_subtasks(task, items, parent_tool)
                 if subtasks:
-                    if parent_tool and parent_tool not in split_tools:
-                        split_tools.append(parent_tool)
                     logger.info("dag_splitter.list_expansion",
                                 parent=task_id, count=len(subtasks), tool=parent_tool)
                     new_tasks.extend(subtasks)

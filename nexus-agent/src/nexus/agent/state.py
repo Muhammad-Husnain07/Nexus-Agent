@@ -129,6 +129,7 @@ _EPHEMERAL_FIELDS: list[str] = [
     "dag_results",
     "dag_phase",
     "dag_iteration",
+    "tool_results",
     "tool_results_ref",
     "errors",
     "pending_approval",

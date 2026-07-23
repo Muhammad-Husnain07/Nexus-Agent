@@ -208,7 +208,7 @@ async def understand_intent(
             _openai_message("user", last_user),
         ],
         temperature=0,
-        max_tokens=512,
+        max_tokens=1024 if is_complex else 512,
         response_format={"type": "json_object"},
     )
 
@@ -252,13 +252,13 @@ async def understand_intent(
             async with session_factory() as sess:
                 results = await reg.search_semantic(sess, last_user, k=3)
             if results:
-                matched = [(r.tool.name, r.score) for r in results if r.score >= 0.4]
+                matched = [(r.tool.name, r.score) for r in results if r.score >= 0.3]
                 if matched:
                     analysis.primary_goal = ", ".join(t[0] for t in matched)
                     analysis.confidence = 0.6
                     logger.info("intent.fallback_embedding_success", tools=matched)
-        except Exception:
-            logger.warning("intent.fallback_embedding_failed")
+        except Exception as exc:
+            logger.warning("intent.fallback_embedding_failed", error=str(exc))
 
     # Compute task difficulty for adaptive reflection
     task_difficulty = _compute_task_difficulty(analysis, last_user)

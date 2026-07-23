@@ -292,6 +292,7 @@ def route_dag(state: AgentState) -> list[Send] | str:
 
     gathered: dict[str, Any] = state.get("gathered_requirements", {})
     logger.info("dag_expander.fan_out", ready_ids=[t["id"] for t in bounded_ready], max_concurrent=max_concurrent, in_flight=in_flight, remaining=len(remaining))
+    _dag_gen: int = state.get("_dag_generation", 0)
     return [
         Send(
             "tool_executor",
@@ -300,6 +301,7 @@ def route_dag(state: AgentState) -> list[Send] | str:
                 "available_tools": state.get("available_tools", []),
                 "dag_results": dict(results),
                 "gathered_requirements": gathered,
+                "_dag_generation": _dag_gen,
             },
         )
         for t in ready

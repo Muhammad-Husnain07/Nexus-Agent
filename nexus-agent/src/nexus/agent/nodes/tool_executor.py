@@ -375,11 +375,12 @@ async def tool_executor(
     dag_results: dict[str, Any] = state.get("dag_results", {})
     gathered: dict[str, Any] = state.get("gathered_requirements", {})
     task_id: str = task.get("id", "unknown")
+    dag_generation: int = state.get("_dag_generation", 0)
 
     if session_factory:
         async with session_factory() as session:
-            return await _execute_task(session, task, available_tools, dag_results, gathered, task_id)
-    return await _execute_task(None, task, available_tools, dag_results, gathered, task_id)
+            return await _execute_task(session, task, available_tools, dag_results, gathered, task_id, dag_generation)
+    return await _execute_task(None, task, available_tools, dag_results, gathered, task_id, dag_generation)
 
 
 async def _execute_task(
@@ -389,6 +390,7 @@ async def _execute_task(
     dag_results: dict[str, Any],
     gathered: dict[str, Any],
     task_id: str,
+    dag_generation: int = 0,
 ) -> dict[str, Any]:
     """Execute a single DAG task — extracted for proper session management."""
     approaches: list[dict[str, Any]] = task.get("approaches", [])
@@ -401,6 +403,7 @@ async def _execute_task(
             timeout=adapt.speculative_timeout_s,
             session=session,
         )
+        result["_dag_generation"] = dag_generation
         return {
             "tool_results": [result],
             "dag_results": {task_id: result.get("data")},
@@ -418,6 +421,7 @@ async def _execute_task(
         )
     else:
         result = {"tool_name": None, "status": "success", "data": None, "error": None, "task_id": task_id}
+    result["_dag_generation"] = dag_generation
 
     return {
         "tool_results": [result],

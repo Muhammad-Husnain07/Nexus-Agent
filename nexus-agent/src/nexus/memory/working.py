@@ -54,6 +54,13 @@ class WorkingMemory:
         if source not in WM_SOURCES:
             source = "inference"
 
+        # Prune entries older than 2 turns to prevent unbounded accumulation
+        # across multi-turn conversations.
+        self.entries = [
+            e for e in self.entries
+            if e.get("turn_id", 0) >= turn_id - 1
+        ]
+
         # Update existing entry with matching key
         for entry in self.entries:
             if entry.get("key") == key:

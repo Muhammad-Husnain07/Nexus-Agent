@@ -67,6 +67,8 @@ async def finalize(
             results = [r for r in all_results if r.get("tool_name") in current_task_names]
         else:
             results = all_results
+
+
     else:
         results = []
 
