@@ -196,3 +196,5 @@ class AgentState(TypedDict):
     max_dag_iterations: int
     reflection_revisions: int
     max_reflection_revisions: int
+    is_high_risk: bool
+    _plan_repair_count: int

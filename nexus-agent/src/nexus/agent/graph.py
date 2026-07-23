@@ -24,11 +24,11 @@ from langgraph.graph import END, StateGraph
 from nexus.agent.nodes import (
     finalize,
     gather_requirements,
+    lightweight_verify,
     reflect_on_response,
     respond_without_tool,
     review_final_answer,
     safety_and_policy_check,
-    self_consistency,
     understand_intent,
 )
 import structlog
@@ -49,14 +49,15 @@ logger = structlog.get_logger("nexus.agent.graph")
 
 
 def route_after_understand(state: AgentState) -> str:
-    """Route based on response type, missing info, and confidence band.
+    """Route based on response type, missing info, risk, and confidence band.
 
     Priority:
     1. Non-tool queries (greeting/meta/memory) → respond_without_tool
     2. Missing info slots → gather_requirements (clarify)
-    3. Low confidence (< 0.5) → gather_requirements
-    4. Moderate confidence (0.5–0.7) → self_consistency
-    5. High confidence → discover_tools
+    3. High risk + low confidence (< 0.85) → gather_requirements
+    4. Low confidence (< 0.5) → gather_requirements
+    5. Moderate confidence (0.5–0.7) → lightweight_verify
+    6. High confidence → discover_tools
     """
     resp_type: str = state.get("response_type", "tool")
     if resp_type in ("greeting", "meta", "memory_query"):
@@ -65,10 +66,17 @@ def route_after_understand(state: AgentState) -> str:
     if missing:
         return "gather_requirements"
 
+    confidence: float = state.get("confidence", 1.0)
+    is_high_risk: bool = state.get("is_high_risk", False)
+
+    # Risk-aware: high-risk tools need higher confidence to proceed
+    if is_high_risk and confidence < 0.85:
+        return "gather_requirements"
+
     # Check routing decision set by understand_intent
     routing: str = state.get("_routing_decision", "")
-    if routing == "self_consistency":
-        return "self_consistency"
+    if routing == "lightweight_verify":
+        return "lightweight_verify"
 
     return "discover_tools"
 
@@ -145,7 +153,7 @@ def build_agent_graph(  # noqa: PLR0913
 
     graph.add_node("safety_and_policy_check", _node(safety_and_policy_check))
     graph.add_node("understand_intent", _node(understand_intent, _llm, _model))
-    graph.add_node("self_consistency", _node(self_consistency, _llm, _model))
+    graph.add_node("lightweight_verify", _node(lightweight_verify, _llm, _model))
     graph.add_node("respond_without_tool", _node(respond_without_tool, _llm, _model))
     graph.add_node("gather_requirements", _node(gather_requirements, _llm, _model))
     graph.add_node("finalize", _node(finalize, _llm, _model, session_factory))
@@ -179,17 +187,17 @@ def build_agent_graph(  # noqa: PLR0913
             "respond_without_tool": "respond_without_tool",
             "gather_requirements": "gather_requirements",
             "discover_tools": "tool_subgraph",
-            "self_consistency": "self_consistency",
+            "lightweight_verify": "lightweight_verify",
         },
     )
 
-    # Self-consistency routes based on agreement
+    # Lightweight verify → proceed or clarify
     graph.add_conditional_edges(
-        "self_consistency",
-        lambda s: s.get("_routing_decision", "ask"),
+        "lightweight_verify",
+        lambda s: s.get("_routing_decision", "clarify"),
         {
             "proceed": "tool_subgraph",
-            "ask": "gather_requirements",
+            "clarify": "gather_requirements",
         },
     )
 

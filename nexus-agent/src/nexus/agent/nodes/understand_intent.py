@@ -94,7 +94,7 @@ async def understand_intent(
         "",
     )
     if not last_user:
-        return {"intent": None, "missing_info_slots": [], "_routing_decision": "finalize"}
+        return {"intent": None, "missing_info_slots": [], "is_high_risk": False, "_routing_decision": "finalize"}
 
     # Build conversation context: original user query + last 8 messages
     all_msgs = list(messages)
@@ -253,6 +253,22 @@ async def understand_intent(
 
     new_messages.append(_openai_message("assistant", f"Parsed intent: {analysis.primary_goal}"))
 
+    # Determine if this is a high-risk intent (tool requires approval)
+    is_high_risk = False
+    try:
+        available_tools = state.get("available_tools", [])
+        intent_goal = analysis.primary_goal.lower() if analysis.primary_goal else ""
+        for t in available_tools:
+            tname = (t.get("name") or "").lower()
+            tdesc = (t.get("description") or "").lower()
+            tcat = (t.get("category") or "").lower()
+            if tname and (tname in intent_goal or tname in tdesc):
+                if t.get("requires_approval") or t.get("risk_level") in ("medium", "high"):
+                    is_high_risk = True
+                    break
+    except Exception:
+        pass
+
     # Add working memory entry for parsed intent
     try:
         from nexus.memory.working import WorkingMemory  # noqa: PLC0415
@@ -283,6 +299,7 @@ async def understand_intent(
             "gathered_requirements": gathered,
             "task_difficulty": task_difficulty,
             "working_memory": working_memory_update,
+            "is_high_risk": is_high_risk,
             "_routing_decision": "respond_without_tool",
         }
 
@@ -311,12 +328,13 @@ async def understand_intent(
             "gathered_requirements": gathered,
             "task_difficulty": task_difficulty,
             "confidence": confidence,
+            "is_high_risk": is_high_risk,
             "working_memory": working_memory_update,
             "_routing_decision": "ask",
         }
 
     if confidence < adapt.confidence_moderate:
-        # 0.5–0.7: Self-consistency sampling (multi-path routing)
+        # 0.5–0.7: Lightweight verify (single critique call)
         return {
             "messages": new_messages,
             "intent": intent_dict,
@@ -328,7 +346,8 @@ async def understand_intent(
             "task_difficulty": task_difficulty,
             "confidence": confidence,
             "working_memory": working_memory_update,
-            "_routing_decision": "self_consistency",
+            "is_high_risk": is_high_risk,
+            "_routing_decision": "lightweight_verify",
         }
 
     # confidence >= confidence_moderate (0.7): proceed normally
@@ -342,5 +361,6 @@ async def understand_intent(
         "gathered_requirements": gathered,
         "task_difficulty": task_difficulty,
         "confidence": confidence,
+        "is_high_risk": is_high_risk,
         "working_memory": working_memory_update,
     }
