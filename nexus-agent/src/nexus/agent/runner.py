@@ -502,6 +502,102 @@ class AgentRunner:
         logger.info("continue_after_approval.complete", session_id=sid)
 
     # ------------------------------------------------------------------
+    # Recover from checkpoint
+    # ------------------------------------------------------------------
+
+    async def recover(
+        self,
+        session_id: str,
+        target_node: str | None = None,
+    ) -> dict[str, Any]:
+        """Recover the graph to the most recent checkpoint.
+
+        Queries the checkpointer's state history to find the checkpoint
+        before ``target_node`` was about to execute. If no target_node
+        is specified, finds the latest checkpoint before the graph ended.
+
+        Restores the graph state to that checkpoint and returns the
+        recovered messages + state for re-invocation.
+
+        Args:
+            session_id: The conversation session ID.
+            target_node: Node name to recover to (e.g. ``"PlannerNode"``,
+                ``"ExecutorNode"``). If None, recovers to the penultimate
+                checkpoint (the one before the graph ended).
+
+        Returns:
+            Dict with ``state`` (the recovered state values) and
+            ``checkpoint`` (the checkpoint tuple). Empty dict if no
+            suitable checkpoint found.
+
+        Raises:
+            ValueError: If no checkpoints exist for this session.
+        """
+        sid = str(session_id)
+        graph = await self._build_graph()
+        config = {"configurable": {"thread_id": sid}}
+
+        # Get latest state first to verify the session exists
+        latest = await graph.aget_state(config)
+        if latest is None or not latest.values:
+            logger.warning("recover.no_session", session_id=sid)
+            return {}
+
+        from nexus.agent.checkpoint_manager import (
+            find_checkpoint_before,
+            find_latest_checkpoint,
+        )
+
+        if target_node:
+            target = await find_checkpoint_before(graph, config, target_node)
+            if target is None:
+                logger.warning("recover.target_not_found", session_id=sid, target=target_node)
+                return {}
+        else:
+            target = await find_latest_checkpoint(graph, config)
+            if target is None:
+                logger.warning("recover.no_history", session_id=sid)
+                return {}
+
+        # Get checkpoint ID from the snapshot's config
+        target_config = target.config if hasattr(target, "config") else None
+        if target_config is None:
+            logger.warning("recover.no_config", session_id=sid)
+            return {}
+
+        target_cp_id = target_config.get("configurable", {}).get("checkpoint_id") if isinstance(target_config, dict) else None
+        if target_cp_id is None:
+            logger.warning("recover.no_checkpoint_id", session_id=sid)
+            return {}
+
+        # Restore to the target checkpoint
+        config_with_checkpoint = {
+            "configurable": {
+                "thread_id": sid,
+                "checkpoint_id": target_cp_id,
+            },
+        }
+        recovered = await graph.aget_state(config_with_checkpoint)
+
+        if recovered is None or not recovered.values:
+            logger.warning("recover.restore_failed", session_id=sid)
+            return {}
+
+        rec_values = recovered.values
+        logger.info(
+            "recover.restored",
+            session_id=sid,
+            target=target_node or "last",
+            checkpoint_id=str(target_cp_id)[:12],
+            message_count=len(rec_values.get("messages", [])),
+        )
+
+        return {
+            "state": dict(rec_values),
+            "checkpoint": target_cp_id,
+        }
+
+    # ------------------------------------------------------------------
     # Resume
     # ------------------------------------------------------------------
 
