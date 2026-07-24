@@ -137,6 +137,10 @@ _EPHEMERAL_FIELDS: list[str] = [
     "_pending_splits",
     "_dag_generation",
     "_split_tools",
+    "_query_type",
+    "_force_query_type",
+    "_filtered_tools",
+    "_preferred_tools",
     "completed_task_ids",
 ]
 
