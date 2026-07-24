@@ -51,38 +51,38 @@ class QueryType(str, Enum):
 # Few-Shot System Prompt
 # ============================================================================
 
-_CLASSIFIER_PROMPT = """You are a query classifier. Given a user message and a list of available tools, determine the query type.
+_CLASSIFIER_PROMPT = """You are a query classifier. Given a user message and available tools, determine the query type.
 
 Types:
 - single_tool: One clear tool request
 - independent_multi: Multiple requests that don't depend on each other's output
-- dependent_multi: Multiple requests where one tool's output feeds another (e.g. geocoding → weather)
+- dependent_multi: Multiple requests where one tool's output feeds another
 - conversational: Follow-up question with pronoun references ("it", "that", "his", "her", "their")
 - no_tool: Greeting, meta question about the agent, memory query
 
 <examples>
 User: Tell me a joke
-Tools: get_joke
+Tools: tool_a (returns a joke)
 Type: single_tool
-{"type": "single_tool", "tools": ["get_joke"], "reasoning": "Single clear tool request"}
+{"type": "single_tool", "tools": ["tool_a"], "reasoning": "Single clear tool request"}
 
-User: What's the weather in London and tell me a joke
-Tools: get_geocoding, get_weather, get_joke
-Analysis: get_weather needs coordinates from get_geocoding (dependent). get_joke is independent.
+User: What's the weather in SomeCity and tell me a joke
+Tools: tool_b (geocode city), tool_c (get weather by coords), tool_a (returns a joke)
+Analysis: tool_c needs coordinates from tool_b (dependent). tool_a is independent.
 Type: dependent_multi
-{"type": "dependent_multi", "tools": ["get_geocoding", "get_weather", "get_joke"], "dependencies": [["get_geocoding", "get_weather"]], "reasoning": "Weather needs geocoding first, joke is independent"}
+{"type": "dependent_multi", "tools": ["tool_b", "tool_c", "tool_a"], "dependencies": [["tool_b", "tool_c"]], "reasoning": "Weather needs geocoding first, joke is independent"}
 
 User: What's the age of John and what's the Bitcoin price
-Tools: predict_age, get_crypto_price
+Tools: tool_d (predict age from name), tool_e (get crypto price)
 Analysis: Neither tool depends on the other's output.
 Type: independent_multi
-{"type": "independent_multi", "tools": ["predict_age", "get_crypto_price"], "reasoning": "Age and crypto price are independent"}
+{"type": "independent_multi", "tools": ["tool_d", "tool_e"], "reasoning": "Age and crypto price are independent"}
 
 User: And his nationality?
-Tools: predict_nationality
+Tools: tool_f (predict nationality from name)
 Analysis: "his" refers to a person from previous context.
 Type: conversational
-{"type": "conversational", "tools": ["predict_nationality"], "reasoning": "Follow-up with pronoun reference"}
+{"type": "conversational", "tools": ["tool_f"], "reasoning": "Follow-up with pronoun reference"}
 
 User: Hi, how are you?
 Type: no_tool
@@ -109,46 +109,33 @@ _GREETINGS = frozenset({
     "thanks!", "hello!", "hi!", "hey!", "goodbye", "bye", "bye!",
 })
 
-# Tool name patterns — normalized to match tool names
-# Maps user intent patterns to likely tool names (soft match, not hardcoded)
-_TOOL_PATTERNS = {
-    "joke": "get_joke",
-    "jokes": "get_joke",
-    "funny": "get_joke",
-    "weather": "get_weather",
-    "temperature": "get_weather",
-    "forecast": "get_weather",
-    "geocode": "get_geocoding",
-    "coordinates": "get_geocoding",
-    "latitude": "get_geocoding",
-    "age": "predict_age",
-    "how old": "predict_age",
-    "nationality": "predict_nationality",
-    "where from": "predict_nationality",
-    "bitcoin": "get_crypto_price",
-    "crypto": "get_crypto_price",
-    "price": "get_crypto_price",
-    "pokemon": "get_pokemon",
-    "pikachu": "get_pokemon",
-    "charizard": "get_pokemon",
-    "cat fact": "get_cat_fact",
-    "cat": "get_cat_fact",
-    "dog": "get_dog_image",
-    "dog image": "get_dog_image",
-    "puppy": "get_dog_image",
-    "trivia": "get_trivia",
-    "star wars": "get_starwars_character",
-    "pok\u00e9mon": "get_pokemon",
-}
-
 # Conjunction markers suggesting multiple intents
 _CONJUNCTIONS = {"and", "or", "also", "plus", "then", "too", "beside", "additionally"}
+
+
+def _build_keyword_index(tool_names: list[str]) -> dict[str, str]:
+    """Build a dynamic keyword → tool_name index from registered tool names.
+
+    Extracts meaningful keywords from each tool name by splitting on ``_``
+    and filtering out generic prefixes like ``get``, ``search``, ``predict``.
+    """
+    index: dict[str, str] = {}
+    skip = {"get", "search", "predict", "find", "list", "fetch", "create", "update", "delete", "patch"}
+    for name in tool_names:
+        index[name.lower()] = name
+        parts = name.lower().split("_")
+        for part in parts:
+            if part not in skip and len(part) > 2:
+                if part not in index:
+                    index[part] = name
+    return index
 
 
 def _heuristic_classify(
     query: str,
     history: list[dict[str, Any]],
     tool_names: list[str],
+    available_tools: list[dict[str, Any]] | None = None,
 ) -> QueryType | None:
     """Fast heuristic classification — returns ``None`` if ambiguous.
 
@@ -173,50 +160,38 @@ def _heuristic_classify(
         for m in (history or [])
     )
     if has_prior_assistant and len(q.split()) <= 8 and not any(
-        p[0] in q for p in _TOOL_PATTERNS.items()
+        tname.lower().replace("_", " ") in q for tname in tool_names
     ):
         return QueryType.CONVERSATIONAL
 
-    # 3. Count tool patterns in query
-    matched_tools: set[str] = set()
-    for pattern, tool in _TOOL_PATTERNS.items():
-        if pattern in q:
-            matched_tools.add(tool)
+    # 3. Build dynamic keyword index from registered tool names
+    keyword_index = _build_keyword_index(tool_names)
 
-    # Also match against actual tool names in the registry
+    # 4. Match query against tool names and keywords
+    matched_tools: set[str] = set()
     for tname in tool_names:
         normalized = tname.lower().replace("_", " ")
         if normalized in q:
             matched_tools.add(tname)
 
-    # 4. No tool matched → likely conversational or no_tool
+    for keyword, tool_name in keyword_index.items():
+        if keyword in q and tool_name not in matched_tools:
+            matched_tools.add(tool_name)
+
+    # 5. No tool matched → likely conversational or no_tool
     if not matched_tools:
         return QueryType.CONVERSATIONAL if has_prior_assistant else None
 
-    # 5. Single tool
+    # 6. Single tool
     if len(matched_tools) == 1:
         return QueryType.SINGLE_TOOL
 
-    # 6. Multiple tools — check for conjunctions to confirm multi-intent
+    # 7. Multiple tools — check for conjunctions to confirm multi-intent
     words = set(q.split())
     has_conjunction = bool(words & _CONJUNCTIONS)
 
-    if not has_conjunction and len(matched_tools) >= 2:
-        # May still be multi-intent with implied "and" (e.g. "weather tokyo bitcoin price")
-        pass
-
-    # Check for I/O dependencies between matched tools
-    # (simple heuristic: tools that take lat/lon or id as input)
-    dependent_pairs = {
-        ("get_geocoding", "get_weather"),
-        ("get_geocoding", "get_weather"),
-        ("search_books", "get_book_details"),
-    }
-    tool_list = list(matched_tools)
-    has_dependency = any(
-        (a, b) in dependent_pairs
-        for a in tool_list for b in tool_list if a != b
-    )
+    # 8. Check for I/O dependencies via schema analysis
+    has_dependency = _has_schema_dependency(matched_tools, available_tools or [])
 
     if has_dependency:
         return QueryType.DEPENDENT_MULTI
@@ -225,6 +200,29 @@ def _heuristic_classify(
         return QueryType.INDEPENDENT_MULTI
 
     return None  # Ambiguous — fall through to LLM
+
+
+def _has_schema_dependency(matched_tools: set[str], all_tools: list[dict[str, Any]]) -> bool:
+    """Check if any matched tool's required input is another's output (schema-driven)."""
+    signatures: dict[str, tuple[set[str], set[str]]] = {}
+    for t in all_tools:
+        name = t.get("name", "")
+        inp = t.get("input_schema", {})
+        out = t.get("output_schema", {})
+        required = set(inp.get("required", [])) if isinstance(inp, dict) else set()
+        outputs = set(out.get("properties", {}).keys()) if isinstance(out, dict) else set()
+        signatures[name] = (required, outputs)
+
+    all_outputs: set[str] = set()
+    for name in matched_tools:
+        _, outs = signatures.get(name, (set(), set()))
+        all_outputs |= outs
+
+    for name in matched_tools:
+        reqs, _ = signatures.get(name, (set(), set()))
+        if reqs & all_outputs:
+            return True
+    return False
 
 
 # ============================================================================
@@ -286,18 +284,7 @@ async def node_classify_query(
     llm: LLMClient | None = None,
     model: str | None = None,
 ) -> dict[str, Any]:
-    """LangGraph node: classify the user's latest message and set ``_query_type``.
-
-    Reads the last user message from ``state["messages"]``, extracts tool
-    names from ``state["available_tools"]``, runs classification, and
-    stores the result in ``state["_query_type"]`` for routing.
-
-    The classification result can be overridden by ``_force_query_type``
-    (set by earlier routing logic for specific edge cases).
-
-    Returns:
-        Dict with ``_query_type`` (str) and optionally ``_preferred_tools``.
-    """
+    """LangGraph node: classify the user's latest message and set ``_query_type``."""
     messages: list = list(state.get("messages", []))
     last_user = ""
     for m in reversed(messages):
@@ -311,36 +298,33 @@ async def node_classify_query(
     if not last_user:
         return {"_query_type": QueryType.NO_TOOL_NEEDED.value}
 
-    # Check for overrides set by prior routing
     forced = state.get("_force_query_type")
     if forced:
         logger.info("router.forced_type", qtype=forced, query=last_user[:50])
         return {"_query_type": forced}
 
-    # Extract tool names from available tools
-    tool_names = [
-        t.get("name", "") for t in (state.get("available_tools") or [])
-        if t.get("name")
-    ]
+    available_tools: list[dict[str, Any]] = state.get("available_tools") or []
+    tool_names = [t.get("name", "") for t in available_tools if t.get("name")]
 
-    # Classify
     qtype = await classify_query(
         query=last_user,
         history=messages,
         tool_names=tool_names,
+        available_tools=available_tools,
         llm=llm,
         model=model,
     )
 
     result: dict[str, Any] = {"_query_type": qtype.value}
 
-    # For multi-tool types, optionally pre-select preferred tools
+    # For multi-tool types, pre-select preferred tools using dynamic keyword index
     if qtype in (QueryType.INDEPENDENT_MULTI, QueryType.DEPENDENT_MULTI):
         matched = set()
         q_lower = last_user.lower()
-        for pattern, tool in _TOOL_PATTERNS.items():
-            if pattern in q_lower:
-                matched.add(tool)
+        kw_index = _build_keyword_index(tool_names)
+        for keyword, tool_name in kw_index.items():
+            if keyword in q_lower and tool_name not in matched:
+                matched.add(tool_name)
         for tname in tool_names:
             if tname.lower().replace("_", " ") in q_lower:
                 matched.add(tname)
@@ -354,6 +338,7 @@ async def classify_query(
     query: str,
     history: list[dict[str, Any]] | None = None,
     tool_names: list[str] | None = None,
+    available_tools: list[dict[str, Any]] | None = None,
     llm: LLMClient | None = None,
     model: str | None = None,
 ) -> QueryType:
@@ -364,20 +349,10 @@ async def classify_query(
        conversational follow-ups, and obvious multi-tool queries.
     2. **LLM** (compact few-shot, ~500ms) — only for ambiguous cases the
        heuristic can't confidently classify.
-
-    Args:
-        query: The user's message text.
-        history: Prior conversation messages (for conversational detection).
-        tool_names: List of available tool names from the registry.
-        llm: LLM client (required for Stage 2 fallback).
-        model: Model name to use for Stage 2.
-
-    Returns:
-        A ``QueryType`` enum value.
     """
     # Stage 1: Heuristic
     tool_names_list = tool_names or []
-    heuristic_result = _heuristic_classify(query, history or [], tool_names_list)
+    heuristic_result = _heuristic_classify(query, history or [], tool_names_list, available_tools)
 
     if heuristic_result is not None:
         logger.info(
