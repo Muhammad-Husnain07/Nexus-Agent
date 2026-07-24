@@ -31,6 +31,7 @@ from nexus.agent.nodes import (
     safety_and_policy_check,
     understand_intent,
 )
+from nexus.agent.router import QueryType, node_classify_query, route_query
 import structlog
 from nexus.agent.state import AgentState
 from nexus.agent.tool_subgraph import build_tool_subgraph
@@ -179,6 +180,7 @@ def build_agent_graph(  # noqa: PLR0913
     graph.add_node("tool_subgraph", tool_subgraph)
 
     graph.add_node("safety_and_policy_check", _node(safety_and_policy_check))
+    graph.add_node("classify_query", _node(node_classify_query, _llm, _model))
     graph.add_node("understand_intent", _node(understand_intent, _llm, _model, session_factory))
     graph.add_node("lightweight_verify", _node(lightweight_verify, _llm, _model))
     graph.add_node("respond_without_tool", _node(respond_without_tool, _llm, _model))
@@ -189,21 +191,35 @@ def build_agent_graph(  # noqa: PLR0913
 
     graph.set_entry_point("safety_and_policy_check")
 
-    # Safety check → reject or proceed to understand_intent
+    # Safety check → reject or proceed to classifier
     def route_after_safety(state: AgentState) -> str:
         result = state.get("_safety_result", {})
         action = result.get("action", "")
         if action == "reject":
             logger.warning("graph.safety_rejected", reason=result.get("reason", ""))
             return "rejected"
-        return "understand_intent"
+        return "classify_query"
 
     graph.add_conditional_edges(
         "safety_and_policy_check",
         route_after_safety,
         {
-            "understand_intent": "understand_intent",
+            "classify_query": "classify_query",
             "rejected": "finalize",
+        },
+    )
+
+    # Router → route based on query type
+    def route_after_router(state: AgentState) -> str:
+        qtype = state.get("_query_type", QueryType.SINGLE_TOOL.value)
+        return route_query(QueryType(qtype))
+
+    graph.add_conditional_edges(
+        "classify_query",
+        route_after_router,
+        {
+            "understand_intent": "understand_intent",
+            "respond_without_tool": "respond_without_tool",
         },
     )
 

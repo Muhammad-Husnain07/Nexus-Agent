@@ -245,6 +245,10 @@ class AgentState(TypedDict):
     is_high_risk: bool
     _plan_repair_count: int
     _tool_retry_count: int
+    _force_query_type: str
+    _query_type: str
+    _filtered_tools: list[dict[str, Any]] | None
+    _preferred_tools: list[str]
     _split_tools: list[str]
     tool_results_ref: str
     _ephemeral_keys: list[str]
