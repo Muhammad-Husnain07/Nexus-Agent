@@ -179,6 +179,20 @@ async def planner_node(
     user_input = _last_user_message(state)
     intents = _get_intents(state)
 
+    # Query capability registry to enrich planner context
+    capabilities_context = ""
+    try:
+        from nexus.agent.registry.capability_registry import get_capability_registry
+        cap_reg = get_capability_registry()
+        for intent in intents:
+            matches = cap_reg.find_by_description(intent)
+            if matches:
+                cap_name = matches[0][0].name
+                cap_tools = matches[0][0].tool_names
+                capabilities_context += f"Capability '{cap_name}' covers tools: {', '.join(cap_tools)}\n"
+    except Exception:
+        pass
+
     # Filter tools to relevant ones
     intent_text = " ".join(intents) or user_input
     relevant_tools = filter_relevant_tools(intent_text, tools, top_k=10)
@@ -190,6 +204,7 @@ async def planner_node(
         user_input=user_input,
         llm=llm,
         model=model,
+        capabilities_context=capabilities_context,
     )
 
     # Store plan in state

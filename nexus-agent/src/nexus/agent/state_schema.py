@@ -325,6 +325,8 @@ _EPHEMERAL_FIELDS: list[str] = [
     "_validation_result",
     "_ready_to_plan",
     "_needs_clarification",
+    "_clarification_asked",
+    "_normalization_metadata",
 ]
 
 

@@ -333,12 +333,18 @@ async def _llm_propose_tasks(
     tools: list[dict[str, Any]],
     llm: Any,
     model: str,
+    capabilities_context: str = "",
 ) -> list[dict[str, Any]]:
     """Call the LLM to propose the initial set of tools and arguments."""
     tool_descriptions = _format_tool_descriptions(tools)
-    prompt = _get_planner_prompt().format(
+    prompt_template = _get_planner_prompt()
+    # Inject capabilities context if available (prepended to query)
+    enriched_query = query[:1000]
+    if capabilities_context:
+        enriched_query = f"{capabilities_context}\nUser Request: {enriched_query}"
+    prompt = prompt_template.format(
         tool_descriptions=tool_descriptions,
-        query=query[:1000],
+        query=enriched_query,
     )
 
     response = await llm.complete(
@@ -383,6 +389,7 @@ class PlannerRunner:
         user_input: str = "",
         llm: Any = None,
         model: str | None = None,
+        capabilities_context: str = "",
     ) -> ExecutionPlan:
         """Build a complete execution plan (delegates to ``build_plan``)."""
         return await build_plan(
@@ -391,6 +398,7 @@ class PlannerRunner:
             user_input=user_input,
             llm=llm,
             model=model,
+            capabilities_context=capabilities_context,
         )
 
 
@@ -400,6 +408,7 @@ async def build_plan(
     user_input: str = "",
     llm: Any = None,
     model: str | None = None,
+    capabilities_context: str = "",
 ) -> ExecutionPlan:
     """Build a complete execution plan from user intent + available tools.
 
@@ -409,6 +418,7 @@ async def build_plan(
         user_input: Raw user message (for implicit dep detection).
         llm: LLM client for task proposal.
         model: Model name.
+        capabilities_context: Optional capability registry context for planner.
 
     Returns:
         An ``ExecutionPlan`` with ``waves``, ``dependencies``, and metadata.
@@ -425,7 +435,7 @@ async def build_plan(
     # 2. LLM proposes tasks (only if we have intent — otherwise use all tools)
     raw_tasks: list[dict[str, Any]] = []
     if llm is not None and model is not None and user_input:
-        raw_tasks = await _llm_propose_tasks(user_input, tools, llm, model)
+        raw_tasks = await _llm_propose_tasks(user_input, tools, llm, model, capabilities_context)
 
     # Fallback: if LLM returned nothing, create one task per tool
     if not raw_tasks:

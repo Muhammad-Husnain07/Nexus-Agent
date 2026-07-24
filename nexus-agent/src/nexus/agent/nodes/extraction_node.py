@@ -95,6 +95,7 @@ async def extraction_node(
 
     intent = parsed.get("intent", "unknown")
     entities = parsed.get("entities", {})
+    business_requirements = parsed.get("business_requirements", {})
     confidence = float(parsed.get("confidence", 0.0))
     entity_confidence = parsed.get("entity_confidence", {})
 
@@ -103,12 +104,14 @@ async def extraction_node(
         intent=intent,
         confidence=confidence,
         entity_count=len(entities),
+        business_requirement_count=len(business_requirements),
     )
 
     return {
         "_extraction_result": {
             "intent": intent,
             "entities": entities,
+            "business_requirements": business_requirements,
             "confidence": confidence,
             "entity_confidence": entity_confidence,
         }

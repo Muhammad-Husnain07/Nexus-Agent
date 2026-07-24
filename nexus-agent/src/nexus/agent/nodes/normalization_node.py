@@ -22,6 +22,10 @@ async def normalization_node(state: AgentState) -> dict[str, Any]:
     Reads ``_extraction_result``, normalizes all entity values using the
     NormalizationRegistry, and writes back the normalized result.
 
+    Also returns ``_normalization_metadata`` with a record of what was
+    resolved (e.g. ``{"resolved_date": "2026-07-25"}``) for the
+    context merge node to incorporate into StructuredContext.metadata.
+
     Pure Python. No LLM. No side effects.
     """
     extraction = state.get("_extraction_result")
@@ -35,12 +39,14 @@ async def normalization_node(state: AgentState) -> dict[str, Any]:
     registry = get_normalization_registry()
     normalized = registry.normalize_entities(entities)
 
-    # Track what changed for observability
-    changes = {
-        k: {"from": entities[k], "to": normalized[k]}
-        for k in entities
-        if normalized.get(k) != entities[k]
-    }
+    # Build metadata from normalizations that changed values
+    metadata: dict[str, Any] = {}
+    changes = {}
+    for k in entities:
+        nv = normalized[k]
+        if nv != entities[k]:
+            changes[k] = {"from": entities[k], "to": nv}
+            metadata[f"resolved_{k}"] = nv
 
     if changes:
         logger.info(
@@ -53,5 +59,6 @@ async def normalization_node(state: AgentState) -> dict[str, Any]:
         "_extraction_result": {
             **extraction,
             "entities": normalized,
-        }
+        },
+        "_normalization_metadata": metadata if metadata else {},
     }
