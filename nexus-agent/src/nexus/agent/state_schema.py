@@ -376,3 +376,10 @@ class AgentState(TypedDict, total=False):
     # Tool execution state
     tool_results: list[dict[str, Any]]
     dag_tasks: list[dict[str, Any]]
+
+    # StructuredContext (extraction → validation → planning)
+    _extraction_result: dict[str, Any]
+    _structured_context: dict[str, Any]
+    _validation_result: dict[str, Any]
+    _ready_to_plan: bool
+    _needs_clarification: bool

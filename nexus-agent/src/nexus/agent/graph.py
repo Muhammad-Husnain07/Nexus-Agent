@@ -45,6 +45,7 @@ from nexus.agent.memory.context_manager import (
     truncate_tool_result,
 )
 from nexus.agent.planners.dag_planner import PlannerRunner
+from nexus.agent.registry.intent_registry import populate_from_tools
 from nexus.agent.router import QueryType
 from nexus.agent.state import AgentState
 from nexus.config.settings import get_settings
@@ -80,7 +81,7 @@ def route_after_router(state: AgentState) -> str:
 
     - rejected → ResponseNode (error)
     - NO_TOOL_NEEDED → ResponseNode (direct response)
-    - all tool-requiring types → PlannerNode (plan + execute)
+    - all tool-requiring types → ExtractionNode (intent extraction)
     """
     safety = state.get("_safety_result", {})
     if safety.get("action") == "reject":
@@ -92,7 +93,19 @@ def route_after_router(state: AgentState) -> str:
     if qtype == QueryType.NO_TOOL_NEEDED.value:
         return "ResponseNode"
 
-    return "PlannerNode"
+    return "ExtractionNode"
+
+
+def route_after_validation(state: AgentState) -> str:
+    """Route based on validation result.
+
+    - If validation ready → PlannerNode
+    - If clarification needed → ClarificationNode (which ends the graph)
+    """
+    if state.get("_ready_to_plan"):
+        return "PlannerNode"
+
+    return "ClarificationNode"
 
 
 def route_after_executor(state: AgentState) -> str:
@@ -447,8 +460,18 @@ def build_agent_graph(
 
     graph = StateGraph(AgentState)
 
-    # 5 production nodes
+    # Lazy imports for new nodes (avoid circular import with memory/nodes)
+    from nexus.agent.nodes.extraction_node import extraction_node as _extraction_node
+    from nexus.agent.nodes.context_merge_node import context_merge_node as _context_merge_node
+    from nexus.agent.nodes.validation_node import validation_node as _validation_node
+    from nexus.agent.nodes.clarification_node import clarification_node as _clarification_node
+
+    # 9 production nodes (5 existing + 4 new)
     graph.add_node("RouterNode", node(router_node, _llm, _model))
+    graph.add_node("ExtractionNode", node(_extraction_node, _llm, _model))
+    graph.add_node("ContextMergeNode", node(_context_merge_node))
+    graph.add_node("ValidationNode", node(_validation_node))
+    graph.add_node("ClarificationNode", node(_clarification_node))
     graph.add_node("PlannerNode", node(planner_node, _llm, _model))
     graph.add_node("ExecutorNode", node(executor_node, _executor))
     graph.add_node("ReflectionNode", node(reflection_node))
@@ -456,20 +479,36 @@ def build_agent_graph(
 
     graph.set_entry_point("RouterNode")
 
-    # Router → Planner or Response
+    # Router → Extraction (tool queries) or Response (greeting/error)
     graph.add_conditional_edges(
         "RouterNode",
         route_after_router,
         {
-            "PlannerNode": "PlannerNode",
+            "ExtractionNode": "ExtractionNode",
             "ResponseNode": "ResponseNode",
         },
     )
 
-    # Planner → Executor
+    # Extraction → ContextMerge → Validation
+    graph.add_edge("ExtractionNode", "ContextMergeNode")
+    graph.add_edge("ContextMergeNode", "ValidationNode")
+
+    # Validation → Planner (ready) or Clarification (missing info)
+    graph.add_conditional_edges(
+        "ValidationNode",
+        route_after_validation,
+        {
+            "PlannerNode": "PlannerNode",
+            "ClarificationNode": "ClarificationNode",
+        },
+    )
+
+    # Clarification → END (graph stops; user responds with new message)
+    graph.add_edge("ClarificationNode", END)
+
+    # Existing edges unchanged
     graph.add_edge("PlannerNode", "ExecutorNode")
 
-    # Executor → Response or Reflection
     graph.add_conditional_edges(
         "ExecutorNode",
         route_after_executor,
@@ -479,7 +518,6 @@ def build_agent_graph(
         },
     )
 
-    # Reflection → Planner (retry) or Response (finalize)
     graph.add_conditional_edges(
         "ReflectionNode",
         route_after_reflection,
@@ -489,7 +527,6 @@ def build_agent_graph(
         },
     )
 
-    # Response → END
     graph.add_edge("ResponseNode", END)
 
     # Compile with interrupt support for high-risk tools
