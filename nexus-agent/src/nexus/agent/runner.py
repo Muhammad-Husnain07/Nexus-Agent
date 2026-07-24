@@ -375,11 +375,22 @@ class AgentRunner:
 
         try:
             async for event in graph.astream(initial_state, run_config, stream_mode="updates"):
+                if not isinstance(event, dict):
+                    logger.warning("runner.skipping_non_dict_event", event_type=type(event).__name__, event=repr(event)[:200])
+                    continue
                 node_name: str = next(iter(event))
-                state_update: dict[str, Any] = event[node_name]
-                _last_state.update(state_update)
+                state_update: Any = event[node_name]
+                if not isinstance(state_update, dict):
+                    # This can happen when a node returns a single annotated value
+                    # (e.g. messages with a custom reducer). Convert to dict.
+                    logger.debug("runner.non_dict_update", node=node_name, value_type=type(state_update).__name__)
+                    state_update = {node_name: state_update}
+                    _last_state.update(state_update)
+                    agent_events = self._translate(node_name, state_update)
+                else:
+                    _last_state.update(state_update)
+                    agent_events = self._translate(node_name, state_update)
 
-                agent_events = self._translate(node_name, state_update)
                 for agent_event in agent_events:
                     if self._event_bus:
                         await self._event_bus.publish(
@@ -501,17 +512,17 @@ class AgentRunner:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _translate(node_name: str, state_update: dict[str, Any]) -> list[AgentEvent]:
+    @staticmethod
+    def _translate(node_name: str, state_update: Any) -> list[AgentEvent]:
         """Map a LangGraph state update to zero or more ``AgentEvent`` instances.
 
-        Handles the 5-node production graph:
-        - RouterNode → query classification
-        - PlannerNode → plan created
-        - ExecutorNode → tool call results
-        - ReflectionNode → retry / finalize decision
-        - ResponseNode / finalize → final answer
+        ``state_update`` is normally a dict but may be a list from an Annotated
+        reducer (e.g. messages).  In that case we skip event emission.
         """
         events: list[AgentEvent] = []
+
+        if not isinstance(state_update, dict):
+            return events
 
         # Extract inner node name (handles subgraph namespacing if any)
         inner = node_name.split(":")[-1] if ":" in node_name else node_name
@@ -556,7 +567,6 @@ class AgentRunner:
                         "error": tr.get("error"),
                         "task_id": tr.get("task_id", ""),
                     }))
-            # Also emit for legacy tool_results format
             executor_results = state_update.get("_executor_results", {})
             if executor_results:
                 for task_id, outcome in executor_results.items():

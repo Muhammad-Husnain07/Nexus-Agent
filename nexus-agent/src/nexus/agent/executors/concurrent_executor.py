@@ -123,9 +123,11 @@ class ConcurrentExecutor:
     def __init__(
         self,
         tool_executor: ToolExecutor | None = None,
+        tool_map: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self._executor = tool_executor or ToolExecutor()
         self._settings = get_settings()
+        self._tool_map: dict[str, dict[str, Any]] = tool_map or {}
 
     async def execute(
         self,
@@ -181,6 +183,15 @@ class ConcurrentExecutor:
                             results.failed.append(outcome.task_id)
 
                     results.by_wave.append(wave_dict)
+
+                    # Log errors for debugging
+                    for outcome in wave_outcomes:
+                        if outcome.status != "success":
+                            logger.warning(
+                                "concurrent_executor.task_failed",
+                                task=outcome.task_id, tool=outcome.tool_name,
+                                error=outcome.error,
+                            )
 
                     logger.info(
                         "concurrent_executor.wave_done",
@@ -269,25 +280,29 @@ class ConcurrentExecutor:
             try:
                 start = _time.perf_counter()
 
-                # Resolve tool from registry
-                tool_read = _tool_dict_to_read(task.tool_name)  # simplified
+                # Resolve tool from tool_map or create stub
+                tool_read = self._tool_dict_to_read(task.tool_name)
                 if tool_read is None:
                     return ToolExecutionResult(
                         task_id=task.id,
                         tool_name=task.tool_name,
                         status="error",
-                        error=f"Tool '{task.tool_name}' not found in registry",
+                        error=f"Tool '{task.tool_name}' not found in tool map",
                     )
 
-                result = await asyncio.wait_for(
-                    self._executor.execute(
-                        tool=tool_read,
-                        func_args=resolved_inputs,
-                        context=ExecutionContext(session_id="", agent_run_id=""),
-                        skip_approval=True,
-                    ),
-                    timeout=timeout,
-                )
+                # Use the app's async_session factory for DB persistence
+                from nexus.db import async_session as db_session_factory
+                async with db_session_factory() as db_session:
+                    result = await asyncio.wait_for(
+                        self._executor.execute(
+                            tool=tool_read,
+                            inputs=resolved_inputs,
+                            context=ExecutionContext(session_id="", agent_run_id=""),
+                            session=db_session,
+                            skip_approval=True,
+                        ),
+                        timeout=timeout,
+                    )
 
                 duration = (_time.perf_counter() - start) * 1000
 
@@ -341,38 +356,45 @@ class ConcurrentExecutor:
         )
 
 
-# ============================================================================
-# Helper: Quick tool lookup (simplified)
-# ============================================================================
+    def _tool_dict_to_read(self, tool_name: str) -> Any:
+        """Look up tool metadata — first from tool_map, then fallback to stub."""
+        from nexus.tools.schemas import ToolRead
 
-def _tool_dict_to_read(tool_name: str) -> Any:
-    """Minimal tool lookup — returns a dict with tool metadata.
+        tool_data = self._tool_map.get(tool_name)
+        if tool_data:
+            try:
+                return ToolRead.model_validate(tool_data)
+            except Exception as exc:
+                logger.warning("concurrent_executor.tool_validate_failed",
+                               tool=tool_name, error=str(exc))
+                # fall through to stub
 
-    In production, this queries the ToolRegistry via the DB session.
-    For now, returns a dict with enough fields for ToolExecutor.
-    """
-    from nexus.tools.schemas import ToolRead
-
-    return ToolRead(
-        id="",
-        name=tool_name,
-        description="",
-        purpose="",
-        tool_type="http_api",
-        endpoint_url="",
-        http_method="GET",
-        auth_type="none",
-        auth_ref="",
-        input_schema={},
-        output_schema={},
-        validation_rules={},
-        examples=[],
-        tags=[],
-        category="general",
-        requires_approval=False,
-        risk_level="low",
-        enabled=True,
-    )
+        # Fallback stub — will cause an execution error downstream
+        uuid_val = "00000000-0000-0000-0000-000000000000"
+        now_str = "2026-01-01T00:00:00Z"
+        return ToolRead(
+            id=uuid_val,
+            name=tool_name,
+            description="",
+            purpose="",
+            tool_type="http_api",
+            endpoint_url="",
+            http_method="GET",
+            auth_type="none",
+            auth_ref="",
+            input_schema={},
+            output_schema={},
+            validation_rules={},
+            examples=[],
+            tags=[],
+            category="general",
+            requires_approval=False,
+            risk_level="low",
+            enabled=True,
+            version=1,
+            created_at=now_str,
+            updated_at=now_str,
+        )
 
 
 # Import for type hint

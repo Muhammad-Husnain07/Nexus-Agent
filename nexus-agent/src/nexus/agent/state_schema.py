@@ -628,6 +628,7 @@ class AgentState(TypedDict, total=False):
     _filtered_tools: list[dict[str, Any]] | None
     _preferred_tools: list[str]
     _split_tools: list[str]
+    tool_results: list[dict[str, Any]]
     tool_results_ref: str
     _executor_failed: list[str]
     _executor_results: dict[str, Any]

@@ -231,6 +231,11 @@ async def executor_node(
             "errors": ["No execution plan available — planner did not produce tasks"],
         }
 
+    # Sanitize tasks_data — ensure every item is a dict, not a tuple or other type
+    tasks_data = [
+        t if isinstance(t, dict) else dict(t) for t in tasks_data
+    ]
+
     # Build Task objects for the executor
     from nexus.agent.planners.dag_planner import ExecutionTask
 
@@ -252,7 +257,11 @@ async def executor_node(
         for w in waves_data
     ]
 
-    executor = ConcurrentExecutor(tool_executor=tool_executor)
+    # Build tool map from available_tools for the executor
+    available_tools = state.get("available_tools", [])
+    tool_map = {t["name"]: t for t in available_tools if isinstance(t, dict) and t.get("name")}
+
+    executor = ConcurrentExecutor(tool_executor=tool_executor, tool_map=tool_map)
     settings = get_settings()
 
     results = await executor.execute(
@@ -280,6 +289,7 @@ async def executor_node(
         "_executor_results": {k: {"data": v.data, "status": v.status} for k, v in results.by_task.items()},
         "_executor_failed": results.failed + results.timed_out,
         "_executor_all_success": results.all_successful,
+        "_tool_executed_in_turn": True,
     }
 
 
@@ -359,8 +369,8 @@ async def response_node(
     if not tool_results and not errors:
         return {"final_response": "I processed your request.", "_routing_decision": "finalize"}
 
-    from nexus.agent.nodes import finalize
-    return await finalize.finalize(state, llm, model)
+    from nexus.agent.nodes.finalize import finalize as compose_response
+    return await compose_response(state, llm, model)
 
 
 # ============================================================================
@@ -493,5 +503,4 @@ def build_agent_graph(
 
     return graph.compile(
         checkpointer=_cp,
-        interrupt_before=["ExecutorNode"],
     )
