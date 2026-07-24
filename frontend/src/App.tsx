@@ -16,6 +16,7 @@ const Sessions = lazy(() => import("@/routes/sessions/index"))
 const SessionDetail = lazy(() => import("@/routes/sessions/[id]"))
 const Memory = lazy(() => import("@/routes/memory/index"))
 const Playground = lazy(() => import("@/routes/playground/index"))
+const Settings = lazy(() => import("@/routes/settings"))
 
 function Loading() {
   return <div className="flex items-center justify-center h-screen text-muted-foreground">Loading...</div>
@@ -47,6 +48,7 @@ export default function App() {
                 <Route path="/sessions" element={<Sessions />} />
                 <Route path="/sessions/:id" element={<SessionDetail />} />
                 <Route path="/memory" element={<Memory />} />
+                <Route path="/settings" element={<Settings />} />
                 <Route path="/test" element={<Playground />} />
               </Route>
             </Routes>

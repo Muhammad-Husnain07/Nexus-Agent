@@ -1,6 +1,6 @@
 import { NavLink } from "react-router-dom"
 import { cn } from "@/lib/utils"
-import { LayoutDashboard, MessageSquare, Wrench, FolderOpen, BrainCircuit, Play, X } from "lucide-react"
+import { LayoutDashboard, MessageSquare, Wrench, FolderOpen, BrainCircuit, Play, Settings, X } from "lucide-react"
 
 const items = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -8,6 +8,7 @@ const items = [
   { to: "/tools", label: "Tools", icon: Wrench },
   { to: "/sessions", label: "Sessions", icon: FolderOpen },
   { to: "/memory", label: "Memory", icon: BrainCircuit },
+  { to: "/settings", label: "Settings", icon: Settings },
   { to: "/test", label: "Playground", icon: Play },
 ]
 
