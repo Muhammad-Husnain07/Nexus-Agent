@@ -99,10 +99,26 @@ def _resolve_placeholders(
 
 
 def _deep_get(obj: Any, path: str) -> Any:
-    """Recursively traverse a nested dict using dot-separated path."""
+    """Recursively traverse a nested dict using dot-separated path.
+
+    Handles:
+    - Direct key access: ``obj.latitude``
+    - List first-element access: ``obj.results[0].latitude`` (via ``results`` key)
+    - Nested access: ``obj.results[0].latitude`` → looks for ``results`` list,
+      picks first element, then gets ``latitude``.
+    """
     for part in path.split("."):
         if isinstance(obj, dict):
-            obj = obj.get(part, "")
+            if part in obj:
+                obj = obj[part]
+            elif "results" in obj and isinstance(obj["results"], list) and len(obj["results"]) > 0:
+                first = obj["results"][0]
+                obj = first.get(part, "") if isinstance(first, dict) else ""
+            else:
+                return ""
+        elif isinstance(obj, list) and len(obj) > 0:
+            first = obj[0]
+            obj = first.get(part, "") if isinstance(first, dict) else ""
         else:
             return ""
     return obj
