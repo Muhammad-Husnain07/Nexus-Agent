@@ -137,7 +137,6 @@ _EPHEMERAL_FIELDS: list[str] = [
     "_active_speculations",
     "_pending_splits",
     "_dag_generation",
-    "_split_tools",
 ]
 
 RESPONSE_TYPES = Literal["tool", "greeting", "meta", "memory_query"]
