@@ -93,6 +93,7 @@ Rules:
    - get_geocoding outputs latitude/longitude → get_air_quality needs latitude/longitude
 4. If a tool needs coordinates but the user only provided a city name, include get_geocoding as a prerequisite.
 5. If a task has no data dependencies, it can run in parallel with other independent tasks.
+6. **IMPORTANT: Include ALL relevant optional parameters.** For weather queries, always set ``current_weather`` to ``true`` so the API returns actual temperature and conditions. If you are unsure whether a parameter is needed, include it.
 
 Return JSON:
 ```json
@@ -101,7 +102,7 @@ Return JSON:
     {{
       "id": "task_1",
       "tool_name": "get_geocoding",
-      "inputs": {{"name": "Lahore"}},
+      "inputs": {{"name": "Islamabad"}},
       "description": "Geocode city name to coordinates"
     }},
     {{
@@ -109,7 +110,7 @@ Return JSON:
       "tool_name": "get_weather",
       "inputs": {{"latitude": "${{task_1.result.latitude}}", "longitude": "${{task_1.result.longitude}}", "current_weather": true}},
       "depends_on": ["task_1"],
-      "description": "Get current weather for coordinates"
+      "description": "Get current temperature and weather conditions for coordinates"
     }}
   ]
 }}
