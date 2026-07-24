@@ -287,52 +287,21 @@ class AgentSettings(BaseModel):
 
     Fields:
         max_iterations: Maximum agent iterations per conversation turn.
-        max_plan_steps: Maximum planning steps before execution.
         context_window_tokens: Maximum context window in tokens.
         summarization_threshold_tokens: Token count triggering summarization.
-        hitl_default: Require human approval for tool calls by default.
-        hitl_tool_patterns: Regex patterns for tools requiring HITL approval.
-        approval_timeout_hours: Auto-reject pending approvals after this many hours.
         adaptive_reflection: Adaptive reflection and uncertainty settings.
     """
 
     max_iterations: int = Field(default=25, ge=1, description="Max iterations per turn")
-    max_plan_steps: int = Field(default=10, ge=1, description="Max planning steps")
     context_window_tokens: int = Field(default=128000, ge=1, description="Context window in tokens")
     summarization_threshold_tokens: int = Field(
         default=64000, ge=1, description="Summarization threshold in tokens"
-    )
-    hitl_default: bool = Field(default=True, description="Require HITL approval by default")
-    hitl_tool_patterns: list[str] = Field(
-        default_factory=list,
-        description="Regex patterns for HITL-required tools",
-    )
-    approval_timeout_hours: int = Field(
-        default=24,
-        ge=1,
-        description="Auto-reject pending approvals after this many hours",
     )
     run_lock_ttl_s: int = Field(
         default=600,
         ge=30,
         le=3600,
         description="TTL in seconds for the per-session run lock (heartbeat renews every ttl/3)",
-    )
-    max_sub_iterations: int = Field(
-        default=5,
-        ge=1,
-        le=50,
-        description="Max ReAct sub-iterations per step (internal micro-loop)",
-    )
-    max_reflection_rounds: int = Field(
-        default=3,
-        ge=0,
-        le=20,
-        description="Max reflection iterations (0 = disabled)",
-    )
-    skip_preview: bool = Field(
-        default=False,
-        description="Skip the present_preview node (routes directly to finalize)",
     )
     adaptive_reflection: AdaptiveReflectionSettings = Field(
         default_factory=AdaptiveReflectionSettings,

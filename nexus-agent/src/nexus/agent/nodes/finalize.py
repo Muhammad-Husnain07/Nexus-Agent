@@ -219,7 +219,6 @@ async def finalize(
                 _state_snapshot = dict(state)
                 _state_snapshot.pop("messages", None)
                 _state_snapshot.pop("dag_tasks", None)
-                _state_snapshot.pop("dag_results", None)
                 _state_snapshot.pop("available_tools", None)
                 _state_snapshot.pop("tool_results", None)
                 # Test connection with ping before xadd

@@ -349,7 +349,7 @@ class AgentRunner:
 
         span = _tracer.start_span("agent.invoke")
         span.set_attribute("session_id", sid)
-        span.set_attribute("model", initial_state.get("_model", ""))
+        span.set_attribute("model", _settings.llm.default_model)
 
         try:
             async for event in graph.astream(initial_state, run_config, stream_mode="updates"):
