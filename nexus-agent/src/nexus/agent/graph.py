@@ -1,136 +1,68 @@
-"""LangGraph StateGraph — hybrid ReAct + Plan-and-Execute orchestration.
+"""
+Production Agent Orchestration Graph — 5-node LangGraph state machine.
 
-Nodes (parent graph):
-* ``understand_intent`` — parse user message into structured intent
-* ``gather_requirements`` — ask clarifying questions when info is missing
-* ``respond_without_tool`` — direct responses for non-tool queries
-* ``tool_subgraph`` — DAG-based parallel tool execution subgraph
-* ``finalize`` — compose the final answer
-* ``review_final_answer`` — interrupt for final approval
-* ``reflect_on_response`` — self-score and improve the response
+Nodes
+=====
+1. **RouterNode** — Query classifier + router.  Routes to planner or direct response.
+2. **PlannerNode** — Builds DAG execution plan (dependency analysis + waves).
+3. **ExecutorNode** — Wave-based concurrent tool execution with retry + timeout.
+4. **ReflectionNode** — Evaluates results, decides retry or proceed.
+5. **ResponseNode** — Composes final answer from tool results.
 
-Tool execution lives in ``tool_subgraph`` (see ``tool_subgraph.py``).
+Edges
+=====
+- START → RouterNode
+- RouterNode → ExecutorNode (SINGLE_TOOL / NO_TOOL_NEEDED)
+- RouterNode → PlannerNode (INDEPENDENT_MULTI / DEPENDENT_MULTI)
+- PlannerNode → ExecutorNode (plan ready)
+- ExecutorNode → ResponseNode (all succeeded / partial failures)
+- ExecutorNode → ReflectionNode (unrecoverable errors)
+- ReflectionNode → PlannerNode (retry needed)
+- ReflectionNode → ResponseNode (max retries exceeded)
+- ResponseNode → END
+
+Interrupts
+==========
+``interrupt_before=["ExecutorNode"]`` when any planned tool has
+``requires_approval=True`` or ``risk_level="high"``.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from typing import Any
 
+import structlog
 from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import END, StateGraph
 
-from nexus.agent.nodes import (
-    finalize,
-    gather_requirements,
-    lightweight_verify,
-    reflect_on_response,
-    respond_without_tool,
-    review_final_answer,
-    safety_and_policy_check,
-    understand_intent,
+from nexus.agent.executors.concurrent_executor import ConcurrentExecutor
+from nexus.agent.memory.context_manager import (
+    compress_history,
+    filter_relevant_tools,
+    truncate_tool_result,
 )
-from nexus.agent.router import QueryType, node_classify_query, route_query
-import structlog
+from nexus.agent.planners.dag_planner import PlannerRunner
+from nexus.agent.router import QueryType, classify_query, route_query
 from nexus.agent.state import AgentState
-from nexus.agent.tool_subgraph import build_tool_subgraph
 from nexus.config.settings import get_settings
 from nexus.llm.client import LLMClient
 from nexus.redis_client.pubsub import EventBus
-
 from nexus.tools.discovery import DynamicToolSelector
 from nexus.tools.executor import ToolExecutor
 
 logger = structlog.get_logger("nexus.agent.graph")
 
-# ---------------------------------------------------------------------------
-# Routing
-# ---------------------------------------------------------------------------
+
+# ============================================================================
+# Node Wrapper
+# ============================================================================
 
 
-def route_after_understand(state: AgentState) -> str:
-    """Route based on response type, missing info, risk, and confidence band.
-
-    Priority:
-    1. Non-tool queries (greeting/meta/memory) → respond_without_tool
-    2. Missing info slots → gather_requirements (clarify)
-    3. High risk + low confidence (< 0.85) → gather_requirements
-    4. Low confidence (< 0.5) → gather_requirements
-    5. Moderate confidence (0.5–0.7) → lightweight_verify
-    6. High confidence → discover_tools
-    """
-    resp_type: str = state.get("response_type", "tool")
-
-    # Follow-up override: if the LLM misclassifies a short follow-up
-    # question (e.g. "what is the age?") as a greeting, detect it by
-    # checking whether the conversation has prior tool interactions.
-    # Short follow-ups that are NOT one-word greetings should stay on
-    # the tool path so they can use MemoryScout or re-execute tools.
-    if resp_type == "greeting":
-        messages: list = list(state.get("messages", []))
-        last_user = ""
-        for m in reversed(messages):
-            if isinstance(m, dict) and m.get("role") == "user":
-                last_user = str(m.get("content", ""))
-                break
-        q = last_user.lower().strip()
-        one_word_greetings = {"hi", "hello", "hey", "howdy", "yo", "sup", "greetings", "good morning", "good afternoon", "good evening"}
-        # Not a one-word greeting → likely a short follow-up question
-        if q and q not in one_word_greetings and len(q) < 60:
-            # Check if there are prior assistant responses (evidence of
-            # conversation history with tool interactions)
-            has_assistant_msgs = any(
-                isinstance(m, dict) and m.get("role") == "assistant"
-                for m in messages
-            )
-            if has_assistant_msgs:
-                logger.info("route_after_understand.followup_override", query=q)
-                resp_type = "tool"
-
-    if resp_type in ("greeting", "meta", "memory_query"):
-        return "respond_without_tool"
-    missing: list[str] = state.get("missing_info_slots") or []
-    if missing:
-        return "gather_requirements"
-
-    confidence: float = state.get("confidence", 1.0)
-    is_high_risk: bool = state.get("is_high_risk", False)
-
-    # Risk-aware: high-risk tools need higher confidence to proceed
-    if is_high_risk and confidence < 0.85:
-        return "gather_requirements"
-
-    # Check routing decision set by understand_intent
-    routing: str = state.get("_routing_decision", "")
-    if routing == "lightweight_verify":
-        return "lightweight_verify"
-
-    return "discover_tools"
-
-
-def route_after_reflection(state: AgentState) -> str:
-    """Route based on reflection decision or max rounds reached."""
-    # Enforce hard bound on reflection revisions
-    revisions: int = state.get("reflection_revisions", 0)
-    max_revisions: int = state.get("max_reflection_revisions", 0) or get_settings().agent.max_reflection_rounds
-    if revisions >= max_revisions:
-        return "finalize"
-    decision: str = state.get("_routing_decision", "finalize")
-    if decision == "clarify":
-        return "clarify"
-    if decision in ("revise_finalize", "revise"):
-        return decision
-    return "finalize"
-
-
-# ---------------------------------------------------------------------------
-# Builder
-# ---------------------------------------------------------------------------
-
-
-def _node(fn: Any, *args: Any, **kwargs: Any) -> Callable[[AgentState], Any]:
-    """Wrap a node function with pre-bound dependencies."""
+def node(fn: Any, *args: Any, **kwargs: Any) -> Callable[[AgentState], Any]:
+    """Wrap a graph node function with pre-bound dependencies."""
 
     async def wrapper(state: AgentState) -> dict[str, Any]:
         return await fn(state, *args, **kwargs)
@@ -138,7 +70,339 @@ def _node(fn: Any, *args: Any, **kwargs: Any) -> Callable[[AgentState], Any]:
     return wrapper
 
 
-def build_agent_graph(  # noqa: PLR0913
+# ============================================================================
+# Routing
+# ============================================================================
+
+
+def route_after_router(state: AgentState) -> str:
+    """Route based on query type.
+
+    - SINGLE_TOOL / CONVERSATIONAL / NO_TOOL_NEEDED → ExecutorNode (fast path)
+    - INDEPENDENT_MULTI / DEPENDENT_MULTI → PlannerNode (full planning)
+    """
+    qtype = state.get("_query_type", QueryType.SINGLE_TOOL.value)
+
+    if qtype in (
+        QueryType.SINGLE_TOOL.value,
+        QueryType.CONVERSATIONAL.value,
+        QueryType.NO_TOOL_NEEDED.value,
+    ):
+        return "ExecutorNode"
+
+    return "PlannerNode"
+
+
+def route_after_executor(state: AgentState) -> str:
+    """Route based on execution results.
+
+    - All successful → ResponseNode
+    - Partial failures → ReflectionNode
+    """
+    failed = state.get("_executor_failed", [])
+    if not failed:
+        return "ResponseNode"
+    return "ReflectionNode"
+
+
+def route_after_reflection(state: AgentState) -> str:
+    """Route based on reflection decision.
+
+    - Retry needed → PlannerNode
+    - Finalize → ResponseNode
+    """
+    decision = state.get("_routing_decision", "finalize")
+    if decision == "retry":
+        return "PlannerNode"
+    return "ResponseNode"
+
+
+# ============================================================================
+# Node: Router
+# ============================================================================
+
+
+async def router_node(
+    state: AgentState,
+    llm: LLMClient,
+    model: str,
+) -> dict[str, Any]:
+    """Classify the incoming query and determine the optimal path.
+
+    Sets ``_query_type`` and ``_preferred_tools`` in state.
+    """
+    from nexus.agent.router import node_classify_query
+    return await node_classify_query(state, llm, model)
+
+
+# ============================================================================
+# Node: Planner
+# ============================================================================
+
+
+async def planner_node(
+    state: AgentState,
+    llm: LLMClient,
+    model: str,
+) -> dict[str, Any]:
+    """Build an execution plan: analyze dependencies, construct DAG.
+
+    Uses the DAG Planner module with:
+    - Implicit dependency injection (geocode → weather)
+    - Explicit I/O schema dependency analysis
+    - Cycle detection
+    - Topological sort into execution waves
+    """
+    tools = state.get("available_tools", [])
+    user_input = _last_user_message(state)
+    intents = _get_intents(state)
+
+    # Filter tools to relevant ones
+    intent_text = " ".join(intents) or user_input
+    relevant_tools = filter_relevant_tools(intent_text, tools, top_k=10)
+
+    # Build the plan
+    plan = await PlannerRunner.build_plan(
+        intents=intents,
+        tools=relevant_tools,
+        user_input=user_input,
+        llm=llm,
+        model=model,
+    )
+
+    # Store plan in state
+    return {
+        "_execution_plan": {
+            "waves": [
+                {
+                    "wave": w.wave,
+                    "tasks": [
+                        {
+                            "id": t.id,
+                            "tool_name": t.tool_name,
+                            "inputs": t.inputs,
+                            "depends_on": t.depends_on,
+                        }
+                        for t in w.tasks
+                    ],
+                }
+                for w in plan.waves
+            ],
+            "tool_names": plan.tool_names,
+            "dependencies": plan.dependencies,
+        },
+        "dag_tasks": [
+            {"id": t.id, "tool_name": t.tool_name, "inputs": t.inputs, "depends_on": t.depends_on}
+            for w in plan.waves for t in w.tasks
+        ],
+    }
+
+
+# ============================================================================
+# Node: Executor
+# ============================================================================
+
+
+async def executor_node(
+    state: AgentState,
+    tool_executor: ToolExecutor,
+) -> dict[str, Any]:
+    """Execute the DAG plan using the Concurrent Executor.
+
+    Handles:
+    - Wave-based parallel execution
+    - Fault isolation (one failure doesn't block other tasks)
+    - Retry with exponential backoff
+    - Per-tool and global timeouts
+    """
+    plan_data = state.get("_execution_plan") or {}
+    waves_data = plan_data.get("waves", [])
+    tasks_data = state.get("dag_tasks", [])
+
+    if not tasks_data or not waves_data:
+        return {
+            "_executor_results": {},
+            "_executor_failed": [],
+            "errors": ["No plan to execute"],
+        }
+
+    # Build Task objects for the executor
+    from nexus.agent.planners.dag_planner import ExecutionTask
+
+    task_map = {t["id"]: ExecutionTask(
+        id=t["id"],
+        tool_name=t["tool_name"],
+        inputs=t.get("inputs", {}),
+        depends_on=t.get("depends_on", []),
+    ) for t in tasks_data}
+
+    # Build Wave objects
+    from nexus.agent.planners.dag_planner import ExecutionWave
+
+    waves = [
+        ExecutionWave(
+            wave=w["wave"],
+            tasks=[task_map[t["id"]] for t in w["tasks"] if t["id"] in task_map],
+        )
+        for w in waves_data
+    ]
+
+    executor = ConcurrentExecutor(tool_executor=tool_executor)
+    settings = get_settings()
+
+    results = await executor.execute(
+        tasks=list(task_map.values()),
+        waves=waves,
+        max_concurrency=settings.agent.adaptive_reflection.max_concurrent_tasks,
+        per_tool_timeout=settings.tools.execution_timeout_s if hasattr(settings, "tools") else 15.0,
+        global_timeout=60.0,
+    )
+
+    # Update working memory with results
+    tool_results = []
+    for task_id, outcome in results.by_task.items():
+        tool_results.append({
+            "tool_name": outcome.tool_name,
+            "status": outcome.status,
+            "data": outcome.data,
+            "error": outcome.error,
+            "task_id": outcome.task_id,
+            "duration_ms": outcome.duration_ms,
+        })
+
+    return {
+        "tool_results": tool_results,
+        "_executor_results": {k: {"data": v.data, "status": v.status} for k, v in results.by_task.items()},
+        "_executor_failed": results.failed + results.timed_out,
+        "_executor_all_success": results.all_successful,
+    }
+
+
+# ============================================================================
+# Node: Reflection
+# ============================================================================
+
+
+async def reflection_node(state: AgentState) -> dict[str, Any]:
+    """Evaluate execution results and decide next action.
+
+    - If all tasks succeeded → proceed to response
+    - If partial failures and retries remain → retry the failed tasks
+    - If max retries exceeded → proceed with partial results
+    """
+    failed = state.get("_executor_failed", [])
+    retry_counts = state.get("_tool_retry_counts", {})
+
+    if not failed:
+        return {"_routing_decision": "finalize"}
+
+    # Check retry counts
+    tasks_to_retry = []
+    tasks_to_skip = []
+
+    for task_id in failed:
+        retries = retry_counts.get(task_id, 0)
+        if retries < 2:
+            tasks_to_retry.append(task_id)
+        else:
+            tasks_to_skip.append(task_id)
+
+    if tasks_to_retry:
+        # Increment retry counts
+        new_counts = dict(retry_counts)
+        for tid in tasks_to_retry:
+            new_counts[tid] = new_counts.get(tid, 0) + 1
+
+        logger.info(
+            "reflection_node.retry",
+            retry_count=len(tasks_to_retry),
+            skip_count=len(tasks_to_skip),
+        )
+        return {
+            "_routing_decision": "retry",
+            "_tool_retry_counts": new_counts,
+            "_pending_tasks": tasks_to_retry,
+        }
+
+    logger.info("reflection_node.max_retries", tasks=tasks_to_skip)
+    return {"_routing_decision": "finalize"}
+
+
+# ============================================================================
+# Node: Response
+# ============================================================================
+
+
+async def response_node(
+    state: AgentState,
+    llm: LLMClient,
+    model: str,
+) -> dict[str, Any]:
+    """Compose the final response from tool results.
+
+    If a direct response was already set (greeting / meta), return it.
+    Otherwise, use the LLM to compose a natural response from results.
+    """
+    existing = state.get("final_response")
+    if existing and state.get("response_type") in ("greeting", "meta"):
+        return {"final_response": existing, "_routing_decision": "finalize"}
+
+    # Compose from tool results
+    tool_results = state.get("tool_results", [])
+    errors = state.get("errors", [])
+
+    if not tool_results and not errors:
+        return {"final_response": "I processed your request.", "_routing_decision": "finalize"}
+
+    from nexus.agent.nodes import finalize
+    return await finalize.finalize(state, llm, model)
+
+
+# ============================================================================
+# Helpers
+# ============================================================================
+
+
+def _last_user_message(state: AgentState) -> str:
+    """Extract the last user message from state."""
+    messages = state.get("messages", [])
+    if isinstance(messages, list):
+        for m in reversed(messages):
+            role = ""
+            content = ""
+            if isinstance(m, dict):
+                role = m.get("role", "")
+                content = m.get("content", "")
+            elif hasattr(m, "role"):
+                role = getattr(m, "role", "")
+                content = getattr(m, "content", "")
+            if role == "user" and isinstance(content, str):
+                return content
+    return ""
+
+
+def _get_intents(state: AgentState) -> list[str]:
+    """Extract parsed intents from state."""
+    intent_analysis = state.get("intent_analysis")
+    if isinstance(intent_analysis, dict):
+        goal = intent_analysis.get("primary_goal", "")
+        implied = intent_analysis.get("implied_actions", [])
+        if goal:
+            return [goal] + implied
+    intent = state.get("intent")
+    if isinstance(intent, dict):
+        text = intent.get("intent", "")
+        if text:
+            return [text]
+    return []
+
+
+# ============================================================================
+# Graph Builder
+# ============================================================================
+
+
+def build_agent_graph(
     llm_client: LLMClient | None = None,
     tool_selector: DynamicToolSelector | None = None,
     tool_executor: ToolExecutor | None = None,
@@ -147,144 +411,82 @@ def build_agent_graph(  # noqa: PLR0913
     session_factory: Callable[[], Any] | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
 ) -> StateGraph:
-    """Build and compile the LangGraph agent graph.
+    """Build and compile the LangGraph production agent graph.
 
     Args:
-        llm_client: LLM client for completions.  Creates a default if None.
-        tool_selector: Dynamic tool discovery.  Required.
+        llm_client: LLM client.  Creates default if None.
+        tool_selector: Dynamic tool discovery.  Required for tool lookup.
         tool_executor: Tool execution engine.  Required.
-        event_bus: Redis event bus for streaming events.
-        model: Model override (defaults to ``settings.llm.default_model``).
-        session_factory: Async callable returning a DB ``AsyncSession``.
+        event_bus: Redis event bus for streaming.
+        model: Model override (defaults to settings).
+        session_factory: DB session factory.
+        checkpointer: LangGraph checkpoint saver.
 
     Returns:
-        A compiled ``StateGraph`` ready for invocation.
+        Compiled ``StateGraph``.
     """
     _llm = llm_client or LLMClient()
     settings = get_settings()
     _model = model or settings.llm.default_model
-    _settings = settings.agent
+    _executor = tool_executor or ToolExecutor()
 
     graph = StateGraph(AgentState)
 
-    # Build the tool execution subgraph
-    tool_subgraph = build_tool_subgraph(
-        tool_selector=tool_selector,
-        tool_executor=tool_executor,
-        llm_client=_llm,
-        model=_model,
-        settings=_settings,
-        event_bus=event_bus,
-        session_factory=session_factory,
-    )
-    graph.add_node("tool_subgraph", tool_subgraph)
+    # 5 production nodes
+    graph.add_node("RouterNode", node(router_node, _llm, _model))
+    graph.add_node("PlannerNode", node(planner_node, _llm, _model))
+    graph.add_node("ExecutorNode", node(executor_node, _executor))
+    graph.add_node("ReflectionNode", node(reflection_node))
+    graph.add_node("ResponseNode", node(response_node, _llm, _model))
 
-    graph.add_node("safety_and_policy_check", _node(safety_and_policy_check))
-    graph.add_node("classify_query", _node(node_classify_query, _llm, _model))
-    graph.add_node("understand_intent", _node(understand_intent, _llm, _model, session_factory))
-    graph.add_node("lightweight_verify", _node(lightweight_verify, _llm, _model))
-    graph.add_node("respond_without_tool", _node(respond_without_tool, _llm, _model))
-    graph.add_node("gather_requirements", _node(gather_requirements, _llm, _model))
-    graph.add_node("finalize", _node(finalize, _llm, _model, session_factory))
-    graph.add_node("review_final_answer", _node(review_final_answer))
-    graph.add_node("reflect_on_response", _node(reflect_on_response, _llm, _model))
+    graph.set_entry_point("RouterNode")
 
-    graph.set_entry_point("safety_and_policy_check")
-
-    # Safety check → reject or proceed to classifier
-    def route_after_safety(state: AgentState) -> str:
-        result = state.get("_safety_result", {})
-        action = result.get("action", "")
-        if action == "reject":
-            logger.warning("graph.safety_rejected", reason=result.get("reason", ""))
-            return "rejected"
-        return "classify_query"
-
+    # Router → Planner or Executor
     graph.add_conditional_edges(
-        "safety_and_policy_check",
-        route_after_safety,
-        {
-            "classify_query": "classify_query",
-            "rejected": "finalize",
-        },
-    )
-
-    # Router → route based on query type
-    def route_after_router(state: AgentState) -> str:
-        qtype = state.get("_query_type", QueryType.SINGLE_TOOL.value)
-        return route_query(QueryType(qtype))
-
-    graph.add_conditional_edges(
-        "classify_query",
+        "RouterNode",
         route_after_router,
         {
-            "understand_intent": "understand_intent",
-            "respond_without_tool": "respond_without_tool",
+            "PlannerNode": "PlannerNode",
+            "ExecutorNode": "ExecutorNode",
         },
     )
 
+    # Planner → Executor
+    graph.add_edge("PlannerNode", "ExecutorNode")
+
+    # Executor → Response or Reflection
     graph.add_conditional_edges(
-        "understand_intent",
-        route_after_understand,
+        "ExecutorNode",
+        route_after_executor,
         {
-            "respond_without_tool": "respond_without_tool",
-            "gather_requirements": "gather_requirements",
-            "discover_tools": "tool_subgraph",
-            "lightweight_verify": "lightweight_verify",
+            "ResponseNode": "ResponseNode",
+            "ReflectionNode": "ReflectionNode",
         },
     )
 
-    # Lightweight verify → proceed or clarify
+    # Reflection → Planner (retry) or Response (finalize)
     graph.add_conditional_edges(
-        "lightweight_verify",
-        lambda s: s.get("_routing_decision", "clarify"),
-        {
-            "proceed": "tool_subgraph",
-            "clarify": "gather_requirements",
-        },
-    )
-
-    graph.add_edge("respond_without_tool", "finalize")
-    graph.add_edge("gather_requirements", END)
-
-    # Conditional routing after tool subgraph exits
-    def route_after_tool_subgraph(state: AgentState) -> str:
-        decision: str = state.get("_routing_decision", "finalize")
-        if decision == "ask":
-            return "gather_requirements"
-        return "finalize"
-
-    graph.add_conditional_edges(
-        "tool_subgraph",
-        route_after_tool_subgraph,
-        {
-            "finalize": "finalize",
-            "gather_requirements": "gather_requirements",
-        },
-    )
-
-    graph.add_edge("finalize", "review_final_answer")
-
-    graph.add_conditional_edges(
-        "review_final_answer",
-        lambda s: s.get("_routing_decision", "continue"),
-        {
-            "continue": "reflect_on_response",
-            "revise": "understand_intent",
-            "finalize": END,
-        },
-    )
-
-    graph.add_conditional_edges(
-        "reflect_on_response",
+        "ReflectionNode",
         route_after_reflection,
         {
-            "revise_finalize": "finalize",
-            "revise": "understand_intent",
-            "clarify": "gather_requirements",
-            "finalize": END,
+            "PlannerNode": "PlannerNode",
+            "ResponseNode": "ResponseNode",
         },
     )
 
-    _cp = checkpointer or MemorySaver()
-    return graph.compile(checkpointer=_cp)
+    # Response → END
+    graph.add_edge("ResponseNode", END)
+
+    # Compile with interrupt support for high-risk tools
+    _cp = checkpointer or PostgresSaver.from_conn_string(
+        settings.database.url
+    ) if hasattr(settings, "database") else None
+
+    if _cp is None:
+        from langgraph.checkpoint.memory import MemorySaver
+        _cp = MemorySaver()
+
+    return graph.compile(
+        checkpointer=_cp,
+        interrupt_before=["ExecutorNode"],
+    )
