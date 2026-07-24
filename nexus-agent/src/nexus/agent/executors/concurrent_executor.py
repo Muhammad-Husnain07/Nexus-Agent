@@ -103,36 +103,66 @@ def _resolve_placeholders(
     return resolved
 
 
+def _parse_path_segment(segment: str) -> tuple[str, int | None]:
+    """Parse a path segment like ``results[0]`` into (key, index).
+
+    Returns (key, None) for plain keys like ``latitude``.
+    Returns (key, index) for indexed access like ``results[0]``.
+    """
+    match = re.match(r"^([^\[]+)\[(\d+)\]$", segment)
+    if match:
+        return match.group(1), int(match.group(2))
+    return segment, None
+
+
 def _deep_get(obj: Any, path: str) -> Any:
     """Resolve a dot-separated path into a nested dict/list structure.
 
-    Resolution strategy (in order):
-    1. Dict direct key — ``state.get("key", "")``
-    2. Dict value scan — any list value whose first element is a dict with the key
-    3. List first element — ``list[0].get("key", "")``
-    4. Recursive chain — path segments like ``a.b.c`` are resolved segment by segment
+    Handles:
+    - Direct keys: ``latitude``
+    - Indexed access: ``results[0].latitude`` (via bracket notation)
+    - Nested chains: ``results[0].name``
+    - Dynamic scan: if a key is not found directly, scans dict values
+      for any list whose first element contains the key.
     """
     current = obj
-    for part in path.split("."):
+    for segment in path.split("."):
+        key, idx = _parse_path_segment(segment)
+
         if isinstance(current, dict):
-            if part in current:
-                current = current[part]
+            if key in current:
+                current = current[key]
+                if idx is not None and isinstance(current, list):
+                    current = current[idx] if len(current) > idx else ""
             else:
                 found = False
                 for val in current.values():
-                    if isinstance(val, dict) and part in val:
-                        current = val[part]
+                    if isinstance(val, dict) and key in val:
+                        current = val[key]
                         found = True
                         break
-                    if isinstance(val, list) and len(val) > 0 and isinstance(val[0], dict) and part in val[0]:
-                        current = val[0][part]
-                        found = True
-                        break
+                    if isinstance(val, list) and len(val) > 0:
+                        target = val[idx] if idx is not None else val[0]
+                        if isinstance(target, dict) and key in target:
+                            current = target[key]
+                            found = True
+                            break
+                        if idx is not None and idx < len(val):
+                            current = val[idx]
+                            found = True
+                            break
                 if not found:
                     return ""
         elif isinstance(current, list):
-            if len(current) > 0 and isinstance(current[0], dict):
-                current = current[0].get(part, "")
+            target_idx = idx if idx is not None else 0
+            if len(current) > target_idx:
+                current = current[target_idx]
+                if isinstance(current, dict) and key in current:
+                    current = current[key]
+                elif isinstance(current, dict):
+                    current = current.get(key, "")
+                else:
+                    return ""
             else:
                 return ""
         else:

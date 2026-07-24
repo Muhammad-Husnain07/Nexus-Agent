@@ -468,11 +468,24 @@ class ToolExecutor:
         """Perform a single outbound HTTP API call via httpx — no code execution."""
         method = tool.http_method.lower()
 
+        # Resolve URL template placeholders — e.g. {id} → inputs["id"]
+        url = tool.endpoint_url
+        url_params: dict[str, Any] = dict(inputs)
+        if "{" in url:
+            import re as _re
+            resolved = url
+            for match in _re.finditer(r"\{(\w+)\}", url):
+                param = match.group(1)
+                if param in inputs:
+                    resolved = resolved.replace(match.group(0), str(inputs[param]))
+                    url_params.pop(param, None)
+            url = resolved
+
         if method == "get":
-            resp = await self._client.get(tool.endpoint_url, params=inputs, headers=headers)
+            resp = await self._client.get(url, params=url_params, headers=headers)
         else:
             resp = await self._client.request(
-                method, tool.endpoint_url, json=inputs, headers=headers
+                method, url, json=url_params, headers=headers
             )
 
         resp.raise_for_status()
