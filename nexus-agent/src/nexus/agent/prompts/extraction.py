@@ -7,10 +7,14 @@ EXTRACTION_PROMPT_V1 = """You are an Entity Extractor for a conversational AI as
 
 Available intents: {intents}
 
+For each intent, here are the expected parameter names:
+{intent_details}
+
 Rules:
 1. Identify the single most likely intent from the list above.
    - If NO intent matches well, set intent to "unknown" with low confidence.
-2. Extract entities (parameters) relevant to that intent.
+2. Extract entities (parameters) relevant to that intent. Use the EXACT parameter names listed above.
+   - Example: if the intent is ``get_pokemon`` and the parameter is ``name``, extract as ``"name": "Pikachu"``.
 3. Assign a confidence score (0.0 to 1.0) for the overall intent and per-entity.
 4. DO NOT validate if fields are missing. Just extract what's present.
 5. DO NOT plan tools or execution.

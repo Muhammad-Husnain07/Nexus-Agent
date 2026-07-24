@@ -44,11 +44,23 @@ async def extraction_node(
     registry = get_registry()
     available_intents = registry.get_intents()
 
+    # Build intent details with parameter names (keep compact for token budget)
+    intent_details_lines = []
+    for intent_name in available_intents:
+        schema = registry.get_schema(intent_name)
+        if schema:
+            all_params = schema.required_fields + schema.optional_fields
+            intent_details_lines.append(
+                f"  - {intent_name}: params={','.join(all_params)}" if all_params else f"  - {intent_name}: params=none"
+            )
+    intent_details = "\n".join(intent_details_lines[:20]) if intent_details_lines else "(none)"
+
     # Render extraction prompt
     system_prompt = prompt_manager.render(
         "extraction",
         version="1.0",
-        intents=", ".join(available_intents) if available_intents else "(none available)",
+        intents=", ".join(available_intents[:20]) if available_intents else "(none available)",
+        intent_details=intent_details,
     )
 
     response = await llm.complete(
@@ -70,7 +82,16 @@ async def extraction_node(
         parsed = json.loads(content)
     except json.JSONDecodeError:
         logger.warning("extraction.parse_failed", content=content[:200])
-        parsed = {"intent": "unknown", "entities": {}, "confidence": 0.0}
+        # Fallback: simple heuristic extraction from the raw message
+        q_lower = last_message.lower()
+        # Check for common tool keywords
+        for intent_name in available_intents:
+            keywords = intent_name.replace("_", " ").lower()
+            if keywords in q_lower:
+                parsed = {"intent": intent_name, "entities": {}, "confidence": 0.6}
+                break
+        else:
+            parsed = {"intent": "unknown", "entities": {}, "confidence": 0.0}
 
     intent = parsed.get("intent", "unknown")
     entities = parsed.get("entities", {})

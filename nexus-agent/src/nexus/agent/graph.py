@@ -93,6 +93,11 @@ def route_after_router(state: AgentState) -> str:
     if qtype == QueryType.NO_TOOL_NEEDED.value:
         return "ResponseNode"
 
+    # Multi-intent queries bypass extraction — planner handles them directly
+    if qtype in (QueryType.INDEPENDENT_MULTI.value, QueryType.DEPENDENT_MULTI.value):
+        return "PlannerNode"
+
+    # Single-tool queries go through extraction for parameter extraction
     return "ExtractionNode"
 
 
@@ -485,6 +490,7 @@ def build_agent_graph(
         route_after_router,
         {
             "ExtractionNode": "ExtractionNode",
+            "PlannerNode": "PlannerNode",
             "ResponseNode": "ResponseNode",
         },
     )
