@@ -51,7 +51,7 @@ export default function ToolNewPage() {
   if (isEdit && toolLoading) return <div className="flex items-center justify-center py-16"><div className="space-y-4 w-full max-w-md">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-20 w-full rounded-xl" />)}</div></div>
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
+    <div className="space-y-6">
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="icon" onClick={() => navigate("/tools")}><ArrowLeft size={18} /></Button>
         <div className="p-2 rounded-xl bg-primary/10"><Wrench size={18} className="text-primary" /></div>

@@ -20,7 +20,7 @@ export default function SessionDetailPage() {
   const messages = messagesData?.items?.filter((m: any) => m.role === "user" || m.role === "assistant") || []
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
+    <div className="space-y-6">
       {/* Header */}
       <div className="flex items-start gap-4">
         <Button variant="ghost" size="icon" className="mt-1" onClick={() => navigate("/sessions")}><ArrowLeft size={18} /></Button>

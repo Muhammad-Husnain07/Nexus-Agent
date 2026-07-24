@@ -28,7 +28,7 @@ export default function ToolDetailPage() {
   const [testLoading, setTestLoading] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
 
-  if (isLoading) return <div className="flex items-center justify-center py-16"><div className="space-y-4 w-full max-w-2xl">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-24 w-full rounded-xl" />)}</div></div>
+  if (isLoading) return <div className="space-y-4">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-24 w-full rounded-xl" />)}</div>
   if (!tool) return <div className="text-center py-16 text-muted-foreground"><Wrench size={48} className="mx-auto mb-4 opacity-30" /><p className="text-lg">Tool not found</p><Button variant="outline" className="mt-4" onClick={() => navigate("/tools")}>Back to Tools</Button></div>
 
   const handleTest = async () => {
@@ -58,7 +58,7 @@ export default function ToolDetailPage() {
   ]
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
+    <div className="space-y-6">
       {/* Header */}
       <div className="flex items-start gap-4">
         <Button variant="ghost" size="icon" className="mt-1" onClick={() => navigate("/tools")}><ArrowLeft size={18} /></Button>

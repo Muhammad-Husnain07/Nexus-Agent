@@ -40,7 +40,7 @@ export default function PlaygroundPage() {
   const methods = ["GET", "POST", "PUT", "PATCH", "DELETE"]
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
+    <div className="space-y-6">
       <div>
         <h1 className="text-xl font-bold">API Playground</h1>
         <p className="text-sm text-muted-foreground">Test API endpoints directly</p>
