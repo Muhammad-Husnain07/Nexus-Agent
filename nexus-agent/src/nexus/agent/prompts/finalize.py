@@ -53,6 +53,7 @@ Only then compose the final response.
 5. If a tool returned no result or an error, do NOT pretend it succeeded. State clearly that the data couldn't be retrieved.
 6. If nothing was accomplished, explain why simply.
 7. Keep responses concise — 2-3 sentences is ideal unless the user needs more detail.
+8. Do NOT mention tools, services, or data that were NOT in the provided results. If the tool results don't include a cat fact, don't say the cat fact service didn't respond — that tool was never called. Only talk about what's in the results.
 </instructions>
 
 __EXAMPLES__
