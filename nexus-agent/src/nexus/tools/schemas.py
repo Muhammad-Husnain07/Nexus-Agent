@@ -63,7 +63,12 @@ class ToolCreate(BaseModel):
     rate_limit_per_minute: int | None = Field(
         default=None, description="Max requests per minute (null = unlimited)"
     )
-
+    keywords: list[str] | None = Field(
+        default=None, description="Precomputed routing keywords (auto-generated if omitted)"
+    )
+    aliases: list[str] | None = Field(
+        default=None, description="Alternative names/phrases users may say"
+    )
     @model_validator(mode="after")
     def _validate_tool_type(self) -> "ToolCreate":
         if self.tool_type == "http_api" and not self.endpoint_url:
@@ -102,7 +107,12 @@ class ToolUpdate(BaseModel):
     rate_limit_per_minute: int | None = Field(
         default=None, description="Max requests per minute (null = unlimited)"
     )
-
+    keywords: list[str] | None = Field(
+        default=None, description="Precomputed routing keywords (auto-generated if omitted)"
+    )
+    aliases: list[str] | None = Field(
+        default=None, description="Alternative names/phrases users may say"
+    )
     @model_validator(mode="after")
     def _validate_tool_type(self) -> "ToolUpdate":
         if self.tool_type == "http_api" and self.endpoint_url is not None and not self.endpoint_url:
@@ -145,6 +155,12 @@ class ToolRead(BaseModel):
     idempotent: bool = Field(default=False, description="Supports idempotent execution")
     rate_limit_per_minute: int | None = Field(
         default=None, description="Max requests per minute (null = unlimited)"
+    )
+    keywords: list[str] | None = Field(
+        default=None, description="Precomputed routing keywords"
+    )
+    aliases: list[str] | None = Field(
+        default=None, description="Alternative names/phrases users may say"
     )
     version: int = Field(description="Tool definition version")
     created_at: datetime = Field(description="Creation timestamp")

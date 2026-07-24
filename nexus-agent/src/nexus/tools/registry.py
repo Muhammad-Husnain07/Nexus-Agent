@@ -93,6 +93,13 @@ class ToolRegistry:
         """Register a new tool, generate its embedding, and return it."""
         self._validate_no_python_code(data)
         self._validate_json_schema(data.input_schema)
+        from nexus.tools.keywords import extract_keywords
+        auto_keywords = extract_keywords(
+            name=data.name,
+            purpose=data.purpose,
+            tags=data.tags,
+            aliases=data.aliases,
+        )
         tool = Tool(
             name=data.name,
             description=data.description,
@@ -109,6 +116,8 @@ class ToolRegistry:
             category=data.category,
             risk_level=data.risk_level,
             enabled=data.enabled,
+            keywords=data.keywords or auto_keywords,
+            aliases=data.aliases,
             version=1,
         )
         session.add(tool)
@@ -150,6 +159,16 @@ class ToolRegistry:
             setattr(tool, field, val)
             if field in ("name", "description", "purpose", "tags"):
                 needs_reembed = True
+
+        # Recalculate keywords if name/purpose/tags/aliases changed
+        if any(f in update_dict for f in ("name", "purpose", "tags", "aliases")):
+            from nexus.tools.keywords import extract_keywords
+            tool.keywords = extract_keywords(
+                name=tool.name,
+                purpose=tool.purpose or "",
+                tags=tool.tags,
+                aliases=data.aliases,
+            )
 
         if update_dict:
             snapshot = _tool_to_read(tool).model_dump(mode="json")

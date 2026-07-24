@@ -116,6 +116,12 @@ async def _refresh_tool_cache(
                         for t in tl.items
                     ]
                     _tool_cache_ts = _time.time()
+                    # Reset router's keyword index so it rebuilds with fresh tools
+                    try:
+                        from nexus.agent.router import _reset_keyword_index
+                        _reset_keyword_index()
+                    except ImportError:
+                        pass
             except Exception:
                 logger.warning("runner.available_tools_prepopulate_failed")
     return _tool_cache

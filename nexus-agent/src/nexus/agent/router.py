@@ -112,23 +112,99 @@ _GREETINGS = frozenset({
 # Conjunction markers suggesting multiple intents
 _CONJUNCTIONS = {"and", "or", "also", "plus", "then", "too", "beside", "additionally"}
 
+# Module-level cached weighted keyword index
+# keyword → list of (tool_name, weight) pairs
+_keyword_index: dict[str, list[tuple[str, float]]] = {}
+_keyword_index_key: object = None
 
-def _build_keyword_index(tool_names: list[str]) -> dict[str, str]:
-    """Build a dynamic keyword → tool_name index from registered tool names.
 
-    Extracts meaningful keywords from each tool name by splitting on ``_``
-    and filtering out generic prefixes like ``get``, ``search``, ``predict``.
+def _tokenize_query(text: str) -> list[str]:
+    """Tokenize a user query: lowercase, strip punctuation, split, remove stop words."""
+    import re
+    text = text.lower()
+    text = re.sub(r"[^\w\s]", " ", text)
+    tokens = text.split()
+    stop = {"a", "an", "the", "is", "it", "of", "in", "on", "for", "to", "with",
+            "and", "or", "but", "not", "use", "when", "about", "that", "this",
+            "from", "as", "at", "by", "be", "are", "was", "were", "been",
+            "have", "has", "had", "do", "does", "did", "will", "would",
+            "can", "could", "should", "may", "might", "shall", "need"}
+    return [t for t in tokens if t not in stop and len(t) > 1]
+
+
+def _rebuild_keyword_index(available_tools: list[dict[str, Any]]) -> None:
+    """Build the weighted keyword index from precomputed tool keywords.
+
+    Falls back to name-splitting for tools without precomputed keywords.
     """
-    index: dict[str, str] = {}
-    skip = {"get", "search", "predict", "find", "list", "fetch", "create", "update", "delete", "patch"}
-    for name in tool_names:
-        index[name.lower()] = name
-        parts = name.lower().split("_")
-        for part in parts:
-            if part not in skip and len(part) > 2:
-                if part not in index:
-                    index[part] = name
-    return index
+    global _keyword_index, _keyword_index_key
+    index: dict[str, list[tuple[str, float]]] = {}
+    skip = {"get", "search", "predict", "find", "list", "fetch", "create", "update", "delete", "patch", "echo"}
+
+    for t in available_tools:
+        name = t.get("name", "")
+        if not name:
+            continue
+        name_lower = name.lower()
+
+        # Weight 5.0: exact tool name
+        index.setdefault(name_lower, []).append((name, 5.0))
+
+        # Use precomputed keywords from DB if available (weight 1.0 each)
+        precomputed: list[str] | None = t.get("keywords")
+        if precomputed:
+            for kw in precomputed:
+                index.setdefault(kw.lower(), []).append((name, 1.0))
+        else:
+            # Fallback: split name on underscore
+            for part in name_lower.split("_"):
+                if part not in skip and len(part) > 2:
+                    index.setdefault(part, []).append((name, 1.0))
+
+        # Tags (weight 0.8)
+        for tag in (t.get("tags") or []):
+            if isinstance(tag, str) and len(tag) > 2:
+                index.setdefault(tag.lower(), []).append((name, 0.8))
+
+        # Aliases (weight 1.5 — more specific than keywords)
+        for alias in (t.get("aliases") or []):
+            if isinstance(alias, str) and len(alias) > 2:
+                index.setdefault(alias.lower(), []).append((name, 1.5))
+
+    _keyword_index = index
+    _keyword_index_key = id(available_tools)
+
+
+def _get_keyword_index(available_tools: list[dict[str, Any]]) -> dict[str, list[tuple[str, float]]]:
+    """Return the cached keyword index, rebuilding if tools changed."""
+    global _keyword_index, _keyword_index_key
+    if _keyword_index_key != id(available_tools) or not _keyword_index:
+        _rebuild_keyword_index(available_tools)
+    return _keyword_index
+
+
+def _reset_keyword_index() -> None:
+    """Force the keyword index to rebuild on next access (called by runner on cache refresh)."""
+    global _keyword_index_key
+    _keyword_index_key = None
+
+
+def _match_tools(query: str, available_tools: list[dict[str, Any]]) -> set[str]:
+    """Tokenize the user query and score tools against the cached keyword index.
+
+    Returns a set of matched tool names with total weight >= 1.0.
+    """
+    if not available_tools:
+        return set()
+    tokens = _tokenize_query(query)
+    if not tokens:
+        return set()
+    index = _get_keyword_index(available_tools)
+    scores: dict[str, float] = {}
+    for token in tokens:
+        for tool_name, weight in index.get(token, []):
+            scores[tool_name] = scores.get(tool_name, 0) + weight
+    return {t for t, s in scores.items() if s >= 1.0}
 
 
 def _heuristic_classify(
@@ -164,19 +240,8 @@ def _heuristic_classify(
     ):
         return QueryType.CONVERSATIONAL
 
-    # 3. Build dynamic keyword index from registered tool names
-    keyword_index = _build_keyword_index(tool_names)
-
-    # 4. Match query against tool names and keywords
-    matched_tools: set[str] = set()
-    for tname in tool_names:
-        normalized = tname.lower().replace("_", " ")
-        if normalized in q:
-            matched_tools.add(tname)
-
-    for keyword, tool_name in keyword_index.items():
-        if keyword in q and tool_name not in matched_tools:
-            matched_tools.add(tool_name)
+    # 3. Match query against cached weighted keyword index
+    matched_tools = _match_tools(q, available_tools or [])
 
     # 5. No tool matched → likely conversational or no_tool
     if not matched_tools:
@@ -317,17 +382,9 @@ async def node_classify_query(
 
     result: dict[str, Any] = {"_query_type": qtype.value}
 
-    # For multi-tool types, pre-select preferred tools using dynamic keyword index
+    # For multi-tool types, pre-select preferred tools using weighted index
     if qtype in (QueryType.INDEPENDENT_MULTI, QueryType.DEPENDENT_MULTI):
-        matched = set()
-        q_lower = last_user.lower()
-        kw_index = _build_keyword_index(tool_names)
-        for keyword, tool_name in kw_index.items():
-            if keyword in q_lower and tool_name not in matched:
-                matched.add(tool_name)
-        for tname in tool_names:
-            if tname.lower().replace("_", " ") in q_lower:
-                matched.add(tname)
+        matched = _match_tools(last_user.lower(), available_tools)
         if matched:
             result["_preferred_tools"] = list(matched)
 

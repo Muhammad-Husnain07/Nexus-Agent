@@ -64,6 +64,12 @@ class Tool(Base):
     rate_limit_per_minute: Mapped[int | None] = mapped_column(
         Integer, nullable=True, default=None, comment="Max requests per minute (null = unlimited)"
     )
+    keywords: Mapped[list[str] | None] = mapped_column(
+        ARRAY(String), nullable=True, comment="Precomputed routing keywords for dynamic tool matching"
+    )
+    aliases: Mapped[list[str] | None] = mapped_column(
+        ARRAY(String), nullable=True, comment="Alternative names/phrases users may say"
+    )
     embedding: Mapped[list[float] | None] = mapped_column(
         VECTOR(4096), nullable=True, comment="Semantic embedding for discovery"
     )
