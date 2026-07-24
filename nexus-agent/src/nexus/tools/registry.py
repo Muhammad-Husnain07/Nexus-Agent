@@ -59,6 +59,8 @@ def _tool_to_read(tool: Tool) -> ToolRead:
         validation_rules=tool.validation_rules or {},
         examples=tool.examples or [],
         tags=tool.tags or [],
+        keywords=tool.keywords or [],
+        aliases=tool.aliases or [],
         category=tool.category or "general",
         risk_level=tool.risk_level or "low",
         enabled=tool.enabled if tool.enabled is not None else True,
