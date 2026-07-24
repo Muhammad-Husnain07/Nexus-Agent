@@ -120,13 +120,13 @@ See [docs/architecture.md](docs/architecture.md) for detailed architecture docum
 
 ### `src/nexus/agent/` — LangGraph Orchestration
 
-This module owns the LangGraph StateGraph that implements a DAG-based Plan-and-Execute + Reflection reasoning loop. Key responsibilities:
-- Define `StateGraph` topology with 6 parent nodes + 3-node tool subgraph.
-- Manage graph lifecycle (compile, checkpoint, stream).
-- Provide `AgentRunner` class that wires LLM, tools, memory, event bus, and session lock.
-- Human-in-the-Loop via `review_final_answer` / `review_plan` nodes and LangGraph `interrupt()`.
-- DAG-based parallel tool execution inside the tool subgraph via `Send()` API.
-- Self-reflection via `reflect_on_response` — scores responses and routes to clarification or regeneration.
+This module owns the LangGraph StateGraph that implements a 5-node production reasoning loop: **Router → Planner → Executor → Reflection → Response**. Key responsibilities:
+- Define `StateGraph` topology with 5 production nodes (no subgraph).
+- Manage graph lifecycle (compile with checkpointer, stream updates, cache per process lifetime).
+- Provide `AgentRunner` class that wires LLM, tools, memory, event bus, and Redis distributed session lock.
+- DAG-based parallel tool execution via `ConcurrentExecutor` (wave-based `asyncio.gather`, not `Send()`).
+- Self-reflection via `ReflectionNode` — auto-retries failed tasks up to 2 times with exponential backoff.
+- Efficient state management via 3-tier `state_schema.py` (persistent/working/cost) with rolling-window reducers.
 
 ### `src/nexus/tools/` — Tool Registration, Discovery & Invocation
 

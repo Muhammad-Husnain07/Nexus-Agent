@@ -30,19 +30,17 @@ graph TB
 | Component | Module | Responsibility |
 |-----------|--------|---------------|
 | **FastAPI Server** | `src/nexus/api/` | HTTP routes, middleware, SSE streaming, websockets |
-| **LangGraph Agent** | `src/nexus/agent/` | ReAct + Plan-and-Execute reasoning loop |
+| **LangGraph Agent (5-node)** | `src/nexus/agent/` | Router → Planner → Executor → Reflection → Response |
 | **LLM Client** | `src/nexus/llm/` | Unified interface to 100+ LLM providers (LiteLLM) |
 | **Tool Registry** | `src/nexus/tools/` | CRUD, discovery, semantic search, MCP exposure |
 | **Tool Executor** | `src/nexus/tools/executor.py` | Executes HTTP API calls and MCP server requests with retry logic — no code execution |
-| **Memory** | `src/nexus/memory/` | Short-term checkpointer + long-term pgvector store |
+| **Memory** | `src/nexus/memory/` | PostgresSaver checkpointer + pgvector long-term store |
 | **Sessions** | `src/nexus/sessions/` | Conversation history, context window management |
-| **HITL** | `src/nexus/agent/hitl.py` | Human-in-the-loop approval interrupts |
+| **HITL** | `src/nexus/agent/hitl.py` | Human-in-the-loop approval interrupts (via approval_gate) |
 | **Auth** | `src/nexus/security/` | Passthrough auth (no JWT, no RBAC), rate limiting |
 | **Logging** | inlined structlog | Structured logging across all modules |
-| **Error Handling & Resilience** | `src/nexus/errors/` | Circuit breakers, retry policies, dead letter queue, graceful degradation |
 | **Configuration** | `src/nexus/config/` | Pydantic BaseSettings, secret management |
 | **Utilities** | `src/nexus/utils/` | Scheduled jobs, constants |
-| **Python SDK** | `src/nexus_sdk/` | Client library for external integrations |
 
 ---
 
@@ -52,54 +50,51 @@ graph TB
 sequenceDiagram
     participant Client
     participant FastAPI
-    participant Router
     participant Agent
     participant LLM
     participant Tools
     participant DB
 
-    Client->>FastAPI: POST /api/v1/sessions/{id}/chat {message, stream:true}
+    Client->>FastAPI: POST /api/v1/sessions/{id}/chat {message}
     FastAPI->>Agent: AgentRunner.invoke()
-    Agent->>LLM: understand_intent
-    LLM-->>Agent: IntentAnalysis(needs_tool, response_type)
-    alt greeting / meta / memory query
-        Agent->>LLM: respond_without_tool
-        LLM-->>Agent: Direct response
-    else tool query
+    Agent->>Agent: RouterNode (classify query)
+    alt NO_TOOL_NEEDED (greeting/meta)
+        Agent->>FastAPI: SSE: final_response
+        FastAPI-->>Client: event: final_response
+    else tool query (SINGLE / INDEPENDENT / DEPENDENT)
         Agent->>FastAPI: SSE: tool_selected
         FastAPI-->>Client: event: tool_selected
-        Note over Agent: Tool Subgraph (DAG-based parallel executor)
-        Agent->>Tools: discover_tools (semantic search)
-        Agent->>LLM: dag_expander (generate DAG plan)
+        Agent->>Agent: PlannerNode (DAG planner)
+        Note over Agent: LLM proposes tasks + dependency analysis
+        Agent->>LLM: PLANNER_PROMPT
         LLM-->>Agent: Task list with dependencies
         Agent->>FastAPI: SSE: plan_created
         FastAPI-->>Client: event: plan_created
-        loop For each batch of ready tasks
-            par Parallel tool execution
-                Agent->>Tools: ToolExecutor.execute(task)
-                Tools->>DB: INSERT ToolExecution
-                Tools-->>Agent: ToolResult
-            end
+        Agent->>Agent: ExecutorNode (ConcurrentExecutor)
+        Note over Agent: Executes DAG waves in parallel
+        par Wave 0: independent tasks
+            Agent->>Tools: ToolExecutor.execute(task_1)
+            Tools->>DB: INSERT ToolExecution
+            Tools-->>Agent: ToolResult
+            Agent->>Tools: ToolExecutor.execute(task_N)
         end
         Agent->>FastAPI: SSE: tool_call_completed
         FastAPI-->>Client: event: tool_call_completed
+        alt All tasks succeeded
+            Agent->>Agent: ResponseNode (finalize)
+        else Some tasks failed
+            Agent->>Agent: ReflectionNode
+            alt Retries remaining (< 2)
+                Agent->>Agent: PlannerNode (re-plan)
+            else Max retries exceeded
+                Agent->>Agent: ResponseNode (partial results)
+            end
+        end
     end
     Agent->>LLM: finalize (compose response)
     LLM-->>Agent: Final response
     Agent->>FastAPI: SSE: final_response
     FastAPI-->>Client: event: final_response
-    Agent->>LLM: reflect_on_response (score 0-10)
-    alt score >= 7 or max rounds reached
-        FastAPI-->>Client: event: done
-    else approach issue → clarify
-        Agent->>LLM: gather_requirements
-        LLM-->>Agent: Clarification question
-        FastAPI-->>Client: event: clarification_needed
-        FastAPI-->>Client: event: done
-    else wording issue → revise_finalize
-        Agent->>LLM: finalize (with feedback)
-        LLM-->>Agent: Improved response
-    end
 ```
 
 ---
@@ -268,24 +263,17 @@ credential itself) using one of these formats:
 
 ## Conversational Loop
 
-The agent is **multi-turn** by design. When it needs clarification, the `gather_requirements` node asks questions and the graph routes to `END`. The user responds with a new message, which re-enters the graph at `understand_intent`. This cycle repeats until all required information is gathered:
+The agent is **multi-turn** by design. Prior state is loaded from the Postgres checkpointer on each invoke, preserving the accumulated `messages` list for context continuity. Ephemeral fields (`_EPHEMERAL_FIELDS`) are cleared between turns to prevent stale routing state.
 
 ```
-User message → understand_intent
-  ├─ Greeting/meta/memory → respond_without_tool → finalize → reflect → END
-  ├─ Missing info? → gather_requirements → ask questions → END
-  │                                                    ↓
-  │                              User replies → understand_intent (merges answers) → ...
-  └─ Tool query → tool_subgraph (DAG parallel executor)
-       ├─ All tasks done → finalize → review_final_answer → reflect
-       │    ├─ Score >= 7 → END
-       │    ├─ Wording fix → revise_finalize → finalize (loop)
-       │    ├─ Wrong approach → clarify → gather_requirements → END
-       │    └─ Replan → revise → understand_intent
-       └─ Tools failed → ask → gather_requirements → END
+User message → RouterNode
+  ├─ NO_TOOL_NEEDED → ResponseNode → END
+  └─ Tool query → PlannerNode → ExecutorNode
+       ├─ All tasks done → ResponseNode → END
+       └─ Some failed → ReflectionNode
+            ├─ Retries left → PlannerNode (loop)
+            └─ Max retries → ResponseNode → END
 ```
-
-This avoids internal clarification loops and gives the user a natural back-and-forth experience. Each turn is a complete conversation round-trip.
 
 ## Architecture Decision Records
 

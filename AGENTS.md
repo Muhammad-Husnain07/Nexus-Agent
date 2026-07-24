@@ -4,9 +4,18 @@ Monorepo containing:
 - **`nexus-agent/`** — Python backend (FastAPI + LangGraph + PostgreSQL)
 - **`frontend/`** — React management console (TypeScript + Tailwind CSS v4 + shadcn/ui + Vite)
 
+## Architecture
+
+The agent uses a **5-node production LangGraph**:
+```
+RouterNode → PlannerNode → ExecutorNode → ReflectionNode → ResponseNode
+```
+
+Query routing: `NO_TOOL_NEEDED` goes directly to `ResponseNode`; all other types go through full planning + execution. Failed tasks auto-retry via `ReflectionNode` (up to 2x with backoff).
+
 ## Backend Rules
 
-See [`nexus-agent/AGENTS.md`](nexus-agent/AGENTS.md).
+See [`nexus-agent/AGENTS.md`](nexus-agent/AGENTS.md) and [`nexus-agent/src/nexus/agent/AGENTS.md`](nexus-agent/src/nexus/agent/AGENTS.md).
 
 ## Frontend Rules
 
@@ -24,3 +33,4 @@ See [`nexus-agent/AGENTS.md`](nexus-agent/AGENTS.md).
 12. UI components from `src/components/ui/` (shadcn primitives).
 13. Page components in `src/routes/` organized by feature.
 14. Feature-specific components in `src/components/<feature>/`.
+15. API proxy in `vite.config.ts` targets WSL2 backend at `172.27.173.1:8000`.
