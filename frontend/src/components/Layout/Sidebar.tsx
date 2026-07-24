@@ -42,20 +42,17 @@ export default function Sidebar({ open, onClose }: Props) {
                 onClick={onClose}
                 className={({ isActive }) =>
                   cn(
-                    "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-200 group relative",
+                    "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors duration-150 relative",
                     isActive
                       ? "bg-primary/10 text-primary font-medium"
-                      : "text-sidebar-muted hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
+                      : "text-sidebar-muted hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                   )
                 }
               >
                 {({ isActive }) => (
                   <>
                     {isActive && <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 rounded-full bg-primary" />}
-                    <span className={cn(
-                      "p-1.5 rounded-md transition-colors shrink-0 flex",
-                      isActive ? "bg-primary/15" : "group-hover:bg-sidebar-accent"
-                    )}>
+                    <span className={cn("p-1.5 rounded-md shrink-0 flex", isActive && "bg-primary/15")}>
                       <Icon size={16} />
                     </span>
                     <span className={cn("transition-opacity", open ? "opacity-100" : "md:hidden")}>{item.label}</span>
