@@ -289,11 +289,16 @@ class AgentRunner:
         if not available_tools and self._selector is not None and self._session_factory is not None:
             available_tools = await _refresh_tool_cache(self._selector, self._session_factory)
 
-        # Populate intent registry with available tools
+        # Populate registries with available tools
         if available_tools:
             try:
-                from nexus.agent.registry.intent_registry import populate_from_tools
-                populate_from_tools(available_tools)
+                from nexus.agent.registry.intent_registry import populate_from_tools as _populate_intents
+                _populate_intents(available_tools)
+            except Exception:
+                pass
+            try:
+                from nexus.agent.registry.capability_registry import populate_from_tools as _populate_capabilities
+                _populate_capabilities(available_tools)
             except Exception:
                 pass
 

@@ -319,6 +319,12 @@ _EPHEMERAL_FIELDS: list[str] = [
     "_tool_retry_counts",
     "_pending_tasks",
     "_execution_plan",
+    # StructuredContext pipeline fields
+    "_extraction_result",
+    "_structured_context",
+    "_validation_result",
+    "_ready_to_plan",
+    "_needs_clarification",
 ]
 
 

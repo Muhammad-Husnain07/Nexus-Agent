@@ -75,38 +75,21 @@ class ExecutionPlan:
 
 
 # ============================================================================
-# LLM Prompt Template
+# LLM Prompt Template — registered via prompt_manager
 # ============================================================================
 
-PLANNER_PROMPT = """You are a data-driven task planner. Given a user request and available tools, build an optimized execution plan.
+from nexus.agent.prompts import prompt_manager
 
-## Available Tools
-{tool_descriptions}
+# Force registration of the planner prompt (import triggers the side-effect
+# registration via prompt_manager.register() at module level)
+from nexus.agent.prompts.planner import (  # noqa: F401 — trigger registration
+    PLANNER_PROMPT_V1,
+)
 
-## User Request
-{query}
 
-## Planning Rules
-1. Select ONLY tools from the list above. Never invent tools.
-2. Analyze each tool's **input_schema.properties** for optional fields that could enrich the result — include them when relevant.
-3. Identify dependencies by comparing tool **output_schema** fields with another tool's **input_schema.required** fields. If Tool A's outputs match Tool B's required inputs, create a dependency A → B.
-4. Tasks with no dependencies can run in parallel (independent tasks in the same wave).
-5. Use ``${{task_X.result.field}}`` syntax to reference a previous task's output as input.
-6. Assign a clear ``description`` explaining what each task does.
-
-## Output Format
-Return ONLY valid JSON with a ``tasks`` array:
-```json
-{{"tasks": [
-    {{
-      "id": "task_1",
-      "tool_name": "<tool from list>",
-      "inputs": {{"<param>": "<value or ${{task_X.result.field}}>"}},
-      "description": "What this task does",
-      "depends_on": ["task_X"]  
-    }}
-]}}
-```"""
+def _get_planner_prompt() -> str:
+    """Return the registered planner prompt template string."""
+    return prompt_manager.get("planner").template
 
 
 # ============================================================================
@@ -353,7 +336,7 @@ async def _llm_propose_tasks(
 ) -> list[dict[str, Any]]:
     """Call the LLM to propose the initial set of tools and arguments."""
     tool_descriptions = _format_tool_descriptions(tools)
-    prompt = PLANNER_PROMPT.format(
+    prompt = _get_planner_prompt().format(
         tool_descriptions=tool_descriptions,
         query=query[:1000],
     )

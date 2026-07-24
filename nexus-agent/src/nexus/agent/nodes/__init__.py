@@ -7,6 +7,7 @@ from typing import Any
 
 from nexus.agent.nodes.finalize import finalize
 from nexus.agent.nodes.extraction_node import extraction_node
+from nexus.agent.nodes.normalization_node import normalization_node
 from nexus.agent.nodes.context_merge_node import context_merge_node
 from nexus.agent.nodes.validation_node import validation_node, validation_result_as_string
 from nexus.agent.nodes.clarification_node import clarification_node

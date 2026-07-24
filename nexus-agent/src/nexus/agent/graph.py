@@ -1,25 +1,27 @@
 """
-Production Agent Orchestration Graph — 5-node LangGraph state machine.
+Production Agent Orchestration Graph — 10-node LangGraph state machine.
 
 Nodes
 =====
-1. **RouterNode** — Query classifier + router.  Routes to planner or direct response.
-2. **PlannerNode** — Builds DAG execution plan (dependency analysis + waves).
-3. **ExecutorNode** — Wave-based concurrent tool execution with retry + timeout.
-4. **ReflectionNode** — Evaluates results, decides retry or proceed.
-5. **ResponseNode** — Composes final answer from tool results.
+1.  **RouterNode** — Query classifier + router.  Routes to extraction or planner.
+2.  **ExtractionNode** — LLM intent + entity extraction from user message.
+3.  **NormalizationNode** — Normalizes entity values (dates, locations, currencies).
+4.  **ContextMergeNode** — Merges normalized extraction into StructuredContext.
+5.  **ValidationNode** — Pure Python validation of extracted entities.
+6.  **ClarificationNode** — Asks for missing information, ends graph.
+7.  **PlannerNode** — Builds DAG execution plan (dependency analysis + waves).
+8.  **ExecutorNode** — Wave-based concurrent tool execution with retry + timeout.
+9.  **ReflectionNode** — Evaluates results, decides retry or proceed.
+10. **ResponseNode** — Composes final answer from tool results.
 
-Edges
-=====
-- START → RouterNode
-- RouterNode → ExecutorNode (SINGLE_TOOL / NO_TOOL_NEEDED)
-- RouterNode → PlannerNode (INDEPENDENT_MULTI / DEPENDENT_MULTI)
-- PlannerNode → ExecutorNode (plan ready)
-- ExecutorNode → ResponseNode (all succeeded / partial failures)
-- ExecutorNode → ReflectionNode (unrecoverable errors)
-- ReflectionNode → PlannerNode (retry needed)
-- ReflectionNode → ResponseNode (max retries exceeded)
-- ResponseNode → END
+Pipeline
+========
+RouterNode
+  |-> ExtractionNode -> NormalizationNode -> ContextMergeNode -> ValidationNode
+  |     |-> ClarificationNode -> END (missing info)
+  |     |-> PlannerNode -> ExecutorNode -> ReflectionNode -> ResponseNode -> END
+  |-> PlannerNode (multi-intent, bypasses extraction)
+  |-> ResponseNode (greeting/meta)
 
 Interrupts
 ==========
@@ -467,13 +469,16 @@ def build_agent_graph(
 
     # Lazy imports for new nodes (avoid circular import with memory/nodes)
     from nexus.agent.nodes.extraction_node import extraction_node as _extraction_node
+    from nexus.agent.nodes.normalization_node import normalization_node as _normalization_node
     from nexus.agent.nodes.context_merge_node import context_merge_node as _context_merge_node
     from nexus.agent.nodes.validation_node import validation_node as _validation_node
     from nexus.agent.nodes.clarification_node import clarification_node as _clarification_node
 
-    # 9 production nodes (5 existing + 4 new)
+    # 10 production nodes (Router, Extraction, Normalization, ContextMerge,
+    # Validation, Clarification, Planner, Executor, Reflection, Response)
     graph.add_node("RouterNode", node(router_node, _llm, _model))
     graph.add_node("ExtractionNode", node(_extraction_node, _llm, _model))
+    graph.add_node("NormalizationNode", node(_normalization_node))
     graph.add_node("ContextMergeNode", node(_context_merge_node))
     graph.add_node("ValidationNode", node(_validation_node))
     graph.add_node("ClarificationNode", node(_clarification_node))
@@ -495,8 +500,9 @@ def build_agent_graph(
         },
     )
 
-    # Extraction → ContextMerge → Validation
-    graph.add_edge("ExtractionNode", "ContextMergeNode")
+    # Extraction → Normalization → ContextMerge → Validation
+    graph.add_edge("ExtractionNode", "NormalizationNode")
+    graph.add_edge("NormalizationNode", "ContextMergeNode")
     graph.add_edge("ContextMergeNode", "ValidationNode")
 
     # Validation → Planner (ready) or Clarification (missing info)
