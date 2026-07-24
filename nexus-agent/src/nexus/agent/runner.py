@@ -258,6 +258,7 @@ class AgentRunner:
         # Build initial state — preserve messages from prior turns (multi-turn memory)
         # Try to load prior state from the checkpointer
         prior_messages: list[dict[str, Any]] = []
+        prior_state: Any = None
         try:
             prior_state = await graph.aget_state(run_config)
             if prior_state is not None and prior_state.values:

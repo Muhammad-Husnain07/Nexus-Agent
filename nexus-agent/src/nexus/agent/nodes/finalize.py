@@ -12,7 +12,6 @@ import structlog
 from nexus.agent.prompts import prompt_manager
 from nexus.agent.state import AgentState
 from nexus.llm.client import LLMClient
-from nexus.memory.manager import MemoryManager
 from nexus.memory.store import MemoryStore
 
 logger = structlog.get_logger("nexus.agent.nodes.finalize")
@@ -25,7 +24,7 @@ def _openai_message(role: str, content: str, **kwargs: Any) -> dict[str, Any]:
 
 
 async def _persist_memory_background(
-    manager: MemoryManager,
+    manager: Any,
     session_id: str,
     state: dict[str, Any],
 ) -> None:
@@ -239,6 +238,7 @@ async def finalize(
 
         if not _tried_stream:
             try:
+                from nexus.memory.manager import MemoryManager
                 manager = MemoryManager(store=MemoryStore(), llm=llm)
                 asyncio.ensure_future(_persist_memory_background(manager, state.get("session_id", ""), dict(state)))
             except Exception:

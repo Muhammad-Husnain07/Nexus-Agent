@@ -358,53 +358,59 @@ class MessageHistory(BaseModel):
 # ============================================================================
 
 
-def messages_reducer(
-    current: list[MessageEntry] | None,
-    update: list[MessageEntry] | MessageEntry | None,
-) -> list[MessageEntry]:
-    """Rolling-window message reducer with ID dedup and milestone protection.
+def _get_msg_id(msg: Any) -> str:
+    """Extract message ID from dict or MessageEntry."""
+    if isinstance(msg, dict):
+        return msg.get("id", "") or ""
+    return getattr(msg, "id", "") or ""
 
-    Lifecycle
-    ---------
+
+def _get_msg_milestone(msg: Any) -> bool:
+    """Extract milestone flag from dict or MessageEntry."""
+    if isinstance(msg, dict):
+        return msg.get("_milestone", False) or msg.get("milestone", False)
+    return getattr(msg, "milestone", False) or False
+
+
+def messages_reducer(
+    current: list[Any] | None,
+    update: list[Any] | dict[str, Any] | None,
+) -> list[Any]:
+    """Rolling-window message reducer — handles both dicts and MessageEntry.
+
     Called by LangGraph on every node return that includes ``messages``.
     The reducer:
     1. Combines current + update into a single list
     2. Deduplicates by ``id`` (later replaces earlier)
     3. Applies a rolling window: keeps last 10 messages
     4. Preserves ALL milestone-tagged messages regardless of window
-
-    Parameters
-    ----------
-    current:
-        Current message list in state (or ``None`` on first turn).
-    update:
-        New message(s) from the node return.  A single ``MessageEntry``
-        is treated as a one-element list.
-
-    Returns
-    -------
-    Truncated, deduplicated message list.
     """
-    full: list[MessageEntry] = (current or []) + (
+    full: list[Any] = (current or []) + (
         update if isinstance(update, list) else [update]
     )
 
+    # Assign stable IDs to messages missing them
+    for m in full:
+        if isinstance(m, dict):
+            m.setdefault("id", str(uuid.uuid4()))
+
     # Dedup by ID — later replaces earlier
     seen: dict[str, int] = {}
-    deduped: list[MessageEntry] = []
+    deduped: list[Any] = []
     for msg in full:
-        mid = msg.id
-        if mid in seen:
+        mid = _get_msg_id(msg)
+        if mid and mid in seen:
             deduped[seen[mid]] = msg  # replace
             continue
-        seen[mid] = len(deduped)
+        if mid:
+            seen[mid] = len(deduped)
         deduped.append(msg)
 
     # Rolling window: keep last 10 + all milestones
     cutoff = max(0, len(deduped) - 10)
-    kept: list[MessageEntry] = []
+    kept: list[Any] = []
     for i, msg in enumerate(deduped):
-        if i >= cutoff or msg.milestone:
+        if i >= cutoff or _get_msg_milestone(msg):
             kept.append(msg)
     return kept
 
