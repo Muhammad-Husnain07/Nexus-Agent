@@ -1,5 +1,4 @@
 @import "tailwindcss";
-
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
@@ -28,6 +27,10 @@
   --color-sidebar-accent-foreground: hsl(0 0% 98%);
   --color-sidebar-muted: hsl(240 5% 64.9%);
   --color-sidebar-border: hsl(240 3.7% 15.9%);
+  --color-success: hsl(142 72% 29%);
+  --color-success-foreground: hsl(0 0% 98%);
+  --color-warning: hsl(38 92% 50%);
+  --color-warning-foreground: hsl(0 0% 98%);
   --radius: 0.5rem;
 }
 
@@ -57,7 +60,55 @@
   --color-sidebar-accent-foreground: hsl(0 0% 98%);
   --color-sidebar-muted: hsl(240 5% 64.9%);
   --color-sidebar-border: hsl(240 3.7% 15.9%);
+  --color-success: hsl(142 72% 29%);
+  --color-success-foreground: hsl(0 0% 98%);
+  --color-warning: hsl(38 92% 50%);
+  --color-warning-foreground: hsl(0 0% 98%);
 }
 
 * { border-color: var(--color-border); }
 body { background: var(--color-background); color: var(--color-foreground); font-family: 'Inter', system-ui, sans-serif; }
+
+/* Glass card effect */
+.glass {
+  background: hsl(0 0% 100% / 0.5);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid hsl(0 0% 100% / 0.2);
+}
+.dark .glass {
+  background: hsl(240 10% 5.9% / 0.6);
+  border-color: hsl(240 3.7% 15.9% / 0.4);
+}
+
+/* Gradient text */
+.gradient-text {
+  background: linear-gradient(135deg, hsl(221 83% 53%), hsl(191 91% 36%));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.dark .gradient-text {
+  background: linear-gradient(135deg, hsl(217 91% 60%), hsl(191 91% 40%));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Subtle card hover */
+.card-hover {
+  transition: all 0.2s ease;
+}
+.card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 30px hsl(240 10% 3.9% / 0.08);
+}
+.dark .card-hover:hover {
+  box-shadow: 0 8px 30px hsl(0 0% 0% / 0.3);
+}
+
+/* Stat card gradient backgrounds */
+.stat-gradient-1 { background: linear-gradient(135deg, hsl(221 83% 53%), hsl(235 71% 65%)); }
+.stat-gradient-2 { background: linear-gradient(135deg, hsl(191 91% 36%), hsl(161 87% 35%)); }
+.stat-gradient-3 { background: linear-gradient(135deg, hsl(38 92% 50%), hsl(15 89% 55%)); }
+.stat-gradient-4 { background: linear-gradient(135deg, hsl(271 81% 56%), hsl(291 67% 58%)); }
