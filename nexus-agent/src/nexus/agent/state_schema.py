@@ -232,6 +232,127 @@ class MessageEntry(BaseModel):
     )
 
 
+class MessageHistory(BaseModel):
+    """Ordered, deduplicated, bounded message list with convenience methods.
+
+    Replaces the raw ``list[MessageEntry]`` for ``messages`` in state.
+    Wraps the rolling-window reducer logic into a class so nodes can
+    call ``append()``, ``search()``, or ``truncate()`` directly without
+    reimplementing the dedup/truncation logic.
+
+    Lifecycle
+    ---------
+    Created empty at session start → appended to on every turn →
+    automatically truncated to last 10 + milestones.
+
+    Usage::
+
+        history = MessageHistory()
+        history.append("user", "Hello")
+        history.append("assistant", "Hi there!", milestone=True)
+        for msg in history.recent(5):
+            print(msg.content)
+
+    Serialisation
+    -------------
+    ``BaseModel`` serialisation means LangGraph's checkpointer can store
+    and restore ``MessageHistory`` natively via ``model_dump()`` /
+    ``model_validate()``.
+    """
+
+    entries: list[MessageEntry] = Field(default_factory=list, description="Ordered message list")
+
+    def append(self, role: str, content: str, milestone: bool = False) -> MessageEntry:
+        """Add a new message, deduplicate by ID, then apply rolling window.
+
+        Returns the created ``MessageEntry`` so callers can inspect its ``id``.
+        """
+        entry = MessageEntry(role=role, content=content, milestone=milestone)
+        return self.merge(entry)
+
+    def merge(self, update: MessageEntry | list[MessageEntry]) -> MessageEntry | list[MessageEntry]:
+        """Merge one or more messages into this history (dedup + truncate).
+
+        Called by LangGraph's ``messages_reducer`` under the hood, but
+        also available directly for nodes that want to add messages
+        without going through the reducer.
+        """
+        combined = self.entries + (update if isinstance(update, list) else [update])
+
+        # Dedup by ID — later replaces earlier
+        seen: dict[str, int] = {}
+        deduped: list[MessageEntry] = []
+        for msg in combined:
+            mid = msg.id
+            if mid in seen:
+                deduped[seen[mid]] = msg
+                continue
+            seen[mid] = len(deduped)
+            deduped.append(msg)
+
+        # Rolling window: keep last 10 + all milestones
+        cutoff = max(0, len(deduped) - 10)
+        self.entries = [
+            msg for i, msg in enumerate(deduped)
+            if i >= cutoff or msg.milestone
+        ]
+
+        if isinstance(update, list):
+            return update
+        return update
+
+    def recent(self, n: int = 5) -> list[MessageEntry]:
+        """Return the last ``n`` messages."""
+        return self.entries[-n:]
+
+    def search(self, text: str, field: str = "content") -> list[MessageEntry]:
+        """Find messages where ``field`` contains ``text`` (case-insensitive)."""
+        text_lower = text.lower()
+        return [
+            m for m in self.entries
+            if text_lower in getattr(m, field, "").lower()
+        ]
+
+    def last_user_message(self) -> str:
+        """Return the content of the most recent user message, or ''."""
+        for msg in reversed(self.entries):
+            if msg.role == "user":
+                return msg.content
+        return ""
+
+    def count_by_role(self) -> dict[str, int]:
+        """Return a dict mapping role → count."""
+        counts: dict[str, int] = {}
+        for msg in self.entries:
+            counts[msg.role] = counts.get(msg.role, 0) + 1
+        return counts
+
+    def truncate(self, keep: int = 10) -> None:
+        """Keep only the last ``keep`` messages plus milestones."""
+        cutoff = max(0, len(self.entries) - keep)
+        self.entries = [
+            msg for i, msg in enumerate(self.entries)
+            if i >= cutoff or msg.milestone
+        ]
+
+    def lazy_load(self, source: str | None = None) -> None:
+        """Placeholder for future deferred loading from an external store.
+
+        Args:
+            source: Optional URI or session ID to load from.
+        """
+        pass
+
+    def __len__(self) -> int:
+        return len(self.entries)
+
+    def __getitem__(self, idx: int) -> MessageEntry:
+        return self.entries[idx]
+
+    def __iter__(self):
+        return iter(self.entries)
+
+
 # ============================================================================
 # Reducers
 # ============================================================================
@@ -338,7 +459,7 @@ class WorkingMemory(TypedDict, total=False):
     at the top level.  Now they live under ``state["working"]``.
     """
 
-    messages: Annotated[list[MessageEntry], messages_reducer]
+    messages: Annotated[MessageHistory, messages_reducer]
     current_plan: ExecutionGraph
     tool_results_buffer: Annotated[list[ToolResult], tool_results_reducer]
     gathered_requirements: dict[str, Any]
