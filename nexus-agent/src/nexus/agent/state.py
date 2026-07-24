@@ -125,6 +125,7 @@ _EPHEMERAL_FIELDS: list[str] = [
     "_plan_validation_failures",
     "_invalid_results",
     "_plan_repair_count",
+    "_tool_retry_count",
     "dag_tasks",
     "dag_results",
     "dag_phase",
@@ -246,6 +247,7 @@ class AgentState(TypedDict):
     max_reflection_revisions: int
     is_high_risk: bool
     _plan_repair_count: int
+    _tool_retry_count: int
     _split_tools: list[str]
     tool_results_ref: str
     _ephemeral_keys: list[str]

@@ -182,7 +182,16 @@ async def finalize(
     else:
         final = "No results were produced."
 
-    final_msg = _openai_message("assistant", final, _milestone=True)
+    # Only milestone actual answers — skip for clarification/failure messages
+    # so the milestone_reducer can trim them when the window overflows.
+    _is_clarification = not final or len(final) < 20 or any(
+        final.lower().startswith(p) for p in [
+            "i'm not entirely sure", "i'm a bit confused", "i'm having trouble",
+            "i'm not confident", "i don't understand", "i didn't catch",
+            "could you rephrase", "could you clarify", "no results were produced",
+        ]
+    )
+    final_msg = _openai_message("assistant", final, _milestone=not _is_clarification)
 
     # Add working memory entry for the final response
     try:

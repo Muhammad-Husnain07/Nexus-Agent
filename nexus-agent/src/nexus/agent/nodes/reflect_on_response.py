@@ -312,17 +312,34 @@ async def reflect_on_response(
             "_routing_decision": "finalize",
         }
 
-    # If all tools failed (no data), route to clarification regardless
+    # If all tools failed (no data), route back to intent understanding for a
+    # full retry (re-parse intent, re-discover tools, re-execute).  This is
+    # more productive than asking the user to clarify — the tools exist and
+    # the query was valid, the execution just didn't use them properly.
     if approach_issue or all_tools_failed:
+        # Track tool-retry attempts to prevent infinite loops
+        tool_retries = state.get("_tool_retry_count", 0)
+        if tool_retries < 2:
+            return {
+                "reflection_score": score,
+                "reflection_feedback": feedback,
+                "reflection_count": reflection_count + 1,
+                "reflection_revisions": state.get("reflection_revisions", 0) + 1,
+                "reflection_history": [new_round],
+                "working_memory": wm_update,
+                "_tool_retry_count": tool_retries + 1,
+                "gathered_requirements": {
+                    "_reflection_issue": feedback or "Tools returned no data — retrying execution"
+                },
+                "_routing_decision": "revise",
+            }
+        # Max retries reached — fall back to user clarification
         return {
             "reflection_score": score,
             "reflection_feedback": feedback,
             "reflection_count": reflection_count + 1,
             "reflection_history": [new_round],
             "working_memory": wm_update,
-            "gathered_requirements": {
-                "_reflection_issue": feedback or "Tools returned no data — user input may be incorrect"
-            },
             "_routing_decision": "clarify",
         }
 

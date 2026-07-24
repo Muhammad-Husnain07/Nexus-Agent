@@ -54,7 +54,14 @@ async def respond_without_tool(
     else:
         final = await _handle_greeting(state, llm, model, query)
 
-    final_msg = _openai_message("assistant", final, _milestone=True)
+    _is_clarification = not final or len(final) < 20 or any(
+        final.lower().startswith(p) for p in [
+            "i'm not entirely sure", "i'm a bit confused", "i'm having trouble",
+            "i'm not confident", "i don't understand", "i didn't catch",
+            "could you rephrase", "could you clarify",
+        ]
+    )
+    final_msg = _openai_message("assistant", final, _milestone=not _is_clarification)
     logger.info("respond_without_tool.completed", response_type=response_type, length=len(final))
     return {
         "final_response": final,

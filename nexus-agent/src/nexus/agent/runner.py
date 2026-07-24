@@ -306,6 +306,7 @@ class AgentRunner:
             "_ephemeral_keys": _EPHEMERAL_FIELDS,
             "is_high_risk": False,
             "_plan_repair_count": 0,
+            "_tool_retry_count": 0,
             "_safety_result": {"passed": True, "action": "allow", "reason": ""},
             "_plan_valid": True,
             "_plan_validation_failures": [],

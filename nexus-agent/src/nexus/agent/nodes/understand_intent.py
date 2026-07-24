@@ -245,20 +245,44 @@ async def understand_intent(
     # embedding-based tool matching via ToolRegistry (no extra LLM call).
     # This handles cases where the model doesn't recognize entity names
     # (e.g. "Husnain", "PKR") but the tools can still handle them.
-    if (not analysis.primary_goal or analysis.confidence == 0.0) and last_user.strip() and session_factory is not None:
-        try:
-            from nexus.tools.registry import ToolRegistry  # noqa: PLC0415
-            reg = ToolRegistry(llm=llm)
-            async with session_factory() as sess:
-                results = await reg.search_semantic(sess, last_user, k=3)
-            if results:
-                matched = [(r.tool.name, r.score) for r in results if r.score >= 0.3]
-                if matched:
-                    analysis.primary_goal = ", ".join(t[0] for t in matched)
-                    analysis.confidence = 0.6
-                    logger.info("intent.fallback_embedding_success", tools=matched)
-        except Exception as exc:
-            logger.warning("intent.fallback_embedding_failed", error=str(exc))
+    if (not analysis.primary_goal or analysis.confidence == 0.0) and last_user.strip():
+        _fallback_tools: list[tuple[str, float]] = []
+        # Primary: ToolRegistry semantic search (pgvector). If this fails
+        # (transient DB error, embedding timeout), fall back to in-memory
+        # word-overlap matching against available_tools.
+        if session_factory is not None:
+            try:
+                from nexus.tools.registry import ToolRegistry  # noqa: PLC0415
+                reg = ToolRegistry(llm=llm)
+                async with session_factory() as sess:
+                    _results = await reg.search_semantic(sess, last_user, k=5)
+                if _results:
+                    _fallback_tools = [(r.tool.name, r.score) for r in _results if r.score >= 0.3]
+            except Exception as exc:
+                logger.warning("intent.fallback_embedding_failed", error=str(exc))
+
+        # Backup: in-memory word-overlap if ToolRegistry failed or returned nothing
+        if not _fallback_tools:
+            try:
+                _query_lower = last_user.lower()
+                _query_words = set(_query_lower.split())
+                for _t in state.get("available_tools", []):
+                    _name = (_t.get("name") or "").lower()
+                    _desc = (_t.get("description") or "").lower()
+                    _text = f"{_name} {_desc}"
+                    _overlap = len(_query_words & set(_text.split()))
+                    if _overlap > 0:
+                        _score = min(0.5, _overlap / max(len(_query_words), 1))
+                        if _score >= 0.15:
+                            _fallback_tools.append((_t["name"], _score))
+                _fallback_tools.sort(key=lambda x: -x[1])
+            except Exception:
+                pass
+
+        if _fallback_tools:
+            analysis.primary_goal = ", ".join(t[0] for t in _fallback_tools[:4])
+            analysis.confidence = 0.6
+            logger.info("intent.fallback_success", tools=_fallback_tools[:4])
 
     # Compute task difficulty for adaptive reflection
     task_difficulty = _compute_task_difficulty(analysis, last_user)
