@@ -1,29 +1,23 @@
 import { useState, useRef, useCallback, useEffect } from "react"
-import { flushSync } from "react-dom"
 import { useSearchParams } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Send, Square, MessageSquare, Plus, Trash2, Loader2, CheckCircle2, Wrench, AlertTriangle, Sparkles, Copy, Check, ChevronDown, ChevronRight, User } from "lucide-react"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { Send, Square, MessageSquare, Plus, Trash2, Loader2, CheckCircle2, Wrench, Sparkles, Copy, Check, ChevronDown, ChevronRight, User, HelpCircle } from "lucide-react"
 import { toast } from "sonner"
 import { cn, formatTime } from "@/lib/utils"
-import { useSessionsList } from "@/hooks/use-sessions"
-import { useMessages } from "@/hooks/use-sessions"
+import { useSessionsList, useMessages, useCreateSession, useArchiveSession } from "@/hooks/use-sessions"
 import { useQueryClient } from "@tanstack/react-query"
+import api from "@/lib/api"
+import type { Session } from "@/types/session"
 
 interface ToolCallEvent {
   tool: string
   status: "running" | "success" | "error"
   args?: string
   result?: string
-}
-
-interface ApprovalInfo {
-  id: string
-  name: string
-  inputs: Record<string, unknown>
-  risk_level: string
-  question: string
 }
 
 interface PlanStep {
@@ -38,19 +32,9 @@ interface Msg {
   content: string
   plan?: PlanStep[]
   toolCalls?: ToolCallEvent[]
-  approval?: ApprovalInfo
-  deciding?: boolean
   reflectionScore?: number
   reflectionFeedback?: string
   ts?: string
-}
-
-interface Session {
-  id: string
-  title: string
-  created_at: string
-  message_count: number
-  status: string
 }
 
 async function parseSSEStream(res: Response, onEvent: (type: string, payload: any) => void, onDone?: () => void) {
@@ -59,7 +43,6 @@ async function parseSSEStream(res: Response, onEvent: (type: string, payload: an
   const decoder = new TextDecoder()
   let buffer = ""
   let currentEvent = ""
-  let eventCount = 0
 
   try {
     while (true) {
@@ -76,23 +59,14 @@ async function parseSSEStream(res: Response, onEvent: (type: string, payload: an
             const data = JSON.parse(line.slice(6))
             const type = data.type || data.event || currentEvent
             const payload = data.payload || data
-            // Each event gets a unique delay (0, 10, 20ms...) so they fire
-            // in separate task queue entries — prevents React from batching
-            // multiple flushSync calls together
-            const idx = eventCount++
-            setTimeout(() => queueMicrotask(() => flushSync(() => onEvent(type, payload))), idx * 10)
-          } catch { /* skip */ }
+            onEvent(type, payload)
+          } catch { /* skip malformed JSON */ }
           currentEvent = ""
         }
       }
     }
-  } catch { /* stream error */ }
-  // Schedule onDone AFTER all scheduled event callbacks have been processed
-  if (eventCount > 0) {
-    setTimeout(() => queueMicrotask(() => flushSync(() => onDone?.())), eventCount * 10 + 5)
-  } else {
-    flushSync(() => onDone?.())
-  }
+  } catch { /* stream aborted */ }
+  onDone?.()
 }
 
 function TypewriterText({ text, speed = 20 }: { text: string; speed?: number }) {
@@ -100,8 +74,7 @@ function TypewriterText({ text, speed = 20 }: { text: string; speed?: number }) 
   const idxRef = useRef(0)
 
   useEffect(() => {
-    idxRef.current = 0
-    setDisplayed("")
+    idxRef.current = 0; setDisplayed("")
     if (!text) return
     const interval = setInterval(() => {
       idxRef.current += 1
@@ -117,10 +90,8 @@ function TypewriterText({ text, speed = 20 }: { text: string; speed?: number }) 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
   return (
-    <button
-      onClick={() => { navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500) }}
-      className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground p-1 rounded"
-    >
+    <button onClick={() => { navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500) }}
+      className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground p-1 rounded">
       {copied ? <Check size={12} /> : <Copy size={12} />}
     </button>
   )
@@ -129,7 +100,6 @@ function CopyButton({ text }: { text: string }) {
 function ThinkingSection({ plan, toolCalls, loading, done }: { plan?: PlanStep[]; toolCalls?: ToolCallEvent[]; loading: boolean; done: boolean }) {
   const [expanded, setExpanded] = useState(true)
   useEffect(() => { if (done) setExpanded(false) }, [done])
-
   if (!plan?.length && (!toolCalls || toolCalls.length === 0) && !loading) return null
 
   return (
@@ -140,34 +110,26 @@ function ThinkingSection({ plan, toolCalls, loading, done }: { plan?: PlanStep[]
           <span className="flex items-center gap-1"><CheckCircle2 size={12} className="text-green-500" /> Completed</span>
         ) : loading ? (
           <span className="flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> Thinking...</span>
-        ) : (
-          <span>Steps</span>
-        )}
+        ) : <span>Steps</span>}
       </button>
       {expanded && (
         <div className="space-y-1.5 pl-5 border-l-2 border-muted animate-in slide-in-from-left-1 duration-200">
           {plan?.map((step, i) => (
             <div key={i} className="flex items-center gap-2 text-xs">
-              <Badge variant="outline" className={cn(
-                "h-5 w-5 p-0 flex items-center justify-center rounded-full shrink-0 text-[10px] font-mono",
-                done ? "bg-green-500/10 text-green-600 border-green-200 dark:border-green-800" : "bg-muted"
-              )}>{i + 1}</Badge>
+              <Badge variant="outline" className={cn("h-5 w-5 p-0 flex items-center justify-center rounded-full shrink-0 text-[10px] font-mono",
+                done ? "bg-green-500/10 text-green-600 border-green-200 dark:border-green-800" : "bg-muted")}>{i + 1}</Badge>
               <span className="text-muted-foreground">{step.description || step.id}</span>
               {step.tool_name && <Badge variant="secondary" className="text-[10px]">{step.tool_name}</Badge>}
             </div>
           ))}
           {toolCalls?.map((tc, i) => (
-            <div key={`tc-${i}`} className={cn(
-              "flex items-center gap-2 text-xs px-2 py-1 rounded transition-colors",
-              tc.status === "running" ? "bg-muted/50" :
-              tc.status === "success" ? "bg-green-500/5" : "bg-red-500/5"
-            )}>
+            <div key={`tc-${i}`} className={cn("flex items-center gap-2 text-xs px-2 py-1 rounded transition-colors",
+              tc.status === "running" ? "bg-muted/50" : tc.status === "success" ? "bg-green-500/5" : "bg-red-500/5")}>
               {tc.status === "running" ? <Loader2 size={12} className="animate-spin text-muted-foreground" /> :
                tc.status === "success" ? <CheckCircle2 size={12} className="text-green-500" /> :
                <Wrench size={12} className="text-destructive" />}
               <span className="font-mono font-medium">{tc.tool}</span>
               {tc.status === "success" && <span className="text-green-600 dark:text-green-400">Done</span>}
-              {tc.result && <span className="text-muted-foreground truncate max-w-[150px]">{tc.result}</span>}
             </div>
           ))}
         </div>
@@ -180,166 +142,82 @@ export default function ChatPage() {
   const [searchParams] = useSearchParams()
   const queryClient = useQueryClient()
   const { data: sessionsData, isLoading: sessionsLoading } = useSessionsList({ page_size: 50 })
-  const sessions: Session[] = sessionsData?.items ?? []
+  const sessions: Session[] = [...(sessionsData?.items ?? [])].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+  const createSessionMutation = useCreateSession()
+  const deleteSessionMutation = useArchiveSession()
 
   const [messages, setMessages] = useState<Msg[]>([])
   const [input, setInput] = useState("")
   const [loading, setLoading] = useState(false)
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
-  const [creating, setCreating] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
-  const [initialMessagesLoaded, setInitialMessagesLoaded] = useState(false)
-  const { data: pastMessages, isLoading: loadingPast } = useMessages(currentSessionId || "", { page_size: 100 })
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
 
-  // Load past messages when switching to an existing session
+  const { data: pastMessages } = useMessages(currentSessionId ?? "", { page_size: 100 })
+
+  // Load from URL params
   useEffect(() => {
     const sid = searchParams.get("session")
-    if (sid && sessions.find((s) => s.id === sid)) {
-      setCurrentSessionId(sid)
-    }
+    if (sid && sessions.find((s) => s.id === sid)) setCurrentSessionId(sid)
   }, [searchParams, sessions])
 
+  // Load past messages
   useEffect(() => {
-    if (pastMessages?.items && messages.length === 0 && !initialMessagesLoaded) {
+    if (pastMessages?.items && currentSessionId) {
       const mapped: Msg[] = pastMessages.items
         .filter((m: any) => m.role === "user" || m.role === "assistant")
-        .map((m: any) => ({
-          id: m.id,
-          role: m.role as "user" | "assistant",
-          content: (m.content?.text || m.content || "").toString(),
-          ts: m.created_at,
-        }))
+        .map((m: any) => ({ id: m.id, role: m.role as "user" | "assistant", content: (m.content?.text || m.content || "").toString(), ts: m.created_at }))
       setMessages(mapped)
-      setInitialMessagesLoaded(true)
+    } else if (currentSessionId) {
+      setMessages([])
     }
-  }, [pastMessages, messages.length, initialMessagesLoaded])
+  }, [pastMessages, currentSessionId])
 
-  // Reset loaded flag when switching sessions
-  useEffect(() => {
-    setInitialMessagesLoaded(false)
-  }, [currentSessionId])
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages])
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }) }, [messages])
 
   const createSession = useCallback(async () => {
-    setCreating(true)
     try {
-      const res = await fetch("/api/v1/sessions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: "New Chat" }),
-      })
-      if (!res.ok) { toast.error("Failed to create session"); return null }
-      const session: Session = await res.json()
+      const session = await createSessionMutation.mutateAsync({ title: "New Chat" })
       setCurrentSessionId(session.id)
       setMessages([])
-      queryClient.invalidateQueries({ queryKey: ["sessions"] })
-      return session.id
-    } catch {
-      toast.error("Failed to create session")
-      return null
-    } finally {
-      setCreating(false)
-    }
-  }, [queryClient])
+      queryClient.invalidateQueries({ queryKey: ["sessions-list"] })
+    } catch { toast.error("Failed to create session") }
+  }, [createSessionMutation, queryClient])
 
-  const deleteSession = useCallback(async (id: string, e: React.MouseEvent) => {
-    e.stopPropagation()
+  const deleteSession = useCallback(async (id: string) => {
     try {
-      await fetch(`/api/v1/sessions/${id}`, { method: "DELETE" })
-      queryClient.invalidateQueries({ queryKey: ["sessions"] })
+      await deleteSessionMutation.mutateAsync(id)
       if (currentSessionId === id) { setCurrentSessionId(null); setMessages([]) }
+      setDeleteConfirm(null)
+      queryClient.invalidateQueries({ queryKey: ["sessions-list"] })
     } catch { toast.error("Failed to delete session") }
-  }, [currentSessionId, queryClient])
+  }, [currentSessionId, deleteSessionMutation, queryClient])
 
   const switchSession = useCallback((id: string) => {
     setCurrentSessionId(id)
     setMessages([])
-    setInitialMessagesLoaded(false)
     setLoading(false)
     abortRef.current?.abort()
   }, [])
-
-  const handleDecision = useCallback(async (approvalId: string, action: string, assistantId: string) => {
-    setMessages((prev) => prev.map((m) =>
-      m.id === assistantId ? { ...m, deciding: true, approval: undefined } : m
-    ))
-
-    try {
-      const res = await fetch(`/api/v1/approvals/${approvalId}/decide?stream=true`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Accept": "text/event-stream",
-          "Cache-Control": "no-cache",
-        },
-        body: JSON.stringify({ action }),
-      })
-      if (!res.ok) {
-        toast.error("Failed to submit decision")
-        setMessages((prev) => prev.map((m) =>
-          m.id === assistantId ? { ...m, deciding: false, approval: { id: approvalId, name: "", inputs: {}, risk_level: "", question: "Failed — try again?" } } : m
-        ))
-        return
-      }
-
-      parseSSEStream(
-        res,
-        (type: string, data: any) => {
-          const payload = data.payload || data
-          if (type === "final_response" && payload?.text) {
-            setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, content: m.content + payload.text, deciding: false } : m))
-          } else if (type === "tool_call_completed" && payload) {
-            setMessages((prev) => prev.map((m) => {
-              if (m.id !== assistantId) return m
-              const calls = [...(m.toolCalls || [])]
-              const idx = calls.findIndex((c) => c.tool === payload.tool_name)
-              if (idx >= 0) {
-                calls[idx] = { ...calls[idx], status: payload.status === "error" ? "error" : "success", result: payload.result || payload.error }
-              } else {
-                calls.push({ tool: payload.tool_name, status: payload.status === "error" ? "error" : "success", args: JSON.stringify(payload.args), result: payload.result || payload.error })
-              }
-              return { ...m, toolCalls: calls }
-            }))
-          } else if (type === "error" && payload) {
-            toast.error(payload.message || "Execution error")
-            setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, deciding: false } : m))
-          } else if (type === "done") {
-            setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, deciding: false } : m))
-            queryClient.invalidateQueries({ queryKey: ["sessions"] })
-          }
-        },
-        () => {
-          setLoading(false)
-          abortRef.current = null
-          queryClient.invalidateQueries({ queryKey: ["sessions"] })
-        }
-      )
-    } catch {
-      toast.error("Failed to submit decision")
-      setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, deciding: false } : m))
-      setLoading(false)
-      abortRef.current = null
-    }
-  }, [queryClient])
 
   const send = useCallback(async () => {
     if (!input.trim()) return
 
     let sessionId = currentSessionId
     if (!sessionId) {
-      sessionId = await createSession()
-      if (!sessionId) return
+      try {
+        const session = await createSessionMutation.mutateAsync({ title: "New Chat" })
+        sessionId = session.id
+        setCurrentSessionId(session.id)
+        queryClient.invalidateQueries({ queryKey: ["sessions-list"] })
+      } catch { toast.error("Failed to create session"); return }
     }
 
-    const ts = new Date().toISOString()
-    const userMsg: Msg = { id: crypto.randomUUID(), role: "user", content: input, ts }
+    const userMsg: Msg = { id: crypto.randomUUID(), role: "user", content: input }
     const assistantId = crypto.randomUUID()
-    setMessages((prev) => [...prev, userMsg, { id: assistantId, role: "assistant", content: "", toolCalls: [], ts }])
+    setMessages((prev) => [...prev, userMsg, { id: assistantId, role: "assistant", content: "", toolCalls: [] }])
     setInput("")
     setLoading(true)
     abortRef.current = new AbortController()
@@ -347,25 +225,18 @@ export default function ChatPage() {
     try {
       const res = await fetch(`/api/v1/sessions/${sessionId}/chat`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Accept": "text/event-stream",
-          "Cache-Control": "no-cache",
-        },
-        body: JSON.stringify({ message: input, stream: true }),
+        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+        body: JSON.stringify({ message: input }),
         signal: abortRef.current.signal,
       })
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        toast.error(err?.detail || `Chat request failed (${res.status})`)
+        toast.error(`Chat request failed (${res.status})`)
         setLoading(false)
         return
       }
 
-      parseSSEStream(
-        res,
-        (type: string, data: any) => {
-          const payload = data.payload || data
+      parseSSEStream(res,
+        (type, payload) => {
           if (type === "final_response" && payload?.text) {
             setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, content: m.content + payload.text } : m))
           } else if (type === "tool_call_completed" && payload) {
@@ -373,108 +244,84 @@ export default function ChatPage() {
               if (m.id !== assistantId) return m
               const calls = [...(m.toolCalls || [])]
               const idx = calls.findIndex((c) => c.tool === payload.tool_name)
-              if (idx >= 0) {
-                calls[idx] = { ...calls[idx], status: payload.status === "error" ? "error" : "success", result: payload.result || payload.error }
-              } else {
-                calls.push({ tool: payload.tool_name, status: payload.status === "error" ? "error" : "success", args: JSON.stringify(payload.args), result: payload.result || payload.error })
-              }
+              if (idx >= 0) calls[idx] = { ...calls[idx], status: payload.status === "error" ? "error" : "success", result: payload.result || payload.error }
+              else calls.push({ tool: payload.tool_name, status: payload.status === "error" ? "error" : "success", args: JSON.stringify(payload.args), result: payload.result || payload.error })
               return { ...m, toolCalls: calls }
             }))
           } else if (type === "tool_call_started" && payload) {
             setMessages((prev) => prev.map((m) => {
               if (m.id !== assistantId) return m
               const calls = [...(m.toolCalls || [])]
-              if (!calls.find((c) => c.tool === payload.tool_name)) {
-                calls.push({ tool: payload.tool_name, status: "running", args: JSON.stringify(payload.args), result: undefined })
-              }
+              if (!calls.find((c) => c.tool === payload.tool_name)) calls.push({ tool: payload.tool_name, status: "running" })
               return { ...m, toolCalls: calls }
             }))
           } else if (type === "plan_created" && payload?.steps) {
-            setMessages((prev) => prev.map((m) => {
-              if (m.id !== assistantId) return m
-              return { ...m, plan: payload.steps }
-            }))
-          } else if (type === "approval_required" && payload?.tool_call) {
-            setLoading(false)
-            setMessages((prev) => prev.map((m) => {
-              if (m.id !== assistantId) return m
-              return { ...m, approval: { id: payload.id || "", name: payload.tool_call?.name || "Unknown", inputs: payload.tool_call?.inputs || {}, risk_level: payload.risk_level || "unknown", question: payload.question || `Approve execution of '${payload.tool_call?.name}'?` } }
-            }))
+            setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, plan: payload.steps } : m))
           } else if (type === "reflection_result" && payload) {
-            setMessages((prev) => prev.map((m) => {
-              if (m.id !== assistantId) return m
-              return { ...m, reflectionScore: payload.score, reflectionFeedback: payload.feedback || undefined }
-            }))
-          } else if (type === "clarification_needed" && payload?.question) {
-            setMessages((prev) => {
-              if (prev.some((m) => m.id === payload.question)) return prev
-              return [...prev, { id: payload.question, role: "assistant" as const, content: payload.question, ts: new Date().toISOString() }]
-            })
-          } else if (type === "interrupt" && payload?.question) {
-            setLoading(false)
-            fetch(`/api/v1/approvals/pending/${currentSessionId}`)
-              .then((r) => r.json())
-              .then((approvals: any[]) => {
-                if (approvals.length > 0) {
-                  const a = approvals[0]
-                  setMessages((prev) => prev.map((m) => {
-                    if (m.id !== assistantId) return m
-                    return { ...m, approval: { id: a.id, name: "Review", inputs: a.interrupt_payload || {}, risk_level: "low", question: payload.question } }
-                  }))
-                }
-              })
-              .catch(() => toast.error("Failed to load pending approval"))
-          } else if (type === "done") {
-            queryClient.invalidateQueries({ queryKey: ["sessions"] })
+            setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, reflectionScore: payload.score, reflectionFeedback: payload.feedback } : m))
           } else if (type === "error" && payload) {
             toast.error(payload.message || "Agent error")
+          } else if (type === "done") {
+            queryClient.invalidateQueries({ queryKey: ["sessions-list"] })
           }
         },
-        () => {
-          setLoading(false)
-          abortRef.current = null
-          queryClient.invalidateQueries({ queryKey: ["sessions"] })
-        }
+        () => { setLoading(false); abortRef.current = null; queryClient.invalidateQueries({ queryKey: ["sessions-list"] }) }
       )
     } catch (err: unknown) {
-      if (err instanceof Error && err.name !== "AbortError") {
-        toast.error("Connection lost")
-      }
-      setLoading(false)
-      abortRef.current = null
+      if (err instanceof Error && err.name !== "AbortError") toast.error("Connection lost")
+      setLoading(false); abortRef.current = null
     }
-  }, [input, currentSessionId, createSession, queryClient])
+  }, [input, currentSessionId, createSessionMutation, queryClient])
 
   return (
     <div className="flex h-[calc(100vh-8rem)] gap-0 -m-4">
+      {/* Sidebar */}
       <div className="hidden md:flex w-64 flex-col border-r bg-muted/20">
         <div className="p-3 border-b">
-          <Button className="w-full" size="sm" onClick={createSession} disabled={creating}>
-            {creating ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
-            New Chat
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button className="w-full" size="sm" onClick={createSession} disabled={createSessionMutation.isPending}>
+                {createSessionMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />} New Chat
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Start a new conversation</TooltipContent>
+          </Tooltip>
         </div>
         <div className="flex-1 overflow-auto p-2 space-y-1">
-          {sessionsLoading && <div className="flex justify-center py-4"><Loader2 size={16} className="animate-spin text-muted-foreground" /></div>}
-          {!sessionsLoading && sessions.length === 0 && <p className="text-xs text-muted-foreground text-center mt-8">No sessions yet</p>}
+          {sessionsLoading && Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="h-9 rounded-md bg-muted/50 animate-pulse" />
+          ))}
+          {!sessionsLoading && sessions.length === 0 && (
+            <div className="text-center py-8"><p className="text-xs text-muted-foreground">No sessions yet</p><p className="text-[10px] text-muted-foreground/60 mt-1">Start a new chat to begin</p></div>
+          )}
           {sessions.map((s) => (
-            <div key={s.id} onClick={() => switchSession(s.id)} className={cn("flex items-center justify-between px-3 py-2 rounded-md cursor-pointer text-sm transition-colors group", currentSessionId === s.id ? "bg-primary/10 text-primary" : "hover:bg-muted")}>
+            <div key={s.id} onClick={() => switchSession(s.id)}
+              className={cn("flex items-center justify-between px-3 py-2 rounded-md cursor-pointer text-sm transition-colors group",
+                currentSessionId === s.id ? "bg-primary/10 text-primary" : "hover:bg-muted")}>
               <div className="flex items-center gap-2 truncate min-w-0">
                 <MessageSquare size={14} className="shrink-0" />
                 <span className="truncate">{s.title}</span>
               </div>
-              <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => deleteSession(s.id, e)}><Trash2 size={12} /></Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                    onClick={(e) => { e.stopPropagation(); setDeleteConfirm(s.id) }}><Trash2 size={12} /></Button>
+                </TooltipTrigger>
+                <TooltipContent>Delete session</TooltipContent>
+              </Tooltip>
             </div>
           ))}
         </div>
       </div>
 
+      {/* Chat Area */}
       <div className="flex-1 flex flex-col min-w-0 bg-background">
         {!currentSessionId && messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground">
             <div className="p-4 rounded-full bg-muted"><MessageSquare size={40} className="opacity-40" /></div>
             <p className="text-sm">Start a conversation</p>
-            <Button onClick={createSession} disabled={creating}><Plus size={16} /> New Chat</Button>
+            <p className="text-xs text-muted-foreground/60">Type a message below or select a session from the sidebar</p>
+            <Button onClick={createSession} disabled={createSessionMutation.isPending}><Plus size={16} /> New Chat</Button>
           </div>
         ) : (
           <>
@@ -493,35 +340,16 @@ export default function ChatPage() {
                       </div>
                     ) : (
                       <div className="bg-muted rounded-2xl rounded-bl-sm px-4 py-2.5 text-sm">
-                        <ThinkingSection
-                          plan={m.plan}
-                          toolCalls={m.toolCalls}
+                        <ThinkingSection plan={m.plan} toolCalls={m.toolCalls}
                           loading={loading && m.id === messages[messages.length - 1]?.id && !m.content}
-                          done={!!m.content}
-                        />
-                        {m.approval && (
-                          <div className="border border-amber-200 dark:border-amber-800 rounded-lg p-3 space-y-2 bg-amber-50 dark:bg-amber-950/30 my-1">
-                            <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400"><AlertTriangle size={16} /><span className="font-semibold text-sm">Approval Required</span></div>
-                            <p className="text-sm">{m.approval.question}</p>
-                            {m.approval.name && <Badge variant={m.approval.risk_level === "high" || m.approval.risk_level === "critical" ? "destructive" : m.approval.risk_level === "medium" ? "warning" : "success"}>{m.approval.risk_level}</Badge>}
-                            {Object.keys(m.approval.inputs).length > 0 && <pre className="text-xs bg-background p-2 rounded overflow-auto max-h-32">{JSON.stringify(m.approval.inputs, null, 2)}</pre>}
-                            {!m.deciding ? (
-                              <div className="flex gap-2 pt-1">
-                                <Button size="sm" onClick={() => handleDecision(m.approval!.id, "approve", m.id)}><CheckCircle2 size={14} /> Approve</Button>
-                                <Button size="sm" variant="outline" className="text-destructive border-destructive hover:bg-destructive/10" onClick={() => handleDecision(m.approval!.id, "reject", m.id)}><Square size={14} /> Reject</Button>
-                              </div>
-                            ) : (
-                              <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 size={14} className="animate-spin" /> Processing...</div>
-                            )}
-                          </div>
-                        )}
-                        {!m.approval && m.content && (
+                          done={!!m.content} />
+                        {m.content && (
                           <div className="whitespace-pre-wrap leading-relaxed">
                             <TypewriterText text={m.content} speed={15} />
                           </div>
                         )}
-                        {!m.approval && !m.content && loading && (
-                          <div className="flex items-center gap-2"><Loader2 size={14} className="animate-spin" /><span className="italic opacity-60">Thinking...</span></div>
+                        {!m.content && loading && (
+                          <div className="flex items-center gap-2 py-2"><Loader2 size={14} className="animate-spin text-muted-foreground" /><span className="text-sm text-muted-foreground">Thinking...</span></div>
                         )}
                       </div>
                     )}
@@ -529,9 +357,9 @@ export default function ChatPage() {
                       {m.ts && <span className="text-[10px] text-muted-foreground/60">{formatTime(m.ts)}</span>}
                       {m.role === "assistant" && m.content && <CopyButton text={m.content} />}
                       {m.role === "assistant" && m.reflectionScore !== undefined && (
-                        <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full", m.reflectionScore >= 7 ? "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400" : "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-400")} title={m.reflectionFeedback || ""}>
-                          {m.reflectionScore}/10
-                        </span>
+                        <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full",
+                          m.reflectionScore >= 7 ? "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400" : "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-400")}
+                          title={m.reflectionFeedback || ""}>{m.reflectionScore}/10</span>
                       )}
                     </div>
                   </div>
@@ -545,26 +373,52 @@ export default function ChatPage() {
               <div ref={messagesEndRef} />
             </div>
 
-            {!messages.some((m) => m.approval && !m.deciding) && (
-              <div className="border-t p-3 flex gap-2 bg-background">
-                <Input ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), send())}
-                  placeholder="Ask anything..." className="flex-1" disabled={loading}
-                />
-                {loading ? (
-                  <Button variant="destructive" size="icon" onClick={() => { toast.info("Stream stopped"); abortRef.current?.abort() }}>
-                    <Square size={16} />
-                  </Button>
-                ) : (
-                  <Button size="icon" onClick={send} disabled={!input.trim()}>
-                    <Send size={16} />
-                  </Button>
-                )}
-              </div>
-            )}
+            <div className="border-t p-3 flex gap-2 bg-background">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Input ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), send())}
+                    placeholder="Ask anything..." className="flex-1" disabled={loading} />
+                </TooltipTrigger>
+                <TooltipContent>Press Enter to send, Shift+Enter for new line</TooltipContent>
+              </Tooltip>
+              {loading ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="destructive" size="icon" onClick={() => { toast.info("Stream stopped"); abortRef.current?.abort() }}>
+                      <Square size={16} />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Stop generating</TooltipContent>
+                </Tooltip>
+              ) : (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button size="icon" onClick={send} disabled={!input.trim()}><Send size={16} /></Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Send message</TooltipContent>
+                </Tooltip>
+              )}
+            </div>
           </>
         )}
       </div>
+
+      {/* Delete confirmation dialog */}
+      <Dialog open={!!deleteConfirm} onOpenChange={() => setDeleteConfirm(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Session</DialogTitle>
+            <DialogDescription>Are you sure you want to delete this conversation? This action cannot be undone.</DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setDeleteConfirm(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={() => deleteSession(deleteConfirm!)} disabled={deleteSessionMutation.isPending}>
+              {deleteSessionMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />} Delete
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

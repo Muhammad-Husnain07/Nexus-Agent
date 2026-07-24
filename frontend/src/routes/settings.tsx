@@ -11,6 +11,7 @@ import { useState } from "react"
 
 export default function SettingsPage() {
   const { theme, setTheme } = useThemeStore()
+  const [tab, setTab] = useState("general")
   const [darkMode, setDarkMode] = useState(theme === "dark")
   const [streamResponses, setStreamResponses] = useState(true)
   const [showTimestamps, setShowTimestamps] = useState(true)
@@ -31,7 +32,7 @@ export default function SettingsPage() {
         </Button>
       </div>
 
-      <Tabs value="general" onValueChange={() => {}}>
+      <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="general">General</TabsTrigger>
           <TabsTrigger value="agent">Agent</TabsTrigger>

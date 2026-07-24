@@ -47,7 +47,7 @@ export default function ToolDetailPage() {
   const handleTest = async () => {
     setTestLoading(true)
     setTestResult(null)
-    testTool.mutate(tool.id, {
+    testTool.mutate({ id: tool.id, input: {} }, {
       onSuccess: (data) => {
         setTestResult(JSON.stringify(data, null, 2))
         setTestOpen(true)

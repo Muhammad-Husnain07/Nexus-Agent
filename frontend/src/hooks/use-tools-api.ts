@@ -12,14 +12,14 @@ export function useToolsList(params?: Record<string, unknown>) {
   });
 }
 
-export function useTool(id: string) {
+export function useTool(id: string, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ["tool", id],
     queryFn: async () => {
       const res = await api.get<Tool>(`/tools/${id}`);
       return res.data;
     },
-    enabled: !!id,
+    enabled: options?.enabled ?? !!id,
   });
 }
 
@@ -34,14 +34,14 @@ export function useCreateTool() {
   });
 }
 
-export function useUpdateTool(id: string) {
+export function useUpdateTool() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (data: Record<string, unknown>) => {
+    mutationFn: async ({ id, ...data }: { id: string } & Record<string, unknown>) => {
       const res = await api.put<Tool>(`/tools/${id}`, data);
       return res.data;
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["tools"] }); qc.invalidateQueries({ queryKey: ["tool", id] }); },
+    onSuccess: (_data, vars) => { qc.invalidateQueries({ queryKey: ["tools"] }); qc.invalidateQueries({ queryKey: ["tool", vars.id] }); },
   });
 }
 
