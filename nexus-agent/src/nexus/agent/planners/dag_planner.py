@@ -78,45 +78,35 @@ class ExecutionPlan:
 # LLM Prompt Template
 # ============================================================================
 
-PLANNER_PROMPT = """You are a task planner. Given the user request and a list of available tools, determine which tools to use and how to pass data between them.
+PLANNER_PROMPT = """You are a data-driven task planner. Given a user request and available tools, build an optimized execution plan.
 
-Available tools:
+## Available Tools
 {tool_descriptions}
 
-User request: {query}
+## User Request
+{query}
 
-Rules:
-1. Select the tools needed to fulfill the request.
-2. Identify data dependencies between tools. If Tool A produces data that Tool B needs as input, Tool A must run BEFORE Tool B.
-3. Common dependency chains:
-   - get_geocoding outputs latitude/longitude → get_weather needs latitude/longitude
-   - get_geocoding outputs latitude/longitude → get_air_quality needs latitude/longitude
-4. If a tool needs coordinates but the user only provided a city name, include get_geocoding as a prerequisite.
-5. If a task has no data dependencies, it can run in parallel with other independent tasks.
-6. **IMPORTANT: Include ALL relevant optional parameters.** For weather queries, always set ``current_weather`` to ``true`` so the API returns actual temperature and conditions. If you are unsure whether a parameter is needed, include it.
+## Planning Rules
+1. Select ONLY tools from the list above. Never invent tools.
+2. Analyze each tool's **input_schema.properties** for optional fields that could enrich the result — include them when relevant.
+3. Identify dependencies by comparing tool **output_schema** fields with another tool's **input_schema.required** fields. If Tool A's outputs match Tool B's required inputs, create a dependency A → B.
+4. Tasks with no dependencies can run in parallel (independent tasks in the same wave).
+5. Use ``${{task_X.result.field}}`` syntax to reference a previous task's output as input.
+6. Assign a clear ``description`` explaining what each task does.
 
-Return JSON:
+## Output Format
+Return ONLY valid JSON with a ``tasks`` array:
 ```json
-{{
-  "tasks": [
+{{"tasks": [
     {{
       "id": "task_1",
-      "tool_name": "get_geocoding",
-      "inputs": {{"name": "Islamabad"}},
-      "description": "Geocode city name to coordinates"
-    }},
-    {{
-      "id": "task_2",
-      "tool_name": "get_weather",
-      "inputs": {{"latitude": "${{task_1.result.latitude}}", "longitude": "${{task_1.result.longitude}}", "current_weather": true}},
-      "depends_on": ["task_1"],
-      "description": "Get current temperature and weather conditions for coordinates"
+      "tool_name": "<tool from list>",
+      "inputs": {{"<param>": "<value or ${{task_X.result.field}}>"}},
+      "description": "What this task does",
+      "depends_on": ["task_X"]  
     }}
-  ]
-}}
-```
-
-Only include tools from the available list. Use ${{task_X.result.field}} syntax for data dependencies."""
+]}}
+```"""
 
 
 # ============================================================================
@@ -124,47 +114,43 @@ Only include tools from the available list. Use ${{task_X.result.field}} syntax 
 # ============================================================================
 
 
-def _inject_implicit_deps(
+def _inject_prerequisite_tools(
     tools: list[dict[str, Any]],
     user_input: str,
 ) -> list[dict[str, Any]]:
-    """Detect implicit dependencies and inject prerequisite tools.
+    """Insert prerequisite tools when a tool's required inputs aren't available.
 
-    For example, if the user asks for weather in "Lahore" and no geocoding
-    tool is in the list, insert ``get_geocoding`` automatically since
-    ``get_weather`` needs coordinates.
+    Scans all tool schemas: if Tool B requires a field that no other tool
+    produces, and no matching tool is registered, inject a synthetic
+    prerequisite tool where possible (e.g. coordinate lookup for weather).
     """
     tool_names = {t["name"] for t in tools}
     modified = list(tools)
 
-    # If get_weather is requested and get_geocoding is available but missing
-    if "get_weather" in tool_names and "get_geocoding" not in tool_names:
-        # Check if the user mentioned a city name (not coordinates)
-        city_pattern = re.compile(
-            r"(weather|temperature|forecast)\s+(in|of|for|at)\s+"
-            r"([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)",
-            re.IGNORECASE,
+    # Build I/O signature map
+    outputs_by_tool: dict[str, set[str]] = {}
+    for t in tools:
+        out = set(t.get("output_schema", {}).get("properties", {}).keys())
+        outputs_by_tool[t["name"]] = out
+
+    # Collect all available output fields
+    all_outputs: set[str] = set()
+    for out_set in outputs_by_tool.values():
+        all_outputs |= out_set
+
+    # For each tool, check if any required input is unmet by any tool's output
+    for t in tools:
+        name = t.get("name", "")
+        required = set(t.get("input_schema", {}).get("required", []))
+        unmet = required - all_outputs
+        if not unmet:
+            continue
+
+        logger.info(
+            "dag_planner.unmet_inputs",
+            tool=name,
+            unmet=sorted(unmet),
         )
-        if city_pattern.search(user_input):
-            logger.info("dag_planner.implicit_dep_inject", tool="get_geocoding")
-            modified.insert(0, {
-                "name": "get_geocoding",
-                "description": "Geocode city name to coordinates",
-                "input_schema": {
-                    "type": "object",
-                    "required": ["name"],
-                    "properties": {
-                        "name": {"type": "string", "description": "City name to geocode"}
-                    }
-                },
-                "output_schema": {
-                    "type": "object",
-                    "properties": {
-                        "latitude": {"type": "number"},
-                        "longitude": {"type": "number"},
-                    }
-                },
-            })
 
     return modified
 
@@ -327,11 +313,35 @@ def _format_tool_descriptions(tools: list[dict[str, Any]]) -> str:
         name = t.get("name", "?")
         desc = t.get("description", "")
         purpose = t.get("purpose", "")
-        required = t.get("input_schema", {}).get("required", [])
-        outputs = list(t.get("output_schema", {}).get("properties", {}).keys())
-        lines.append(
-            f"- {name}: {desc} | inputs: {required} | outputs: {outputs}"
-        )
+
+        # Input schema summary
+        inp = t.get("input_schema", {})
+        required = inp.get("required", [])
+        props = inp.get("properties", {})
+        input_desc = []
+        for pname, pinfo in props.items():
+            ptype = pinfo.get("type", "any")
+            pdesc = pinfo.get("description", "")
+            marker = " (req)" if pname in required else ""
+            if pdesc:
+                input_desc.append(f"    {pname}: {ptype}{marker} — {pdesc}")
+            else:
+                input_desc.append(f"    {pname}: {ptype}{marker}")
+
+        # Output schema summary
+        out = t.get("output_schema", {})
+        out_props = out.get("properties", {})
+        output_desc = [f"    {k}: {v.get('type', 'any')}" for k, v in out_props.items()]
+
+        lines.append(f"- {name}")
+        lines.append(f"  Purpose: {purpose or desc}")
+        if input_desc:
+            lines.append("  Inputs:")
+            lines.extend(input_desc)
+        if output_desc:
+            lines.append("  Outputs:")
+            lines.extend(output_desc)
+        lines.append("")
     return "\n".join(lines)
 
 
@@ -426,8 +436,8 @@ async def build_plan(
     tools = tools or []
     user_input = user_input or ""
 
-    # 1. Inject implicit dependencies
-    tools = _inject_implicit_deps(tools, user_input)
+    # 1. Inject prerequisite tools for unmet inputs
+    tools = _inject_prerequisite_tools(tools, user_input)
 
     # 2. LLM proposes tasks (only if we have intent — otherwise use all tools)
     raw_tasks: list[dict[str, Any]] = []
