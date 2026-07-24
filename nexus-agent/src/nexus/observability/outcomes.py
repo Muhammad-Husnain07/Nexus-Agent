@@ -1,34 +1,25 @@
-"""Invocation outcome tracking — prompt versions, costs, A/B experiments.
-
-Collects per-invocation telemetry and persists it to PostgreSQL for
-analytics. Supports prompt version tracking, cost attribution, and
-A/B test result collection.
-"""
+"""Invocation outcome tracking — costs, latency, success/failure."""
 
 from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from datetime import UTC, datetime
 from typing import Any
 
 import structlog
 
 from nexus.config.settings import get_settings
-from nexus.observability.tracing import get_tracer
 
 logger = structlog.get_logger("nexus.observability.outcomes")
 
-OUTCOME_VERSION = 1
+OUTCOME_VERSION = 2
 
 
 @dataclass
 class InvocationOutcome:
-    """Record of a single agent invocation for analytics and debugging.
-
-    Persisted to the ``invocation_outcomes`` table in PostgreSQL.
-    """
+    """Record of a single agent invocation for analytics and debugging."""
 
     session_id: str
     model: str
@@ -36,16 +27,17 @@ class InvocationOutcome:
     total_tokens: int = 0
     latency_ms: int = 0
     success: bool = False
-    reflection_score: float | None = None
     tool_count: int = 0
     tool_error_count: int = 0
-    response_type: str | None = None
     error_message: str | None = None
-    prompt_versions: dict[str, str] = field(default_factory=dict)
-    cost_breakdown: dict[str, Any] = field(default_factory=dict)
-    ab_experiment_id: str | None = None
-    ab_variant: str | None = None
-    created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+    cost_breakdown: dict[str, Any] = None
+    created_at: str = ""
+
+    def __post_init__(self):
+        if self.cost_breakdown is None:
+            self.cost_breakdown = {}
+        if not self.created_at:
+            self.created_at = datetime.now(UTC).isoformat()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -55,37 +47,27 @@ class InvocationOutcome:
         """Build an outcome record from AgentState."""
         settings = get_settings()
         model = settings.llm.default_model
-        response_type = state.get("response_type", "tool")
         tool_results: list = state.get("tool_results", [])
         tool_count = len(tool_results)
         tool_errors = sum(1 for r in tool_results if r.get("status") != "success") if tool_results else 0
-        reflection_score = state.get("reflection_score")
-        total_cost = state.get("total_cost_usd", 0.0)
-        prompt_versions = state.get("_prompt_versions", {})
         cost_breakdown = state.get("_cost_breakdown", {})
 
         return InvocationOutcome(
             session_id=state.get("session_id", ""),
             model=model,
-            total_cost_usd=total_cost,
+            total_cost_usd=state.get("total_cost_usd", 0.0),
             total_tokens=state.get("_total_tokens", 0),
             latency_ms=latency_ms,
             success=error_message is None and not state.get("errors"),
-            reflection_score=reflection_score,
             tool_count=tool_count,
             tool_error_count=tool_errors,
-            response_type=response_type,
             error_message=error_message,
-            prompt_versions=prompt_versions,
             cost_breakdown=cost_breakdown,
         )
 
 
 async def persist_outcome(outcome: InvocationOutcome) -> None:
-    """Persist an invocation outcome to PostgreSQL.
-
-    Runs fire-and-forget — failures are logged but never propagated.
-    """
+    """Persist an invocation outcome to PostgreSQL. Fire-and-forget."""
     try:
         from sqlalchemy import text  # noqa: PLC0415
         from nexus.db.base import async_session  # noqa: PLC0415
@@ -96,13 +78,11 @@ async def persist_outcome(outcome: InvocationOutcome) -> None:
                 text(
                     "INSERT INTO invocation_outcomes "
                     "(id, session_id, model, total_cost_usd, total_tokens, latency_ms, "
-                    "success, reflection_score, tool_count, tool_error_count, "
-                    "response_type, error_message, prompt_versions, cost_breakdown, "
-                    "ab_experiment_id, ab_variant, outcome_version) "
-                    "VALUES (:id, :session_id, :model, :total_cost_usd, :total_tokens, :latency_ms, "
-                    ":success, :reflection_score, :tool_count, :tool_error_count, "
-                    ":response_type, :error_message, CAST(:prompt_versions AS JSONB), CAST(:cost_breakdown AS JSONB), "
-                    ":ab_experiment_id, :ab_variant, :outcome_version)"
+                    "success, tool_count, tool_error_count, "
+                    "error_message, cost_breakdown, outcome_version) "
+                    "VALUES (:id, :session_id, :model, :total_cost_usd, :total_tokens, "
+                    ":latency_ms, :success, :tool_count, :tool_error_count, "
+                    ":error_message, CAST(:cost_breakdown AS JSONB), :outcome_version)"
                 ),
                 {
                     "id": uuid.uuid4(),
@@ -112,15 +92,10 @@ async def persist_outcome(outcome: InvocationOutcome) -> None:
                     "total_tokens": data["total_tokens"],
                     "latency_ms": data["latency_ms"],
                     "success": data["success"],
-                    "reflection_score": data["reflection_score"],
                     "tool_count": data["tool_count"],
                     "tool_error_count": data["tool_error_count"],
-                    "response_type": data["response_type"],
                     "error_message": data["error_message"],
-                    "prompt_versions": json.dumps(data["prompt_versions"]),
                     "cost_breakdown": json.dumps(data["cost_breakdown"]),
-                    "ab_experiment_id": data["ab_experiment_id"],
-                    "ab_variant": data["ab_variant"],
                     "outcome_version": OUTCOME_VERSION,
                 },
             )

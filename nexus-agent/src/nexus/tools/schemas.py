@@ -54,7 +54,6 @@ class ToolCreate(BaseModel):
     examples: list[ToolExample] = Field(default_factory=list, description="Example invocations")
     tags: list[str] = Field(default_factory=list, description="Categorization tags")
     category: str = Field(default="general", description="Functional category")
-    requires_approval: bool = Field(default=False, description="Requires HITL approval")
     risk_level: str = Field(default="low", description="Risk level: low | medium | high")
     enabled: bool = Field(default=True, description="Whether the tool is active")
     tenant_public: bool = Field(default=False, description="Visible to all when true")
@@ -98,7 +97,6 @@ class ToolUpdate(BaseModel):
     examples: list[ToolExample] | None = Field(default=None, description="Example invocations")
     tags: list[str] | None = Field(default=None, description="Categorization tags")
     category: str | None = Field(default=None, description="Functional category")
-    requires_approval: bool | None = Field(default=None, description="Requires HITL approval")
     risk_level: str | None = Field(default=None, description="Risk level: low | medium | high")
     enabled: bool | None = Field(default=None, description="Whether the tool is active")
     rate_limit_per_minute: int | None = Field(
@@ -141,7 +139,6 @@ class ToolRead(BaseModel):
     examples: list[dict[str, Any]] = Field(description="Example invocations")
     tags: list[str] = Field(description="Categorization tags")
     category: str = Field(description="Functional category")
-    requires_approval: bool = Field(description="Requires HITL approval")
     risk_level: str = Field(description="Risk level")
     enabled: bool = Field(description="Whether the tool is active")
     tenant_public: bool = Field(default=False, description="Visible to all")

@@ -53,9 +53,6 @@ class Tool(Base):
     category: Mapped[str] = mapped_column(
         String(255), default="general", comment="Functional category"
     )
-    requires_approval: Mapped[bool] = mapped_column(
-        Boolean, default=False, comment="Requires HITL approval"
-    )
     risk_level: Mapped[str] = mapped_column(
         String(50),
         default="low",

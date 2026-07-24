@@ -14,11 +14,7 @@ from nexus.db.base import Base
 
 
 class InvocationOutcome(Base):
-    """Persistent record of a single agent invocation for observability.
-
-    Tracks prompt versions, costs, latency, success/failure, and A/B
-    experiment assignments for analytics and debugging.
-    """
+    """Persistent record of a single agent invocation for observability."""
 
     __tablename__ = "invocation_outcomes"
 
@@ -43,32 +39,17 @@ class InvocationOutcome(Base):
     success: Mapped[bool] = mapped_column(
         default=False, comment="Whether the invocation completed without errors"
     )
-    reflection_score: Mapped[float | None] = mapped_column(
-        Float, nullable=True, comment="Final reflection quality score (0-10)"
-    )
     tool_count: Mapped[int] = mapped_column(
         Integer, default=0, comment="Number of tool calls made"
     )
     tool_error_count: Mapped[int] = mapped_column(
         Integer, default=0, comment="Number of tool calls that failed"
     )
-    response_type: Mapped[str | None] = mapped_column(
-        String(50), nullable=True, comment="tool | greeting | meta | memory_query"
-    )
     error_message: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="Error message if invocation failed"
     )
-    prompt_versions: Mapped[dict[str, Any] | None] = mapped_column(
-        JSONB, default=dict, comment="Prompt name -> version mapping"
-    )
     cost_breakdown: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, default=dict, comment="Cost breakdown by model"
-    )
-    ab_experiment_id: Mapped[str | None] = mapped_column(
-        String(100), nullable=True, comment="A/B experiment identifier"
-    )
-    ab_variant: Mapped[str | None] = mapped_column(
-        String(100), nullable=True, comment="A/B variant assigned"
     )
     outcome_version: Mapped[int] = mapped_column(
         Integer, default=1, comment="Schema version for forward compatibility"
