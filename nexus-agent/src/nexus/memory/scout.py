@@ -1,12 +1,6 @@
 """MemoryScout — proactive memory retrieval at strategic trigger points.
 
-Replaces the current single-trigger retrieval (only on understand_intent) with
-a multi-trigger system that injects relevant memories at:
-1. Intent analysis (after understanding user goal)
-2. Tool result (after tool batch completes)
-3. Final composition (before final response)
-4. Requirements gathering (before asking questions)
-
+Injects relevant memories before final response composition.
 Uses Maximum Marginal Relevance (MMR) for diverse, non-redundant results.
 """
 
@@ -23,25 +17,11 @@ from nexus.memory.store import MemoryStore
 
 logger = structlog.get_logger("nexus.memory.scout")
 
-TRIGGER_INTENT = "intent"
-TRIGGER_TOOL_RESULT = "tool_result"
 TRIGGER_FINALIZE = "finalize"
-TRIGGER_GATHER = "gather"
 
 
 class MemoryScout:
-    """Proactive memory retrieval — injects relevant memories without explicit queries.
-
-    Usage::
-
-        scout = MemoryScout(llm=llm_client)
-        memory_context = await scout.scout(
-            trigger=TRIGGER_INTENT,
-            context={"intent": "check weather", "query": "what's the weather in London"},
-        )
-        if memory_context:
-            prompt = memory_context + "\\n" + prompt
-    """
+    """Proactive memory retrieval — injects relevant memories without explicit queries."""
 
     def __init__(
         self,
@@ -82,14 +62,6 @@ class MemoryScout:
 
     def _build_query(self, trigger: str, context: dict[str, Any]) -> str:
         """Build an implicit search query from the trigger context."""
-        if trigger == TRIGGER_INTENT:
-            return context.get("intent") or context.get("query", "")
-
-        if trigger == TRIGGER_TOOL_RESULT:
-            tool_name = context.get("tool_name", "")
-            result_summary = str(context.get("result_summary", ""))
-            return f"{tool_name}: {result_summary}" if tool_name else result_summary
-
         if trigger == TRIGGER_FINALIZE:
             intent = context.get("intent", "")
             results = context.get("tool_results", [])
@@ -98,10 +70,6 @@ class MemoryScout:
                 tool = last.get("tool_name", "") if isinstance(last, dict) else ""
                 return f"{intent} {tool}".strip()
             return intent
-
-        if trigger == TRIGGER_GATHER:
-            missing = context.get("missing_slots", [])
-            return f"Need information about: {', '.join(missing)}" if missing else ""
 
         return ""
 

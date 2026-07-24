@@ -17,26 +17,14 @@ from pydantic import BaseModel, Field
 
 logger = structlog.get_logger("nexus.agent.prompts.manager")
 
-# Lazily-imported singleton for dynamic example injection
-_example_store: Any = None
-
-
-def _get_example_store() -> Any:
-    global _example_store
-    if _example_store is None:
-        from nexus.agent.prompts.example_store import example_store  # noqa: PLC0415
-        _example_store = example_store
-    return _example_store
-
-
 class PromptTemplate(BaseModel):
     """A registered prompt template with versioning metadata.
 
     Attributes:
-        name: Logical name shared across versions (e.g. ``"understand_intent"``).
+        name: Logical name shared across versions.
         version: Semantic version string (e.g. ``"1.0"``, ``"2.0"``).
         template: The prompt text with ``{placeholders}`` for ``str.format``.
-        metadata: Arbitrary metadata (e.g. ``{"few_shot": "...", "author": "..."}``).
+        metadata: Arbitrary metadata.
     """
 
     name: str = Field(description="Logical prompt name")
@@ -153,63 +141,14 @@ class PromptManager:
         max_mistakes: int = 5,
         **kwargs: Any,
     ) -> str:
-        """Retrieve and format a prompt template with dynamically selected examples.
-
-        Injects ``__EXAMPLES__`` and ``__COMMON_MISTAKES__`` placeholders with
-        content from the ``ExampleStore`` based on the provided context.
-        Falls back silently if the placeholders are not in the template.
-
-        Args:
-            prompt_name: Logical prompt name.
-            context: Context dict for example selection (e.g. ``{"response_type":
-                "tool", "intent": "weather"}``).
-            prompt_version: Desired version (see :meth:`get`).
-            version: Alias for ``prompt_version``.
-            max_examples: Maximum examples to inject.
-            max_mistakes: Maximum common mistakes to inject.
-            **kwargs: Additional format arguments for the template.
-
-        Returns:
-            The formatted prompt string with examples injected.
-        """
+        """Retrieve and format a prompt template (backward compat — same as :meth:`render`)."""
         rendered = self.render(
             prompt_name,
             prompt_version=prompt_version or version,
             **kwargs,
         )
-
-        # Track which prompt version was used (for outcome analytics)
-        tmpl = self.get(prompt_name, version=prompt_version or version)
-        _pv = kwargs.get("_prompt_versions")
-        if isinstance(_pv, dict):
-            _pv[prompt_name] = tmpl.version
-
-        # Try to inject dynamic examples (using __EXAMPLES__ placeholder
-        # to avoid clashing with str.format())
-        if "__EXAMPLES__" in rendered:
-            try:
-                store = _get_example_store()
-                examples_xml = store.select(
-                    prompt_name,
-                    context=context or {},
-                    max_examples=max_examples,
-                )
-                rendered = rendered.replace("__EXAMPLES__", examples_xml)
-            except Exception:
-                rendered = rendered.replace("__EXAMPLES__", "")
-
-        # Try to inject common mistakes
-        if "__COMMON_MISTAKES__" in rendered:
-            try:
-                store = _get_example_store()
-                mistakes_xml = store.get_common_mistakes(
-                    prompt_name,
-                    max_mistakes=max_mistakes,
-                )
-                rendered = rendered.replace("__COMMON_MISTAKES__", mistakes_xml)
-            except Exception:
-                rendered = rendered.replace("__COMMON_MISTAKES__", "")
-
+        # Replace any remaining placeholder tags with empty string
+        rendered = rendered.replace("__EXAMPLES__", "").replace("__COMMON_MISTAKES__", "")
         return rendered
 
     def list_versions(self, name: str) -> list[str]:

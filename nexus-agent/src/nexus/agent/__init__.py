@@ -2,7 +2,6 @@
 
 from nexus.agent.errors import (
     AgentError,
-    ApprovalRejected,
     ContextWindowExceededError,
     MaxIterationsError,
     PlanningError,
@@ -13,10 +12,8 @@ from nexus.agent.runner import AgentEvent, AgentRunner
 from nexus.agent.schemas import (
     AgentInvokeRequest,
     AgentInvokeResponse,
-    AgentResumeResponse,
     AgentStateResponse,
     AgentStreamEvent,
-    ApprovalAction,
 )
 from nexus.agent.state import AgentState
 
@@ -25,13 +22,10 @@ __all__ = [
     "AgentEvent",
     "AgentInvokeRequest",
     "AgentInvokeResponse",
-    "AgentResumeResponse",
     "AgentRunner",
     "AgentState",
     "AgentStateResponse",
     "AgentStreamEvent",
-    "ApprovalAction",
-    "ApprovalRejected",
     "ContextWindowExceededError",
     "MaxIterationsError",
     "PlanningError",

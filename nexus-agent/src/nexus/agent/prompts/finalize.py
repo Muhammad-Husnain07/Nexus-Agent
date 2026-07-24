@@ -56,10 +56,6 @@ Only then compose the final response.
 8. Do NOT mention tools, services, or data that were NOT in the provided results. If the tool results don't include a cat fact, don't say the cat fact service didn't respond — that tool was never called. Only talk about what's in the results.
 </instructions>
 
-__EXAMPLES__
-
-__COMMON_MISTAKES__
-
 <tool_results>
 {tool_citations}
 </tool_results>

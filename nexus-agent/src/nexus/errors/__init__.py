@@ -2,7 +2,6 @@
 
 from nexus.errors.base import (
     AgentError,
-    ApprovalRejected,
     CircuitOpenError,
     ContextWindowExceededError,
     DeadLetterError,
@@ -46,7 +45,6 @@ __all__ = [
     "ToolExecutionError",
     "MaxIterationsError",
     "ContextWindowExceededError",
-    "ApprovalRejected",
     # Rate/Quota
     "RateLimitError",
     "QuotaExceededError",

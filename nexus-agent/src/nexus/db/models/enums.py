@@ -38,16 +38,6 @@ class ExecutionStatus(enum.Enum):
     INTERRUPTED = "interrupted"
 
 
-
-class ApprovalStatus(enum.Enum):
-    """Human-in-the-loop approval decision."""
-
-    PENDING = "pending"
-    APPROVED = "approved"
-    REJECTED = "rejected"
-    EDITED = "edited"
-
-
 class MemoryKind(enum.Enum):
     """Type of stored memory."""
 

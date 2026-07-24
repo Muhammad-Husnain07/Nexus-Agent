@@ -295,21 +295,14 @@ async def get_session_state(
             detail="No agent run found for this session",
         )
 
-    pending = state_snapshot.values.get("pending_approval")
     fr = state_snapshot.values.get("final_response")
     next_nodes = state_snapshot.next or []
 
-    if not next_nodes:
-        status = "completed"
-    elif pending:
-        status = "paused"
-    else:
-        status = "running"
+    status = "completed" if not next_nodes else "running"
 
     return AgentStateResponse(
         session_id=session_id,
         status=status,
         current_node=next_nodes[0] if next_nodes else None,
-        pending_approval=pending,
         final_response=fr,
     )

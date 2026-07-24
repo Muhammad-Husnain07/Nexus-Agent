@@ -2,7 +2,6 @@
 
 from nexus.errors import (
     AgentError,
-    ApprovalRejected,
     ContextWindowExceededError,
     MaxIterationsError,
     PlanningError,
@@ -15,5 +14,4 @@ __all__ = [
     "ToolExecutionError",
     "MaxIterationsError",
     "ContextWindowExceededError",
-    "ApprovalRejected",
 ]

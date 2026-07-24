@@ -159,10 +159,8 @@ class WSSubscriptionEvent(BaseModel):
 from nexus.agent.schemas import (  # noqa: E402, F401
     AgentInvokeRequest,
     AgentInvokeResponse,
-    AgentResumeResponse,
     AgentStateResponse,
     AgentStreamEvent,
-    ApprovalAction,
 )
 from nexus.sessions.schemas import (  # noqa: E402, F401
     SessionCreate,

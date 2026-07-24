@@ -43,7 +43,6 @@ class ErrorCode(str, Enum):
     LLM_FAILED = "LLM_FAILED"
     MAX_ITERATIONS = "MAX_ITERATIONS"
     CONTEXT_WINDOW_EXCEEDED = "CONTEXT_WINDOW_EXCEEDED"
-    APPROVAL_REJECTED = "APPROVAL_REJECTED"
 
     # Resilience
     CIRCUIT_OPEN = "CIRCUIT_OPEN"
@@ -119,11 +118,6 @@ class MaxIterationsError(AgentError):
 class ContextWindowExceededError(AgentError):
     def __init__(self, message: str = "Context window exceeded", **kwargs: Any) -> None:
         super().__init__(code=ErrorCode.CONTEXT_WINDOW_EXCEEDED, message=message, **kwargs)
-
-
-class ApprovalRejected(AgentError):
-    def __init__(self, message: str = "Approval rejected", **kwargs: Any) -> None:
-        super().__init__(code=ErrorCode.APPROVAL_REJECTED, message=message, **kwargs)
 
 
 # ── Rate / Quota Errors ─────────────────────────────────────────────────────
