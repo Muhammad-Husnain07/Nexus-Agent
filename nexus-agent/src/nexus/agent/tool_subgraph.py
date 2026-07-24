@@ -134,10 +134,25 @@ def build_tool_subgraph(
     # Then route through dag_splitter
     builder.add_edge("result_validator", "dag_splitter")
 
-    # After dag_splitter, either loop back to dag_expander (if split) or exit
+    # After dag_splitter, either loop back to dag_expander (if split or if
+    # there are pending tasks whose dependencies are now satisfied), or exit.
     def route_after_splitter(state: AgentState) -> str:
         if state.get("_routing_decision") == "split":
             return "dag_expander"
+        # Check for unexecuted tasks whose dependencies are now met.
+        # Without this check, tasks with dependencies (e.g. get_weather
+        # depending on get_geocoding) would never execute because route_dag
+        # only runs once before the first batch.
+        tasks: list[dict[str, Any]] = state.get("dag_tasks", [])
+        results: dict[str, Any] = state.get("dag_results", {})
+        remaining = [t for t in tasks if t["id"] not in results]
+        if remaining:
+            for t in remaining:
+                deps = t.get("depends_on", [])
+                if all(d in results for d in deps):
+                    logger.info("tool_subgraph.route_after_splitter.has_pending_ready",
+                                task=t["id"], tool=t.get("tool_name"))
+                    return "dag_expander"
         return END
 
     builder.add_conditional_edges(

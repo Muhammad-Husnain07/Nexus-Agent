@@ -175,7 +175,8 @@ async def understand_intent(
         # Skip scout for greetings to save cost (no memory needed)
         if state.get("response_type") not in ("greeting", "meta"):
             _memory_ctx = await _scout.scout(
-                trigger="intent", context={"intent": intent_text, "query": last_user}
+                trigger="intent",
+                context={"intent": intent_text, "query": last_user, "session_id": state.get("session_id")}
             ) or ""
     except Exception:
         pass

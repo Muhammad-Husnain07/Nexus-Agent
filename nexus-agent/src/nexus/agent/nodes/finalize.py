@@ -135,7 +135,7 @@ async def finalize(
                 _scout = MemoryScout(llm=llm)
                 _memory_ctx = await _scout.scout(
                     trigger="finalize",
-                    context={"intent": example_context["intent"], "tool_results": results},
+                    context={"intent": example_context["intent"], "tool_results": results, "session_id": state.get("session_id")},
                 )
             except Exception:
                 _memory_ctx = ""

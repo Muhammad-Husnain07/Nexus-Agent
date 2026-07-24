@@ -73,7 +73,8 @@ class MemoryScout:
         if not query:
             return ""
 
-        memories = await self._retrieve_mmr(query)
+        session_id = (context or {}).get("session_id")
+        memories = await self._retrieve_mmr(query, session_id=session_id)
         if not memories:
             return ""
 
@@ -104,8 +105,14 @@ class MemoryScout:
 
         return ""
 
-    async def _retrieve_mmr(self, query: str) -> list[dict[str, Any]]:
-        """Retrieve memories with Maximum Marginal Relevance for diversity."""
+    async def _retrieve_mmr(self, query: str, session_id: str | None = None) -> list[dict[str, Any]]:
+        """Retrieve memories with Maximum Marginal Relevance for diversity.
+
+        Args:
+            query: Search text.
+            session_id: If provided, only return memories from this session
+                        (prevents cross-session data leakage).
+        """
         embedding = await self._manager._generate_embedding(query)
         if embedding is None:
             return []
@@ -113,10 +120,16 @@ class MemoryScout:
         k = self._settings.retrieval_top_k
         mmr_lambda = self._settings.scout_mmr_lambda
 
+        # Filter by session_id to prevent cross-session data leakage.
+        # Without this, memories from other users/sessions (e.g. a cat fact
+        # from session A) could appear in session B's context.
+        meta_filter = {"session_id": session_id} if session_id else None
+
         # Get candidate pool
         candidates = await self._manager._store.search(
             query_embedding=embedding,
             top_k=k * 4,  # larger pool for MMR selection
+            metadata_filter=meta_filter,
         )
         if not candidates:
             return []
