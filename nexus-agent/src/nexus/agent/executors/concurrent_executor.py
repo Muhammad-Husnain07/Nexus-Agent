@@ -81,8 +81,14 @@ def _resolve_placeholders(
 ) -> dict[str, Any]:
     """Resolve ``${task_id.result.field}`` placeholders with actual values."""
     resolved = {}
+
+    # Fast-path: if no inputs contain placeholders, return inputs as-is
+    inputs_str = str(inputs)
+    if "${" not in inputs_str:
+        return inputs
+
     for key, val in inputs.items():
-        if isinstance(val, str):
+        if isinstance(val, str) and "${" in val:
             match = _PLACEHOLDER_RE.match(val)
             if match:
                 task_id = match.group(1)
@@ -90,8 +96,7 @@ def _resolve_placeholders(
                 result = results.get(task_id)
                 if result is not None:
                     if field_path:
-                        if isinstance(result, dict):
-                            val = _deep_get(result, field_path)
+                        val = _deep_get(result, field_path)
                     else:
                         val = result
         resolved[key] = val
@@ -99,29 +104,40 @@ def _resolve_placeholders(
 
 
 def _deep_get(obj: Any, path: str) -> Any:
-    """Recursively traverse a nested dict using dot-separated path.
+    """Resolve a dot-separated path into a nested dict/list structure.
 
-    Handles:
-    - Direct key access: ``obj.latitude``
-    - List first-element access: ``obj.results[0].latitude`` (via ``results`` key)
-    - Nested access: ``obj.results[0].latitude`` → looks for ``results`` list,
-      picks first element, then gets ``latitude``.
+    Resolution strategy (in order):
+    1. Dict direct key — ``state.get("key", "")``
+    2. Dict value scan — any list value whose first element is a dict with the key
+    3. List first element — ``list[0].get("key", "")``
+    4. Recursive chain — path segments like ``a.b.c`` are resolved segment by segment
     """
+    current = obj
     for part in path.split("."):
-        if isinstance(obj, dict):
-            if part in obj:
-                obj = obj[part]
-            elif "results" in obj and isinstance(obj["results"], list) and len(obj["results"]) > 0:
-                first = obj["results"][0]
-                obj = first.get(part, "") if isinstance(first, dict) else ""
+        if isinstance(current, dict):
+            if part in current:
+                current = current[part]
+            else:
+                found = False
+                for val in current.values():
+                    if isinstance(val, dict) and part in val:
+                        current = val[part]
+                        found = True
+                        break
+                    if isinstance(val, list) and len(val) > 0 and isinstance(val[0], dict) and part in val[0]:
+                        current = val[0][part]
+                        found = True
+                        break
+                if not found:
+                    return ""
+        elif isinstance(current, list):
+            if len(current) > 0 and isinstance(current[0], dict):
+                current = current[0].get(part, "")
             else:
                 return ""
-        elif isinstance(obj, list) and len(obj) > 0:
-            first = obj[0]
-            obj = first.get(part, "") if isinstance(first, dict) else ""
         else:
             return ""
-    return obj
+    return current
 
 
 # ============================================================================
