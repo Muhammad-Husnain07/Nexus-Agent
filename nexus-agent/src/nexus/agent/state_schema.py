@@ -492,22 +492,64 @@ class EphemeralFlags(TypedDict, total=False):
 
 
 # ============================================================================
+# Ephemeral fields — never persisted to the checkpointer
+# ============================================================================
+
+# Fields that are cleared between turns — not persisted across checkpoints.
+_EPHEMERAL_FIELDS: list[str] = [
+    "_routing_decision",
+    "_tool_executed_in_turn",
+    "_safety_result",
+    "_plan_valid",
+    "_plan_validation_failures",
+    "_invalid_results",
+    "_plan_repair_count",
+    "_tool_retry_count",
+    "dag_tasks",
+    "dag_results",
+    "dag_phase",
+    "dag_iteration",
+    "tool_results",
+    "tool_results_ref",
+    "errors",
+    "pending_approval",
+    "_pending_splits",
+    "_dag_generation",
+    "_split_tools",
+    "_query_type",
+    "_force_query_type",
+    "_filtered_tools",
+    "_preferred_tools",
+    "completed_task_ids",
+    "_executor_failed",
+    "_executor_results",
+    "_executor_all_success",
+    "_tool_retry_counts",
+    "_pending_tasks",
+    "_execution_plan",
+]
+
+
+# ============================================================================
 # The unified AgentState — what LangGraph actually checkpoints
 # ============================================================================
 
 
-class AgentState(TypedDict):
+class AgentState(TypedDict, total=False):
     """Top-level state schema that LangGraph serialises.
 
     By grouping fields into nested TypedDicts, unchanged tiers are
     serialised as references rather than full payloads, reducing
     checkpoint size.
 
-    ``ephemeral`` is deliberately **absent** from this TypedDict.
-    Ephemeral flags are communicated via node return values during
-    execution; LangGraph only checkpoints the fields declared here.
-    This is the core optimisation: routing state that changes every
-    node doesn't bloat the checkpoint database.
+    ``total=False`` allows runtime flat fields during the migration
+    from ``state.py`` — nodes can access both nested tiers and flat
+    fields without type errors.
+
+    ``ephemeral`` flags are deliberately absent.  They are communicated
+    via node return values during execution; LangGraph only checkpoints
+    the fields declared here.  This is the core optimisation: routing
+    state that changes every node doesn't bloat the checkpoint database.
 
     Extending
     ---------
@@ -520,6 +562,70 @@ class AgentState(TypedDict):
     ``PersistentContext``.
     """
 
+    # New 3-tier structure (preferred — migrated toward)
     persistent: PersistentContext
     working: WorkingMemory
     cost: CostTracker
+
+    # Legacy flat fields (backward compat — migrate to tiers)
+    messages: Annotated[list[dict[str, Any]], messages_reducer]
+    session_id: str
+    user_context: dict[str, Any]
+    plan: list[dict[str, Any]] | None
+    current_step_index: int
+    gathered_requirements: dict[str, Any]
+    available_tools: list[dict[str, Any]]
+    pending_approval: dict[str, Any] | None
+    iteration_count: int
+    scratchpad: str
+    final_response: str | None
+    intent: dict[str, Any] | None
+    missing_info_slots: list[str] | None
+    errors: list[str]
+    _bound_tools: list[dict[str, Any]]
+    intent_analysis: dict[str, Any] | None
+    analysis_result: dict[str, Any] | None
+    needs_human_review: bool
+    questions_asked: int
+    response_type: str
+    reflection_score: float
+    reflection_feedback: str
+    reflection_count: int
+    working_memory: dict[str, Any]
+    reflection_history: list[dict[str, Any]]
+    task_difficulty: float | None
+    total_cost_usd: float
+    _cost_breakdown: dict[str, Any]
+    _total_tokens: int
+    _max_concurrent_tasks: int | None
+    _pending_splits: list[str]
+    _dag_generation: int
+    dag_tasks: list[dict[str, Any]]
+    dag_results: dict[str, Any]
+    completed_task_ids: list[str]
+    dag_phase: str
+    _routing_decision: str
+    _tool_executed_in_turn: bool
+    _safety_result: dict[str, Any]
+    _plan_valid: bool
+    _plan_validation_failures: list[dict[str, Any]]
+    _invalid_results: list[dict[str, Any]]
+    dag_iteration: int
+    max_dag_iterations: int
+    reflection_revisions: int
+    max_reflection_revisions: int
+    is_high_risk: bool
+    _plan_repair_count: int
+    _tool_retry_count: int
+    _force_query_type: str
+    _query_type: str
+    _filtered_tools: list[dict[str, Any]] | None
+    _preferred_tools: list[str]
+    _split_tools: list[str]
+    tool_results_ref: str
+    _executor_failed: list[str]
+    _executor_results: dict[str, Any]
+    _executor_all_success: bool
+    _tool_retry_counts: dict[str, int]
+    _pending_tasks: list[str]
+    _execution_plan: dict[str, Any]

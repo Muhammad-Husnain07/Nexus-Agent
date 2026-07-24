@@ -501,123 +501,84 @@ class AgentRunner:
 
     @staticmethod
     def _translate(node_name: str, state_update: dict[str, Any]) -> list[AgentEvent]:
-        """Map a LangGraph state update to zero or more ``AgentEvent`` instances."""
+        """Map a LangGraph state update to zero or more ``AgentEvent`` instances.
+
+        Handles the 5-node production graph:
+        - RouterNode → query classification
+        - PlannerNode → plan created
+        - ExecutorNode → tool call results
+        - ReflectionNode → retry / finalize decision
+        - ResponseNode / finalize → final answer
+        """
         events: list[AgentEvent] = []
 
-        # Handle subgraph-namespaced node names (e.g. "tool_subgraph:uuid:plan")
-        # Extract the inner node name after the last colon
-        inner_name = node_name.split(":")[-1] if ":" in node_name else node_name
+        # Extract inner node name (handles subgraph namespacing if any)
+        inner = node_name.split(":")[-1] if ":" in node_name else node_name
 
-        # Emit final_response only from finalize (which always runs last).
+        # --- ResponseNode / finalize → final answer ---
         fr = state_update.get("final_response")
-        if fr is not None and inner_name == "finalize":
+        if fr is not None and inner in ("finalize", "ResponseNode"):
             events.append(AgentEvent("final_response", {"text": fr}))
 
-        if inner_name == "understand_intent":
-            intent = state_update.get("intent")
-            if intent:
-                etype = "tool_selected" if intent.get("intent") else "error"
-                payload: dict[str, Any] = {
-                    "intent": intent.get("intent"),
-                    "parameters": intent.get("parameters", {}),
-                }
-                if not intent.get("intent") and state_update.get("final_response"):
-                    meta_question = state_update["final_response"]
-                    events.append(AgentEvent("clarification_needed", {"question": meta_question}))
-                events.append(AgentEvent(etype, payload))
+        # --- RouterNode → query classification ---
+        elif inner == "RouterNode":
+            qtype = state_update.get("_query_type", "")
+            if qtype:
+                preferred = state_update.get("_preferred_tools", [])
+                events.append(AgentEvent(
+                    "tool_selected",
+                    {
+                        "intent": qtype,
+                        "parameters": {"query_type": qtype, "preferred_tools": preferred},
+                    },
+                ))
 
-        elif inner_name == "reflect_on_response":
-            score = state_update.get("reflection_score")
-            if score is not None:
-                events.append(
-                    AgentEvent(
-                        "reflection_result",
-                        {
-                            "score": score,
-                            "feedback": state_update.get("reflection_feedback", ""),
-                            "reflection_count": state_update.get("reflection_count", 0),
-                        },
-                    )
-                )
-
-        elif inner_name in ("review_plan", "review_final_answer"):
-            fr = state_update.get("final_response")
-            if fr is not None:
-                event_type = "clarification_needed" if inner_name == "review_plan" else "interrupt"
-                events.append(AgentEvent(event_type, {"question": fr, "source": inner_name}))
-
-        elif inner_name == "gather_requirements":
-            final = state_update.get("final_response")
-            if final:
-                events.append(AgentEvent("clarification_needed", {"question": final}))
-
-        elif inner_name == "plan":
-            plan = state_update.get("plan")
+        # --- PlannerNode → plan created ---
+        elif inner == "PlannerNode":
+            plan = state_update.get("plan") or state_update.get("_execution_plan")
             if plan:
                 events.append(AgentEvent("plan_created", {"steps": plan}))
+            dag_tasks = state_update.get("dag_tasks", [])
+            if dag_tasks:
+                events.append(AgentEvent("plan_created", {"steps": dag_tasks}))
 
-        elif inner_name == "dag_expander":
-            # Emit plan_created when DAG is first generated
-            plan = state_update.get("plan")
-            if plan:
-                events.append(AgentEvent("plan_created", {"steps": plan}))
-
-        elif inner_name == "dag_splitter":
-            # Emit splitter event when new tasks are dynamically created
-            new_tasks = state_update.get("_routing_decision")
-            if new_tasks == "split":
-                dag_gen = state_update.get("_dag_generation", 0)
-                events.append(AgentEvent("plan_created", {"steps": state_update.get("dag_tasks", []), "generation": dag_gen}))
-
-        elif inner_name == "tool_executor":
-            # Emit tool_call_completed for each new tool result
+        # --- ExecutorNode → tool call results ---
+        elif inner == "ExecutorNode":
             tool_results = state_update.get("tool_results", [])
             if tool_results:
-                last = tool_results[-1]
-                etype = "tool_call_completed" if last.get("status") == "success" else "error"
-                events.append(
-                    AgentEvent(
-                        etype,
-                        {
-                            "tool_name": last.get("tool_name"),
-                            "status": last.get("status"),
-                            "data": last.get("data"),
-                            "error": last.get("error"),
-                            "task_id": last.get("task_id"),
-                        },
-                    )
-                )
+                for tr in tool_results:
+                    etype = "tool_call_completed" if tr.get("status") == "success" else "error"
+                    events.append(AgentEvent(etype, {
+                        "tool_name": tr.get("tool_name"),
+                        "status": tr.get("status"),
+                        "data": tr.get("data"),
+                        "error": tr.get("error"),
+                        "task_id": tr.get("task_id", ""),
+                    }))
+            # Also emit for legacy tool_results format
+            executor_results = state_update.get("_executor_results", {})
+            if executor_results:
+                for task_id, outcome in executor_results.items():
+                    if isinstance(outcome, dict):
+                        etype = "tool_call_completed" if outcome.get("status") == "success" else "error"
+                        events.append(AgentEvent(etype, {
+                            "tool_name": outcome.get("tool_name", task_id),
+                            "status": outcome.get("status"),
+                            "data": outcome.get("data"),
+                            "task_id": task_id,
+                        }))
 
-            # Emit approval_required if pending_approval is set
-            pending = state_update.get("pending_approval")
-            if pending and isinstance(pending, dict):
-                events.append(AgentEvent("approval_required", pending))
+        # --- ReflectionNode → retry or finalize ---
+        elif inner == "ReflectionNode":
+            decision = state_update.get("_routing_decision", "")
+            if decision == "retry":
+                events.append(AgentEvent("reflection_result", {
+                    "score": 0.0,
+                    "feedback": "Retrying failed tasks",
+                    "reflection_count": 1,
+                }))
 
-        elif inner_name == "present_preview":
-            data = state_update.get("final_response")
-            if data:
-                events.append(AgentEvent("intermediate_preview", {"text": data}))
-
-        elif inner_name == "tool_subgraph":
-            # Subgraph finished — emit events from accumulated state
-            plan = state_update.get("plan")
-            if plan:
-                events.append(AgentEvent("plan_created", {"steps": plan}))
-            tool_results = state_update.get("tool_results", [])
-            if tool_results:
-                last = tool_results[-1]
-                events.append(
-                    AgentEvent(
-                        "tool_call_completed",
-                        {
-                            "tool_name": last.get("tool_name"),
-                            "status": last.get("status"),
-                            "data": last.get("data"),
-                            "error": last.get("error"),
-                        },
-                    )
-                )
-
+        # ── Errors (any node) ─────────────────────────────────────
         errors = state_update.get("errors", [])
         if errors and isinstance(errors, list):
             events.append(AgentEvent("error", {"errors": errors[-1:]}))

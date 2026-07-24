@@ -45,7 +45,7 @@ from nexus.agent.memory.context_manager import (
     truncate_tool_result,
 )
 from nexus.agent.planners.dag_planner import PlannerRunner
-from nexus.agent.router import QueryType, classify_query, route_query
+from nexus.agent.router import QueryType
 from nexus.agent.state import AgentState
 from nexus.config.settings import get_settings
 from nexus.llm.client import LLMClient
@@ -76,19 +76,21 @@ def node(fn: Any, *args: Any, **kwargs: Any) -> Callable[[AgentState], Any]:
 
 
 def route_after_router(state: AgentState) -> str:
-    """Route based on query type.
+    """Route based on query type and safety result.
 
-    - SINGLE_TOOL / CONVERSATIONAL / NO_TOOL_NEEDED → ExecutorNode (fast path)
-    - INDEPENDENT_MULTI / DEPENDENT_MULTI → PlannerNode (full planning)
+    - rejected → ResponseNode (error)
+    - NO_TOOL_NEEDED → ResponseNode (direct response)
+    - all tool-requiring types → PlannerNode (plan + execute)
     """
+    safety = state.get("_safety_result", {})
+    if safety.get("action") == "reject":
+        logger.warning("graph.safety_rejected", reason=safety.get("reason", ""))
+        return "ResponseNode"
+
     qtype = state.get("_query_type", QueryType.SINGLE_TOOL.value)
 
-    if qtype in (
-        QueryType.SINGLE_TOOL.value,
-        QueryType.CONVERSATIONAL.value,
-        QueryType.NO_TOOL_NEEDED.value,
-    ):
-        return "ExecutorNode"
+    if qtype == QueryType.NO_TOOL_NEEDED.value:
+        return "ResponseNode"
 
     return "PlannerNode"
 
@@ -220,10 +222,13 @@ async def executor_node(
     tasks_data = state.get("dag_tasks", [])
 
     if not tasks_data or not waves_data:
+        # No plan was generated — return error so ReflectionNode can route
+        logger.warning("executor_node.no_plan", query_type=state.get("_query_type", "unknown"))
         return {
             "_executor_results": {},
             "_executor_failed": [],
-            "errors": ["No plan to execute"],
+            "_executor_all_success": False,
+            "errors": ["No execution plan available — planner did not produce tasks"],
         }
 
     # Build Task objects for the executor
@@ -441,13 +446,13 @@ def build_agent_graph(
 
     graph.set_entry_point("RouterNode")
 
-    # Router → Planner or Executor
+    # Router → Planner or Response
     graph.add_conditional_edges(
         "RouterNode",
         route_after_router,
         {
             "PlannerNode": "PlannerNode",
-            "ExecutorNode": "ExecutorNode",
+            "ResponseNode": "ResponseNode",
         },
     )
 
@@ -478,13 +483,13 @@ def build_agent_graph(
     graph.add_edge("ResponseNode", END)
 
     # Compile with interrupt support for high-risk tools
-    _cp = checkpointer or PostgresSaver.from_conn_string(
-        settings.database.url
-    ) if hasattr(settings, "database") else None
-
+    _cp = checkpointer
     if _cp is None:
-        from langgraph.checkpoint.memory import MemorySaver
-        _cp = MemorySaver()
+        try:
+            _cp = PostgresSaver.from_conn_string(settings.database.url)
+        except Exception:
+            from langgraph.checkpoint.memory import MemorySaver
+            _cp = MemorySaver()
 
     return graph.compile(
         checkpointer=_cp,
