@@ -137,6 +137,7 @@ _EPHEMERAL_FIELDS: list[str] = [
     "_active_speculations",
     "_pending_splits",
     "_dag_generation",
+    "_split_tools",
 ]
 
 RESPONSE_TYPES = Literal["tool", "greeting", "meta", "memory_query"]
@@ -229,7 +230,7 @@ class AgentState(TypedDict):
     calibration_data: dict[str, Any]
     _max_concurrent_tasks: int | None
     _active_speculations: dict[str, Any] | None
-    _pending_splits: list[dict[str, Any]]
+    _pending_splits: list[str]
     _dag_generation: int
     dag_tasks: list[dict[str, Any]]
     dag_results: Annotated[dict[str, Any], _merge_results]

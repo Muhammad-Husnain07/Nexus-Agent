@@ -121,6 +121,11 @@ async def dag_splitter(
     except Exception:
         _wm = None
 
+    # Track which tools have been split — initialized ONCE before the task
+    # loop so it accumulates across ALL tasks in this batch, not per-task
+    # (state.get() always returns [] since the return dict isn't committed yet).
+    _split_tools: list[str] = list(state.get("_split_tools", []))
+
     for task in tasks:
         task_id: str = task["id"]
         if task_id in processed:
@@ -147,8 +152,7 @@ async def dag_splitter(
             # same tool again creates a recursive expansion e.g. geocoding
             # returns a list of cities → split each → geocode each city →
             # each returns another list → split again → ...
-            split_tools: list[str] = list(state.get("_split_tools", []))
-            if parent_tool and parent_tool in split_tools:
+            if parent_tool and parent_tool in _split_tools:
                 # Already split this tool in this DAG generation — skip to
                 # prevent infinite loop (geocoding → split → geocode each → ...)
                 logger.info("dag_splitter.skip_recursive",
@@ -156,8 +160,8 @@ async def dag_splitter(
             else:
                 # Register BEFORE creating subtasks so the guard is active
                 # before any subtask completes and triggers another split.
-                if parent_tool and parent_tool not in split_tools:
-                    split_tools.append(parent_tool)
+                if parent_tool and parent_tool not in _split_tools:
+                    _split_tools.append(parent_tool)
                 subtasks = _generate_subtasks(task, items, parent_tool)
                 if subtasks:
                     logger.info("dag_splitter.list_expansion",
@@ -233,7 +237,7 @@ async def dag_splitter(
             "_routing_decision": "continue",
             "_pending_splits": processed,
             "working_memory": wm_final,
-            "_split_tools": list(state.get("_split_tools", [])),
+            "_split_tools": list(_split_tools),
         }
 
     # Append new tasks to dag_tasks so dag_expander can process them
@@ -247,6 +251,6 @@ async def dag_splitter(
         "_pending_splits": processed,
         "_dag_generation": dag_generation + 1,
         "working_memory": wm_final,
-        "_split_tools": list(state.get("_split_tools", [])),
+        "_split_tools": list(_split_tools),
         "_routing_decision": "split",
     }
