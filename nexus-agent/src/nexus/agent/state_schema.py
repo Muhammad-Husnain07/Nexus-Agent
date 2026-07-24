@@ -8,7 +8,7 @@ The state is split into three tiers based on lifespan:
                     ┌──────────────────────────────────────────────┐
                     │         Persistent Context                  │
                     │  (survives across conversation turns)       │
-                    │  session_id, user_context, approved_tools   │
+                    │  session_id, user_context, config_overrides │
                     │  Checkpointed ALWAYS.  Rarely changes.      │
                     └──────────────────────────────────────────────┘
                                       │
@@ -21,16 +21,10 @@ The state is split into three tiers based on lifespan:
                                       │
                     ┌──────────────────────────────────────────────┐
                     │          Ephemeral Flags                     │
-                    │  (cleared every node execution)              │
+                    │  (cleared every turn)                        │
                     │  routing decisions, retry counts, safety     │
                     │  NOT checkpointed across node boundaries.    │
                     └──────────────────────────────────────────────┘
-
-Migration from existing ``state.py``:
-- Phase A: Add this file alongside ``state.py`` (no breaking changes)
-- Phase B: Update ``AgentRunner`` to populate the new structure
-- Phase C: Migrate nodes one at a time
-- Phase D: Remove old ``state.py`` fields
 """
 
 from __future__ import annotations
@@ -49,12 +43,7 @@ from typing_extensions import TypedDict
 
 
 class ToolResult(BaseModel):
-    """A single tool execution result with metadata for observability.
-
-    Replaces the raw dict pattern in the current ``tool_results`` list.
-    Each result carries its own timing, cost, and DAG generation info
-    so downstream nodes (finalize, reflection) can make informed decisions.
-    """
+    """A single tool execution result with metadata for observability."""
 
     tool_name: str
     status: Literal["success", "error", "timeout", "validation_error"]
@@ -67,20 +56,9 @@ class ToolResult(BaseModel):
 
 
 class ExecutionNode(BaseModel):
-    """A node in the execution DAG (the task graph, not LangGraph's own graph).
+    """A node in the execution DAG (the task graph, not LangGraph's own graph)."""
 
-    Each node represents one tool call (or speculative approach batch).
-    Dependencies are expressed as a list of node IDs that must complete first.
-
-    Lifecycle:
-        1. ``pending`` — created by planner, waiting for dependencies
-        2. ``running`` — sent to ``tool_executor`` via ``Send()``
-        3. ``completed`` — result received and validated
-        4. ``failed`` — max retries exceeded or unrecoverable error
-        5. ``skipped`` — dependency failed, no point executing
-    """
-
-    id: str = Field(description="Unique task identifier (e.g. task_1, task_3_sub_0)")
+    id: str = Field(description="Unique task identifier")
     tool_name: str | None = Field(default=None, description="Tool to invoke")
     description: str = Field(default="", description="Human-readable description")
     inputs: dict[str, Any] = Field(default_factory=dict, description="Tool input parameters")
@@ -92,52 +70,25 @@ class ExecutionNode(BaseModel):
 
 
 class ExecutionGraph(BaseModel):
-    """Full DAG structure for observability and routing.
-
-    Replaces the separate ``dag_tasks``, ``dag_results``, ``completed_task_ids``,
-    ``_pending_splits``, ``_split_tools``, and ``_dag_generation`` fields from
-    the current state.  Everything the DAG executor needs lives here.
-
-    Usage::
-
-        graph = ExecutionGraph()
-        graph.add_node(ExecutionNode(id="task_1", tool_name="get_geocoding"))
-        graph.add_node(ExecutionNode(
-            id="task_2", tool_name="get_weather",
-            depends_on=["task_1"],
-        ))
-        for node in graph.ready_nodes():
-            send(node)
-    """
+    """Full DAG structure for observability and routing."""
 
     nodes: dict[str, ExecutionNode] = Field(
-        default_factory=dict,
-        description="All nodes keyed by ID",
+        default_factory=dict, description="All nodes keyed by ID",
     )
-    generation: int = Field(
-        default=0,
-        description="DAG expansion generation (dag_splitter counter)",
-    )
-    concurrent_budget: int = Field(
-        default=5,
-        description="Max parallel executions",
-    )
+    generation: int = Field(default=0, description="DAG expansion generation")
+    concurrent_budget: int = Field(default=5, description="Max parallel executions")
     split_tools: list[str] = Field(
-        default_factory=list,
-        description="Tools that have already been split (recursion guard)",
+        default_factory=list, description="Tools that have already been split (recursion guard)",
     )
 
     def add_node(self, node: ExecutionNode) -> None:
-        """Add a single node to the graph."""
         self.nodes[node.id] = node
 
     def add_nodes(self, nodes: list[ExecutionNode]) -> None:
-        """Add multiple nodes at once."""
         for n in nodes:
             self.nodes[n.id] = n
 
     def ready_nodes(self) -> list[ExecutionNode]:
-        """Return nodes whose dependencies are satisfied."""
         return [
             n for n in self.nodes.values()
             if n.status == "pending"
@@ -148,21 +99,12 @@ class ExecutionGraph(BaseModel):
         ]
 
     def remaining(self) -> list[ExecutionNode]:
-        """Return nodes not yet completed or failed (still actionable)."""
-        return [
-            n for n in self.nodes.values()
-            if n.status in ("pending", "running")
-        ]
+        return [n for n in self.nodes.values() if n.status in ("pending", "running")]
 
     def failed(self) -> list[str]:
-        """Return IDs of nodes that have exceeded their retry budget."""
-        return [
-            n.id for n in self.nodes.values()
-            if n.status == "failed"
-        ]
+        return [n.id for n in self.nodes.values() if n.status == "failed"]
 
     def update_result(self, task_id: str, result: ToolResult) -> None:
-        """Record a tool result and update node status."""
         node = self.nodes.get(task_id)
         if node is None:
             return
@@ -174,34 +116,26 @@ class ExecutionGraph(BaseModel):
             if node.retry_count >= node.max_retries:
                 node.status = "failed"
             else:
-                node.status = "pending"  # will be retried
+                node.status = "pending"
 
     def mark_skipped(self, task_id: str) -> None:
-        """Mark a node as skipped (dependency failed)."""
         node = self.nodes.get(task_id)
         if node:
             node.status = "skipped"
 
 
 class CostTracker(BaseModel):
-    """Token and cost accumulator with per-node breakdown.
-
-    Separated from the main state so cost tracking doesn't pollute
-    routing logic.  Updated by ``tool_executor`` and read by
-    ``finalize`` and ``reflect_on_response`` (cost budget check).
-    """
+    """Token and cost accumulator with per-node breakdown."""
 
     total_cost_usd: float = 0.0
     total_tokens: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
     per_node: dict[str, float] = Field(
-        default_factory=dict,
-        description="node_name → accumulated cost",
+        default_factory=dict, description="node_name → accumulated cost",
     )
 
     def record(self, node_name: str, cost_usd: float = 0.0, tokens: int = 0, inp: int = 0, out: int = 0) -> None:
-        """Record cost and token usage for a node."""
         self.total_cost_usd += cost_usd
         self.total_tokens += tokens
         self.input_tokens += inp
@@ -209,18 +143,11 @@ class CostTracker(BaseModel):
         self.per_node[node_name] = self.per_node.get(node_name, 0.0) + cost_usd
 
     def budget_remaining(self, budget: float) -> float:
-        """Return remaining budget (budget minus total_cost_usd)."""
         return max(0.0, budget - self.total_cost_usd)
 
 
 class MessageEntry(BaseModel):
-    """A single message with metadata for efficient truncation and dedup.
-
-    Replaces the raw dict pattern in ``messages``.  The ``milestone``
-    flag tells the reducer to NEVER truncate this entry (survives the
-    rolling window).  The ``id`` field is used for dedup — if the same
-    ``id`` appears in an update, the old entry is replaced (not appended).
-    """
+    """A single message with metadata for efficient truncation and dedup."""
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="Unique message identifier")
     role: Literal["user", "assistant", "system", "tool"]
@@ -233,53 +160,16 @@ class MessageEntry(BaseModel):
 
 
 class MessageHistory(BaseModel):
-    """Ordered, deduplicated, bounded message list with convenience methods.
-
-    Replaces the raw ``list[MessageEntry]`` for ``messages`` in state.
-    Wraps the rolling-window reducer logic into a class so nodes can
-    call ``append()``, ``search()``, or ``truncate()`` directly without
-    reimplementing the dedup/truncation logic.
-
-    Lifecycle
-    ---------
-    Created empty at session start → appended to on every turn →
-    automatically truncated to last 10 + milestones.
-
-    Usage::
-
-        history = MessageHistory()
-        history.append("user", "Hello")
-        history.append("assistant", "Hi there!", milestone=True)
-        for msg in history.recent(5):
-            print(msg.content)
-
-    Serialisation
-    -------------
-    ``BaseModel`` serialisation means LangGraph's checkpointer can store
-    and restore ``MessageHistory`` natively via ``model_dump()`` /
-    ``model_validate()``.
-    """
+    """Ordered, deduplicated, bounded message list with convenience methods."""
 
     entries: list[MessageEntry] = Field(default_factory=list, description="Ordered message list")
 
     def append(self, role: str, content: str, milestone: bool = False) -> MessageEntry:
-        """Add a new message, deduplicate by ID, then apply rolling window.
-
-        Returns the created ``MessageEntry`` so callers can inspect its ``id``.
-        """
         entry = MessageEntry(role=role, content=content, milestone=milestone)
         return self.merge(entry)
 
     def merge(self, update: MessageEntry | list[MessageEntry]) -> MessageEntry | list[MessageEntry]:
-        """Merge one or more messages into this history (dedup + truncate).
-
-        Called by LangGraph's ``messages_reducer`` under the hood, but
-        also available directly for nodes that want to add messages
-        without going through the reducer.
-        """
         combined = self.entries + (update if isinstance(update, list) else [update])
-
-        # Dedup by ID — later replaces earlier
         seen: dict[str, int] = {}
         deduped: list[MessageEntry] = []
         for msg in combined:
@@ -289,59 +179,24 @@ class MessageHistory(BaseModel):
                 continue
             seen[mid] = len(deduped)
             deduped.append(msg)
-
-        # Rolling window: keep last 10 + all milestones
         cutoff = max(0, len(deduped) - 10)
-        self.entries = [
-            msg for i, msg in enumerate(deduped)
-            if i >= cutoff or msg.milestone
-        ]
-
+        self.entries = [msg for i, msg in enumerate(deduped) if i >= cutoff or msg.milestone]
         if isinstance(update, list):
             return update
         return update
 
     def recent(self, n: int = 5) -> list[MessageEntry]:
-        """Return the last ``n`` messages."""
         return self.entries[-n:]
 
-    def search(self, text: str, field: str = "content") -> list[MessageEntry]:
-        """Find messages where ``field`` contains ``text`` (case-insensitive)."""
-        text_lower = text.lower()
-        return [
-            m for m in self.entries
-            if text_lower in getattr(m, field, "").lower()
-        ]
-
     def last_user_message(self) -> str:
-        """Return the content of the most recent user message, or ''."""
         for msg in reversed(self.entries):
             if msg.role == "user":
                 return msg.content
         return ""
 
-    def count_by_role(self) -> dict[str, int]:
-        """Return a dict mapping role → count."""
-        counts: dict[str, int] = {}
-        for msg in self.entries:
-            counts[msg.role] = counts.get(msg.role, 0) + 1
-        return counts
-
     def truncate(self, keep: int = 10) -> None:
-        """Keep only the last ``keep`` messages plus milestones."""
         cutoff = max(0, len(self.entries) - keep)
-        self.entries = [
-            msg for i, msg in enumerate(self.entries)
-            if i >= cutoff or msg.milestone
-        ]
-
-    def lazy_load(self, source: str | None = None) -> None:
-        """Placeholder for future deferred loading from an external store.
-
-        Args:
-            source: Optional URI or session ID to load from.
-        """
-        pass
+        self.entries = [msg for i, msg in enumerate(self.entries) if i >= cutoff or msg.milestone]
 
     def __len__(self) -> int:
         return len(self.entries)
@@ -359,14 +214,12 @@ class MessageHistory(BaseModel):
 
 
 def _get_msg_id(msg: Any) -> str:
-    """Extract message ID from dict or MessageEntry."""
     if isinstance(msg, dict):
         return msg.get("id", "") or ""
     return getattr(msg, "id", "") or ""
 
 
 def _get_msg_milestone(msg: Any) -> bool:
-    """Extract milestone flag from dict or MessageEntry."""
     if isinstance(msg, dict):
         return msg.get("_milestone", False) or msg.get("milestone", False)
     return getattr(msg, "milestone", False) or False
@@ -376,37 +229,21 @@ def messages_reducer(
     current: list[Any] | None,
     update: list[Any] | dict[str, Any] | None,
 ) -> list[Any]:
-    """Rolling-window message reducer — handles both dicts and MessageEntry.
-
-    Called by LangGraph on every node return that includes ``messages``.
-    The reducer:
-    1. Combines current + update into a single list
-    2. Deduplicates by ``id`` (later replaces earlier)
-    3. Applies a rolling window: keeps last 10 messages
-    4. Preserves ALL milestone-tagged messages regardless of window
-    """
-    full: list[Any] = (current or []) + (
-        update if isinstance(update, list) else [update]
-    )
-
-    # Assign stable IDs to messages missing them
+    """Rolling-window message reducer — handles both dicts and MessageEntry."""
+    full: list[Any] = (current or []) + (update if isinstance(update, list) else [update])
     for m in full:
         if isinstance(m, dict):
             m.setdefault("id", str(uuid.uuid4()))
-
-    # Dedup by ID — later replaces earlier
     seen: dict[str, int] = {}
     deduped: list[Any] = []
     for msg in full:
         mid = _get_msg_id(msg)
         if mid and mid in seen:
-            deduped[seen[mid]] = msg  # replace
+            deduped[seen[mid]] = msg
             continue
         if mid:
             seen[mid] = len(deduped)
         deduped.append(msg)
-
-    # Rolling window: keep last 10 + all milestones
     cutoff = max(0, len(deduped) - 10)
     kept: list[Any] = []
     for i, msg in enumerate(deduped):
@@ -419,15 +256,7 @@ def tool_results_reducer(
     current: list[ToolResult] | None,
     update: list[ToolResult] | None,
 ) -> list[ToolResult]:
-    """Append-only reducer with hard bound at 20 entries.
-
-    Prevents unbounded ``tool_results`` growth when the DAG loops
-    many times (dag_splitter generations).  Older entries are dropped
-    when the list exceeds the bound.
-
-    ``current`` is the accumulated list, ``update`` is the new batch
-    (typically a single-element list from ``tool_executor``).
-    """
+    """Append-only reducer with hard bound at 20 entries."""
     combined = (current or []) + (update or [])
     return combined[-20:]
 
@@ -438,14 +267,7 @@ def tool_results_reducer(
 
 
 class PersistentContext(TypedDict, total=False):
-    """Data that lives across conversation turns.
-
-    **Lifecycle**: Created at session start → updated rarely (e.g.
-    when user approves a new tool) → checkpointed every turn.
-
-    **Migration**: These fields were previously flat in ``AgentState``.
-    Now they live under ``state["persistent"]``.
-    """
+    """Data that lives across conversation turns."""
 
     session_id: str
     user_context: dict[str, Any]
@@ -454,16 +276,7 @@ class PersistentContext(TypedDict, total=False):
 
 
 class WorkingMemory(TypedDict, total=False):
-    """Short-term data scoped to the current task or DAG batch.
-
-    **Lifecycle**: Created when a user query is received → updated
-    through intent parsing, planning, and tool execution → cleared
-    when the final response is delivered (or when the conversation
-    moves to a new query).
-
-    **Migration**: These fields were previously in ``AgentState``
-    at the top level.  Now they live under ``state["working"]``.
-    """
+    """Short-term data scoped to the current task or DAG batch."""
 
     messages: Annotated[MessageHistory, messages_reducer]
     current_plan: ExecutionGraph
@@ -472,18 +285,7 @@ class WorkingMemory(TypedDict, total=False):
 
 
 class EphemeralFlags(TypedDict, total=False):
-    """Turn-scoped routing and control flags.
-
-    **Lifecycle**: Set before a node runs → read by routing functions
-    → cleared before the next node executes.  These are NEVER
-    checkpointed (they're not in the top-level ``AgentState``; LangGraph
-    only checkpoints the top-level TypedDict's fields).
-
-    **Migration**: These were previously ``_``-prefixed fields in
-    ``AgentState`` (``_routing_decision``, ``_tool_executed_in_turn``,
-    etc.).  Now they live outside the checkpointed state entirely,
-    communicated via node return values during execution.
-    """
+    """Turn-scoped routing and control flags — NOT checkpointed."""
 
     routing_decision: str
     execution_mode: str
@@ -498,35 +300,19 @@ class EphemeralFlags(TypedDict, total=False):
 
 
 # ============================================================================
-# Ephemeral fields — never persisted to the checkpointer
+# Ephemeral fields — cleared between turns, not persisted to checkpointer
 # ============================================================================
 
-# Fields that are cleared between turns — not persisted across checkpoints.
 _EPHEMERAL_FIELDS: list[str] = [
     "_routing_decision",
     "_tool_executed_in_turn",
     "_safety_result",
-    "_plan_valid",
-    "_plan_validation_failures",
-    "_invalid_results",
-    "_plan_repair_count",
-    "_tool_retry_count",
     "dag_tasks",
-    "dag_results",
-    "dag_phase",
-    "dag_iteration",
     "tool_results",
-    "tool_results_ref",
     "errors",
-    "pending_approval",
-    "_pending_splits",
-    "_dag_generation",
-    "_split_tools",
     "_query_type",
     "_force_query_type",
-    "_filtered_tools",
     "_preferred_tools",
-    "completed_task_ids",
     "_executor_failed",
     "_executor_results",
     "_executor_all_success",
@@ -544,95 +330,49 @@ _EPHEMERAL_FIELDS: list[str] = [
 class AgentState(TypedDict, total=False):
     """Top-level state schema that LangGraph serialises.
 
-    By grouping fields into nested TypedDicts, unchanged tiers are
-    serialised as references rather than full payloads, reducing
-    checkpoint size.
-
-    ``total=False`` allows runtime flat fields during the migration
-    from ``state.py`` — nodes can access both nested tiers and flat
-    fields without type errors.
-
-    ``ephemeral`` flags are deliberately absent.  They are communicated
-    via node return values during execution; LangGraph only checkpoints
-    the fields declared here.  This is the core optimisation: routing
-    state that changes every node doesn't bloat the checkpoint database.
-
-    Extending
-    ---------
-    Add new fields to the appropriate tier TypedDict above, then
-    add them to this ``AgentState``.  If the field changes on every
-    node (routing decisions, safety scores), it belongs in
-    ``EphemeralFlags`` (outside the checkpoint).  If it changes
-    once per turn (messages, plans), it belongs in ``WorkingMemory``.
-    If it rarely changes (user config), it belongs in
-    ``PersistentContext``.
+    ``total=False`` allows the dict to carry ephemeral fields at runtime
+    that are not checkpointed.  Ephemeral flags are communicated via
+    node return values and live in ``_EPHEMERAL_FIELDS`` — they are
+    cleared between turns by the runner.
     """
 
-    # New 3-tier structure (preferred — migrated toward)
+    # New 3-tier structure (preferred — migrate toward)
     persistent: PersistentContext
     working: WorkingMemory
     cost: CostTracker
 
-    # Legacy flat fields (backward compat — migrate to tiers)
+    # Flat fields used by the 5-node production graph
     messages: Annotated[list[dict[str, Any]], messages_reducer]
     session_id: str
-    user_context: dict[str, Any]
-    plan: list[dict[str, Any]] | None
-    current_step_index: int
-    gathered_requirements: dict[str, Any]
     available_tools: list[dict[str, Any]]
-    pending_approval: dict[str, Any] | None
     iteration_count: int
-    scratchpad: str
     final_response: str | None
     intent: dict[str, Any] | None
-    missing_info_slots: list[str] | None
     errors: list[str]
-    _bound_tools: list[dict[str, Any]]
     intent_analysis: dict[str, Any] | None
-    analysis_result: dict[str, Any] | None
-    needs_human_review: bool
-    questions_asked: int
     response_type: str
-    reflection_score: float
     reflection_feedback: str
-    reflection_count: int
     working_memory: dict[str, Any]
-    reflection_history: list[dict[str, Any]]
-    task_difficulty: float | None
+    gathered_requirements: dict[str, Any]
+    plan: list[dict[str, Any]] | None
     total_cost_usd: float
     _cost_breakdown: dict[str, Any]
     _total_tokens: int
-    _max_concurrent_tasks: int | None
-    _pending_splits: list[str]
-    _dag_generation: int
-    dag_tasks: list[dict[str, Any]]
-    dag_results: dict[str, Any]
-    completed_task_ids: list[str]
-    dag_phase: str
+
+    # Graph routing & execution state
     _routing_decision: str
     _tool_executed_in_turn: bool
     _safety_result: dict[str, Any]
-    _plan_valid: bool
-    _plan_validation_failures: list[dict[str, Any]]
-    _invalid_results: list[dict[str, Any]]
-    dag_iteration: int
-    max_dag_iterations: int
-    reflection_revisions: int
-    max_reflection_revisions: int
-    is_high_risk: bool
-    _plan_repair_count: int
-    _tool_retry_count: int
     _force_query_type: str
     _query_type: str
-    _filtered_tools: list[dict[str, Any]] | None
     _preferred_tools: list[str]
-    _split_tools: list[str]
-    tool_results: list[dict[str, Any]]
-    tool_results_ref: str
     _executor_failed: list[str]
     _executor_results: dict[str, Any]
     _executor_all_success: bool
     _tool_retry_counts: dict[str, int]
     _pending_tasks: list[str]
     _execution_plan: dict[str, Any]
+
+    # Tool execution state
+    tool_results: list[dict[str, Any]]
+    dag_tasks: list[dict[str, Any]]

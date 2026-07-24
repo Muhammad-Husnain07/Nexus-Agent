@@ -1,4 +1,4 @@
-"""LangGraph StateGraph orchestration graph."""
+"""LangGraph StateGraph orchestration graph — 5-node production agent."""
 
 from nexus.agent.errors import (
     AgentError,
@@ -18,14 +18,7 @@ from nexus.agent.schemas import (
     AgentStreamEvent,
     ApprovalAction,
 )
-from nexus.agent.state import (
-    RESPONSE_TYPES,
-    AgentState,
-    AnalysisResult,
-    IntentAnalysis,
-    MissingSlot,
-    PlanStep,
-)
+from nexus.agent.state import AgentState
 
 __all__ = [
     "AgentError",
@@ -37,16 +30,11 @@ __all__ = [
     "AgentState",
     "AgentStateResponse",
     "AgentStreamEvent",
-    "AnalysisResult",
     "ApprovalAction",
     "ApprovalRejected",
     "ContextWindowExceededError",
-    "IntentAnalysis",
     "MaxIterationsError",
-    "MissingSlot",
-    "PlanStep",
     "PlanningError",
-    "RESPONSE_TYPES",
     "ToolExecutionError",
     "build_agent_graph",
 ]

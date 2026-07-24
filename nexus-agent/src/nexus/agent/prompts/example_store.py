@@ -27,18 +27,8 @@ logger = structlog.get_logger("nexus.agent.prompts.example_store")
 _EXAMPLES_DIR = Path(__file__).resolve().parent / "examples"
 
 _PROMPT_FILE_MAP: dict[str, str] = {
-    "understand_intent": "understand_intent.yaml",
     "plan_parallel": "plan_parallel.yaml",
-    "gather_requirements": "gather_requirements.yaml",
     "finalize": "finalize.yaml",
-    "reflect_on_response": "reflect_on_response.yaml",
-    "plan": "plan.yaml",
-    "execute_step": "execute_step.yaml",
-    "analyze_results": "analyze_results.yaml",
-    "execute_step_correction": "execute_step.yaml",
-    "execute_step_error_recovery": "execute_step.yaml",
-    "execute_step_approval": "execute_step.yaml",
-    "analyze_results_enriched": "analyze_results.yaml",
 }
 
 

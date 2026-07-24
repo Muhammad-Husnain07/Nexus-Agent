@@ -1,17 +1,10 @@
-"""Query classifier and dynamic router — lightweight query-type detection.
+"""Query classifier — two-stage query-type detection.
 
 Two-stage classification:
 1. **Heuristic** (~0ms): greeting keywords, single tool name, conjunctions,
    follow-up detection from conversation history.
 2. **LLM** (~500ms): compact few-shot call for ambiguous/multi-tool queries
    to distinguish INDEPENDENT_MULTI from DEPENDENT_MULTI.
-
-Usage::
-
-    from nexus.agent.router import classify_query, route_query, QueryType
-
-    qtype = await classify_query(query, history, tools, llm, model)
-    node = route_query(qtype)  # returns target graph node name
 """
 
 from __future__ import annotations
@@ -409,16 +402,4 @@ async def classify_query(
     return QueryType.SINGLE_TOOL
 
 
-def route_query(query_type: QueryType) -> str:
-    """Return the target graph node name for a given query type.
 
-    Maps each ``QueryType`` to the first node in the optimal execution path.
-    """
-    _ROUTES = {
-        QueryType.SINGLE_TOOL: "understand_intent",         # structured extraction → fast exec
-        QueryType.INDEPENDENT_MULTI: "understand_intent",   # structured extraction → tool_subgraph
-        QueryType.DEPENDENT_MULTI: "understand_intent",     # structured extraction → tool_subgraph
-        QueryType.CONVERSATIONAL: "understand_intent",      # resolve pronouns → re-execute
-        QueryType.NO_TOOL_NEEDED: "respond_without_tool",   # direct response
-    }
-    return _ROUTES.get(query_type, "understand_intent")

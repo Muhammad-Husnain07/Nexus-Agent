@@ -1,7 +1,6 @@
 """Tool registry, discovery, executor, MCP, and API."""
 
 from nexus.tools.api import router as tools_router
-from nexus.tools.approval_gate import ApprovalRequiredInterrupt, check_approval_required
 from nexus.tools.discovery import DynamicToolSelector
 from nexus.tools.error_recovery import SemanticErrorClassifier, SemanticRetryHandler
 from nexus.tools.executor import ExecutionContext, ToolExecutor
@@ -22,11 +21,9 @@ from nexus.tools.schemas import (
 )
 
 __all__ = [
-    "ApprovalRequiredInterrupt",
     "PerformanceTracker",
     "SemanticErrorClassifier",
     "SemanticRetryHandler",
-    "check_approval_required",
     "DynamicToolSelector",
     "EMBEDDING_MODEL",
     "ExecutionContext",

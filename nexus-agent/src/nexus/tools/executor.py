@@ -25,7 +25,6 @@ from nexus.db.models.tool import ToolExecution
 from nexus.redis_client.client import get_redis_client
 from nexus.redis_client.pubsub import EventBus, tool_channel
 from nexus.redis_client.rate_limiter import RateLimitError, TokenBucketRateLimiter
-from nexus.tools.approval_gate import ApprovalRequiredInterrupt, check_approval_required
 from nexus.tools.mcp_client import MCPClient
 from nexus.tools.result import ToolResult
 from nexus.tools.retries import category_retry_delay, http_retry_policy, is_retryable_status, parse_retry_after
@@ -170,8 +169,7 @@ class ToolExecutor:
         """Execute an HTTP API call or MCP server request — no code execution.
 
         The full pipeline:
-        1. Approval gate check (raises ``ApprovalRequiredInterrupt`` if needed)
-        2. Input validation against ``tool.input_schema``
+        1. Input validation against ``tool.input_schema``
         3. Python code injection check (rejects tools with code fields)
         4. Sandbox host whitelist check (HTTP tools only)
         5. Auth header resolution
@@ -191,22 +189,6 @@ class ToolExecutor:
         Returns:
             A ``ToolResult`` summarising the execution outcome.
         """
-        # 1. Approval gate (skip if pre-approved by the graph node)
-        if not skip_approval:
-            check = check_approval_required(
-                tool,
-                session_id=context.session_id,
-                agent_run_id=context.agent_run_id,
-                settings=self._agent_settings,
-            )
-            if check.required:
-                raise ApprovalRequiredInterrupt(
-                    tool_name=tool.name,
-                    inputs=inputs,
-                    session_id=context.session_id,
-                    agent_run_id=context.agent_run_id,
-                )
-
         # 2. Input validation
         if tool.input_schema:
             try:

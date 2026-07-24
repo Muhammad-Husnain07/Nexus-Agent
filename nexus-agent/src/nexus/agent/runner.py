@@ -286,62 +286,34 @@ class AgentRunner:
         initial_state: AgentState = {
             "messages": prior_messages + [user_msg],
             "session_id": sid,
-            "_model": _settings.llm.default_model,
-            "user_context": {},
             "plan": None,
-            "current_step_index": 0,
             "gathered_requirements": prior_state.values.get("gathered_requirements", {}) if prior_state else {},
             "available_tools": available_tools,
             "_tool_executed_in_turn": False,
-            "pending_approval": None,
             "iteration_count": 0,
-            "scratchpad": "",
             "tool_results": [],
             "final_response": None,
             "intent": None,
-            "missing_info_slots": None,
             "errors": [],
-            "_bound_tools": [],
             "intent_analysis": None,
-            "analysis_result": None,
-            "needs_human_review": False,
-            "questions_asked": 0,
             "response_type": "tool",
-            "reflection_score": 0.0,
             "reflection_feedback": "",
-            "reflection_count": 0,
             "working_memory": prior_state.values.get("working_memory", {"entries": []}) if prior_state else {"entries": []},
-            "reflection_history": [],
-            "task_difficulty": None,
             "total_cost_usd": 0.0,
             "_cost_breakdown": {},
             "_total_tokens": 0,
-            "_max_concurrent_tasks": None,
-            "_pending_splits": [],
-            "_dag_generation": 0,
             "dag_tasks": [],
-            "dag_results": {},
-            "dag_phase": "",
             "_routing_decision": "continue",
-            "tool_results_ref": "",
-            "_ephemeral_keys": _EPHEMERAL_FIELDS,
-            "is_high_risk": False,
-            "_plan_repair_count": 0,
-            "_tool_retry_count": 0,
             "_safety_result": {"passed": True, "action": "allow", "reason": ""},
-            "_plan_valid": True,
-            "_plan_validation_failures": [],
-            "_invalid_results": [],
-            "_split_tools": [],
-            "completed_task_ids": [],
             "_query_type": "single_tool",
             "_force_query_type": "",
-            "_filtered_tools": None,
             "_preferred_tools": [],
-            "dag_iteration": 0,
-            "reflection_revisions": 0,
-            "max_dag_iterations": 5,
-            "max_reflection_revisions": 3,
+            "_executor_failed": [],
+            "_executor_results": {},
+            "_executor_all_success": True,
+            "_tool_retry_counts": {},
+            "_pending_tasks": [],
+            "_execution_plan": {},
         }
 
         redis = get_redis_client()
@@ -527,9 +499,9 @@ class AgentRunner:
         # Extract inner node name (handles subgraph namespacing if any)
         inner = node_name.split(":")[-1] if ":" in node_name else node_name
 
-        # --- ResponseNode / finalize → final answer ---
+        # --- ResponseNode → final answer ---
         fr = state_update.get("final_response")
-        if fr is not None and inner in ("finalize", "ResponseNode"):
+        if fr is not None and inner == "ResponseNode":
             events.append(AgentEvent("final_response", {"text": fr}))
 
         # --- RouterNode → query classification ---
