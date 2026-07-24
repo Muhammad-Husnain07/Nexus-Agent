@@ -101,12 +101,12 @@ class SessionService:
         page: int = 1,
         page_size: int = 20,
     ) -> SessionList:
-        items, total = await self._session_repo.list(
+        items, total, message_counts = await self._session_repo.list(
             status=status,
             page=page,
             page_size=page_size,
         )
-        reads = [_session_to_read(s) for s in items]
+        reads = [_session_to_read(s, message_counts.get(s.id, 0)) for s in items]
         return SessionList(items=reads, total=total, page=page, page_size=page_size)
 
     async def update_session(

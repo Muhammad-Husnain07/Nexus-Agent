@@ -38,7 +38,15 @@ class SessionRepository(GenericRepository[SessionModel]):
         status: str | None = None,
         page: int = 1,
         page_size: int = 20,
-    ) -> tuple[list[SessionModel], int]:
+    ) -> tuple[list[SessionModel], int, dict[uuid.UUID, int]]:
+        """List sessions with pagination.
+
+        Returns (items, total, message_counts) where message_counts maps
+        session_id → message_count.
+        """
+        from sqlalchemy.orm import selectinload
+        from sqlalchemy import select as sa_select
+
         stmt = select(self._model)
 
         if status is not None:
@@ -56,7 +64,21 @@ class SessionRepository(GenericRepository[SessionModel]):
         result = await self._session.execute(stmt)
         items = list(result.scalars().all())
 
-        return items, total
+        # Get message counts in a single query
+        if items:
+            ids = [s.id for s in items]
+            count_stmt = sa_select(
+                MessageModel.session_id,
+                func.count().label("cnt"),
+            ).where(MessageModel.session_id.in_(ids)).group_by(MessageModel.session_id)
+            count_result = await self._session.execute(count_stmt)
+            message_counts: dict[uuid.UUID, int] = {
+                row.session_id: row.cnt for row in count_result
+            }
+        else:
+            message_counts = {}
+
+        return items, total, message_counts
 
     async def get_with_messages(self, id: uuid.UUID) -> SessionModel | None:
         """Get a session eagerly loaded with its messages."""
