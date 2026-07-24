@@ -8,7 +8,7 @@ import { Send, Square, MessageSquare, Plus, Trash2, Loader2, CheckCircle2, Wrenc
 import { toast } from "sonner"
 import { cn, formatTime } from "@/lib/utils"
 import { useSessionsList } from "@/hooks/use-sessions"
-import { useMessages } from "@/hooks/use-chat"
+import { useMessages } from "@/hooks/use-sessions"
 import { useQueryClient } from "@tanstack/react-query"
 
 interface ToolCallEvent {

@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ArrowLeft, Loader2, MessageSquare, User, Sparkles } from "lucide-react"
 import { useSessionDetail } from "@/hooks/use-sessions"
-import { useMessages } from "@/hooks/use-chat"
+import { useMessages } from "@/hooks/use-sessions"
 import { formatDate, formatTime } from "@/lib/utils"
 import { cn } from "@/lib/utils"
 

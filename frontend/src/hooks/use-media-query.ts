@@ -1,15 +1,29 @@
-import { useTheme, useMediaQuery as useMuiMediaQuery } from "@mui/material";
+import { useState, useEffect } from "react";
 
-export function useMediaQuery(query: string) {
-  return useMuiMediaQuery(query);
+function getMatches(query: string): boolean {
+  if (typeof window !== "undefined") {
+    return window.matchMedia(query).matches;
+  }
+  return false;
+}
+
+export function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(getMatches(query));
+
+  useEffect(() => {
+    const mq = window.matchMedia(query);
+    const handler = (e: MediaQueryListEvent) => setMatches(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, [query]);
+
+  return matches;
 }
 
 export function useIsMobile() {
-  const theme = useTheme();
-  return useMediaQuery(theme.breakpoints.down("md"));
+  return useMediaQuery("(max-width: 767px)");
 }
 
 export function useIsDesktop() {
-  const theme = useTheme();
-  return useMediaQuery(theme.breakpoints.up("md"));
+  return useMediaQuery("(min-width: 768px)");
 }
