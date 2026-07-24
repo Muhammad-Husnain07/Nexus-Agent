@@ -404,9 +404,11 @@ async def _execute_task(
             session=session,
         )
         result["_dag_generation"] = dag_generation
+        # Return updated dag_tasks with this task marked as done for proper state merging
         return {
             "tool_results": [result],
             "dag_results": {**dag_results, task_id: result.get("data")},
+            "dag_tasks": [{"id": task_id, "status": "done"}],
             "_tool_executed_in_turn": True if result.get("tool_name") else False,
         }
 
@@ -423,8 +425,10 @@ async def _execute_task(
         result = {"tool_name": None, "status": "success", "data": None, "error": None, "task_id": task_id}
     result["_dag_generation"] = dag_generation
 
+    # Return updated dag_tasks with this task marked as done for proper state merging
     return {
         "tool_results": [result],
         "dag_results": {**dag_results, task_id: result.get("data")},
+        "dag_tasks": [{"id": task_id, "status": "done"}],
         "_tool_executed_in_turn": True if result.get("tool_name") else False,
     }

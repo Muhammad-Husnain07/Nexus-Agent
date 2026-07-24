@@ -70,6 +70,48 @@ def _merge_reflection_history(
     return left + right
 
 
+def _dag_tasks_reducer(
+    current: list[dict[str, Any]],
+    update: list[dict[str, Any]] | dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Merge dag_tasks updates from parallel tool executions.
+    
+    When tool_executor returns via Send(), it returns a single-item list
+    with {id, status: "done"}. This reducer updates the existing task's
+    status without replacing the entire list.
+    
+    Args:
+        current: The existing dag_tasks list from state
+        update: Either a single task dict or list of task dicts to merge
+        
+    Returns:
+        Merged dag_tasks list with updated statuses
+    """
+    if not current:
+        return update if isinstance(update, list) else [update]
+    
+    if not update:
+        return current
+    
+    # Normalize update to list
+    updates = update if isinstance(update, list) else [update]
+    
+    # Create a map of updates by id
+    update_map = {t["id"]: t for t in updates if isinstance(t, dict) and "id" in t}
+    
+    # Merge: update existing tasks, keep unchanged ones
+    result = []
+    for task in current:
+        if isinstance(task, dict) and task.get("id") in update_map:
+            # Merge the update into the existing task
+            merged = {**task, **update_map[task["id"]]}
+            result.append(merged)
+        else:
+            result.append(task)
+    
+    return result
+
+
 class PlanStep(BaseModel):
     """A single step in the agent's execution plan."""
 
@@ -232,7 +274,7 @@ class AgentState(TypedDict):
     _active_speculations: dict[str, Any] | None
     _pending_splits: list[str]
     _dag_generation: int
-    dag_tasks: list[dict[str, Any]]
+    dag_tasks: Annotated[list[dict[str, Any]], _dag_tasks_reducer]
     dag_results: Annotated[dict[str, Any], _merge_results]
     dag_phase: str
     _routing_decision: str
