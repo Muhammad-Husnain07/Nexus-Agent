@@ -419,6 +419,89 @@ class AgentRunner:
                 await self._release_lock(redis, lock_key, lock_token)
 
     # ------------------------------------------------------------------
+    # Continue after approval
+    # ------------------------------------------------------------------
+
+    async def continue_after_approval(self, session_id: str) -> None:
+        """Re-trigger graph execution after an approval/rejection decision.
+
+        Loads the persisted state (which now contains ``_approval_decision``),
+        builds a fresh initial state preserving the existing execution plan,
+        and streams the graph. The router is bypassed via ``_force_query_type``.
+
+        This is a fire-and-forget method — events are streamed to Redis pub/sub
+        for the frontend to consume.
+        """
+        sid = str(session_id)
+        graph = await self._build_graph()
+        config = {"configurable": {"thread_id": sid}}
+
+        prior_state = await graph.aget_state(config)
+        if prior_state is None or not prior_state.values:
+            logger.warning("continue_after_approval.no_state", session_id=sid)
+            return
+
+        prior_values = prior_state.values
+        prior_messages = list(prior_values.get("messages", []))
+        approval_decision = prior_values.get("_approval_decision")
+
+        if not approval_decision:
+            logger.warning("continue_after_approval.no_decision", session_id=sid)
+            return
+
+        # Build state that preserves the plan and approval decision
+        resume_state: AgentState = {
+            "messages": prior_messages,
+            "session_id": sid,
+            "available_tools": prior_values.get("available_tools", []),
+            "_execution_plan": prior_values.get("_execution_plan", {}),
+            "plan": prior_values.get("plan"),
+            "_query_type": prior_values.get("_query_type", "single_tool"),
+            "_force_query_type": prior_values.get("_query_type", "single_tool"),
+            "_approval_decision": approval_decision,
+            "_tool_executed_in_turn": False,
+            "iteration_count": prior_values.get("iteration_count", 0),
+            "tool_results": [],
+            "final_response": None,
+            "intent": prior_values.get("intent"),
+            "errors": [],
+            "intent_analysis": prior_values.get("intent_analysis"),
+            "response_type": "tool",
+            "reflection_feedback": "",
+            "working_memory": prior_values.get("working_memory", {"entries": []}),
+            "total_cost_usd": prior_values.get("total_cost_usd", 0.0),
+            "_cost_breakdown": prior_values.get("_cost_breakdown", {}),
+            "_total_tokens": prior_values.get("_total_tokens", 0),
+            "dag_tasks": prior_values.get("dag_tasks", []),
+            "_routing_decision": "continue",
+            "_safety_result": prior_values.get("_safety_result", {"passed": True, "action": "allow", "reason": ""}),
+            "_executor_failed": [],
+            "_executor_results": {},
+            "_executor_all_success": True,
+            "_tool_retry_counts": {},
+            "_pending_tasks": [],
+        }
+
+        # Stream the graph (fire-and-forget — events go to Redis pub/sub)
+        try:
+            async for event in graph.astream(resume_state, config, stream_mode="updates"):
+                if not isinstance(event, dict):
+                    continue
+                node_name = next(iter(event))
+                state_update = event[node_name]
+                agent_events = self._translate(node_name, state_update or {})
+                for agent_event in agent_events:
+                    if self._event_bus:
+                        await self._event_bus.publish(
+                            agent_channel(sid),
+                            agent_event.to_dict(),
+                        )
+        except Exception as exc:
+            logger.error("continue_after_approval.failed", session_id=sid, error=str(exc))
+
+        logger.info("continue_after_approval.complete", session_id=sid)
+
+    # ------------------------------------------------------------------
     # Resume
     # ------------------------------------------------------------------
 
@@ -579,6 +662,14 @@ class AgentRunner:
                     "feedback": "Retrying failed tasks",
                     "reflection_count": 1,
                 }))
+
+        # ── Approval required (any node) ───────────────────────────
+        if state_update.get("_needs_approval"):
+            tools = state_update.get("_pending_approval_tools", [])
+            events.append(AgentEvent("approval_required", {
+                "pending_tools": tools,
+                "message": state_update.get("final_response", "Approval required"),
+            }))
 
         # ── Errors (any node) ─────────────────────────────────────
         errors = state_update.get("errors", [])

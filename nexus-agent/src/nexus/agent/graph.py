@@ -10,9 +10,10 @@ Nodes
 5.  **ValidationNode** — Pure Python validation of extracted entities.
 6.  **ClarificationNode** — Asks for missing information, ends graph.
 7.  **PlannerNode** — Builds DAG execution plan (dependency analysis + waves).
-8.  **ExecutorNode** — Wave-based concurrent tool execution with retry + timeout.
-9.  **ReflectionNode** — Evaluates results, decides retry or proceed.
-10. **ResponseNode** — Composes final answer from tool results.
+8.  **ApprovalGateNode** — Checks each tool's risk_level for HITL approval.
+9.  **ExecutorNode** — Wave-based concurrent tool execution with retry + timeout.
+10. **ReflectionNode** — Evaluates results, decides retry or proceed.
+11. **ResponseNode** — Composes final answer from tool results.
 
 Pipeline
 ========
@@ -115,6 +116,21 @@ def route_after_validation(state: AgentState) -> str:
     return "ClarificationNode"
 
 
+def route_after_approval_gate(state: AgentState) -> str:
+    """Route based on approval gate decision.
+
+    - If approval needed → ResponseNode (ends graph, waits for user decision)
+    - If approval granted/rejected → ExecutorNode (proceed)
+    """
+    needs = state.get("_needs_approval", False)
+    decision = state.get("_approval_decision")
+    if needs and not decision:
+        logger.info("approval_gate.routing_to_response", needs=needs, decision=decision)
+        return "ResponseNode"
+    logger.info("approval_gate.routing_to_executor", needs=needs, decision=decision)
+    return "ExecutorNode"
+
+
 def route_after_executor(state: AgentState) -> str:
     """Route based on execution results.
 
@@ -160,6 +176,64 @@ async def router_node(
 # ============================================================================
 # Node: Planner
 # ============================================================================
+
+
+async def approval_gate_node(state: AgentState) -> dict[str, Any]:
+    """Check if any planned tool requires human approval.
+
+    Reads the execution plan, checks each tool's risk_level/requires_approval
+    against the tool registry. If approval is needed:
+    - First pass (no decision): asks user, routes to ResponseNode → END
+    - Resume with approval: sets ``_approval_granted``, proceeds to executor
+    - Resume with rejection: adds error, proceeds to executor (will skip)
+
+    Dynamic — driven entirely by tool metadata. No hardcoded tool names.
+    Approval gate at graph level means executor-level ``skip_approval=True``
+    is safe (only already-cleared tools reach the executor).
+    """
+    plan = state.get("_execution_plan", {})
+    tool_names = plan.get("tool_names", [])
+    available_tools = state.get("available_tools", [])
+
+    logger.debug("approval_gate.check", tool_names=tool_names, avail_count=len(available_tools))
+
+    if not tool_names or not available_tools:
+        return {"_approval_granted": True}
+
+    from nexus.tools.approval_gate import check_plan_approval, format_approval_message
+
+    # Check risk_level of each tool in available_tools
+    for t in available_tools:
+        if t.get("name") in tool_names:
+            rl = t.get("risk_level", "low")
+            logger.debug("approval_gate.tool_risk", tool=t.get("name"), risk=rl)
+
+    pending = check_plan_approval(tool_names, available_tools)
+
+    if not pending:
+        logger.info("approval_gate.no_pending", tool_names=tool_names)
+        return {"_approval_granted": True}
+
+    # Check if approval decision exists (persisted across turns via checkpointer)
+    decision = state.get("_approval_decision")
+    if decision == "approved":
+        logger.info("approval_gate.approved", tools=tool_names)
+        # Clear decision and needs_approval so routing goes to ExecutorNode
+        return {"_approval_granted": True, "_approval_decision": None, "_needs_approval": False}
+    if decision == "rejected":
+        logger.info("approval_gate.rejected", tools=tool_names)
+        return {"_approval_granted": False, "_approval_decision": None, "_needs_approval": False, "errors": ["Tool execution rejected by user"]}
+
+    # No decision yet — ask for approval
+    msg = format_approval_message(pending)
+    logger.info("approval_gate.awaiting", tool_names=[t["name"] for t in pending])
+
+    return {
+        "final_response": msg,
+        "_needs_approval": True,
+        "_pending_approval_tools": [t["name"] for t in pending],
+        "_routing_decision": "finalize",
+    }
 
 
 async def planner_node(
@@ -394,7 +468,10 @@ async def response_node(
     Otherwise, use the LLM to compose a natural response from results.
     """
     existing = state.get("final_response")
-    if existing and state.get("response_type") in ("greeting", "meta"):
+    if existing and (
+        state.get("response_type") in ("greeting", "meta")
+        or state.get("_needs_approval")
+    ):
         return {"final_response": existing, "_routing_decision": "finalize"}
 
     # Compose from tool results
@@ -499,6 +576,7 @@ def build_agent_graph(
     graph.add_node("ClarificationNode", node(_clarification_node))
     graph.add_node("PlannerNode", node(planner_node, _llm, _model))
     graph.add_node("ExecutorNode", node(executor_node, _executor))
+    graph.add_node("ApprovalGateNode", node(approval_gate_node))
     graph.add_node("ReflectionNode", node(reflection_node))
     graph.add_node("ResponseNode", node(response_node, _llm, _model))
 
@@ -533,8 +611,16 @@ def build_agent_graph(
     # Clarification → END (graph stops; user responds with new message)
     graph.add_edge("ClarificationNode", END)
 
-    # Existing edges unchanged
-    graph.add_edge("PlannerNode", "ExecutorNode")
+    # Planner → ApprovalGate (conditional) → Executor or Response
+    graph.add_edge("PlannerNode", "ApprovalGateNode")
+    graph.add_conditional_edges(
+        "ApprovalGateNode",
+        route_after_approval_gate,
+        {
+            "ExecutorNode": "ExecutorNode",
+            "ResponseNode": "ResponseNode",
+        },
+    )
 
     graph.add_conditional_edges(
         "ExecutorNode",

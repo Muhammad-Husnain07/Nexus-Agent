@@ -327,6 +327,9 @@ _EPHEMERAL_FIELDS: list[str] = [
     "_needs_clarification",
     "_clarification_asked",
     "_normalization_metadata",
+    "_needs_approval",
+    "_pending_approval_tools",
+    "_approval_granted",
 ]
 
 
@@ -391,3 +394,9 @@ class AgentState(TypedDict, total=False):
     _validation_result: dict[str, Any]
     _ready_to_plan: bool
     _needs_clarification: bool
+
+    # HITL approval
+    _needs_approval: bool
+    _pending_approval_tools: list[str]
+    _approval_decision: str
+    _approval_granted: bool
