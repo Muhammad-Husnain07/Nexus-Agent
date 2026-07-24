@@ -183,15 +183,16 @@ async def understand_intent(
     if _memory_ctx:
         system_prompt = _memory_ctx + "\n\n" + system_prompt
 
-    # Inject working memory context
-    try:
-        from nexus.memory.working import WorkingMemory  # noqa: PLC0415
-        wm = WorkingMemory.from_dict(state.get("working_memory"))
-        wm_ctx = wm.to_context(n=5)
-        if wm_ctx:
-            system_prompt = wm_ctx + "\n\n" + system_prompt
-    except Exception:
-        logger.warning("memory.wm_injection_failed", exc_info=True)
+    # Inject working memory context (skip for greetings — no useful context)
+    if state.get("response_type") not in ("greeting", "meta"):
+        try:
+            from nexus.memory.working import WorkingMemory  # noqa: PLC0415
+            wm = WorkingMemory.from_dict(state.get("working_memory"))
+            wm_ctx = wm.to_context(n=5)
+            if wm_ctx:
+                system_prompt = wm_ctx + "\n\n" + system_prompt
+        except Exception:
+            logger.warning("memory.wm_injection_failed", exc_info=True)
 
     # Inject reflection feedback when re-entering from a reflection revise
     reflection_feedback = state.get("reflection_feedback", "") or ""

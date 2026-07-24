@@ -134,7 +134,6 @@ _EPHEMERAL_FIELDS: list[str] = [
     "tool_results_ref",
     "errors",
     "pending_approval",
-    "_active_speculations",
     "_pending_splits",
     "_dag_generation",
     "_split_tools",
@@ -226,11 +225,7 @@ class AgentState(TypedDict):
     total_cost_usd: float
     _cost_breakdown: dict[str, Any]
     _total_tokens: int
-    _prompt_versions: dict[str, str]
-    self_consistency_samples: list[dict[str, Any]] | None
-    calibration_data: dict[str, Any]
     _max_concurrent_tasks: int | None
-    _active_speculations: dict[str, Any] | None
     _pending_splits: list[str]
     _dag_generation: int
     dag_tasks: list[dict[str, Any]]

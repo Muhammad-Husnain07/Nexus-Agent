@@ -31,6 +31,12 @@ from nexus.agent.graph import build_agent_graph
 from nexus.agent.state import AgentState, _EPHEMERAL_FIELDS
 from nexus.config.settings import get_settings
 from nexus.llm.client import LLMClient
+
+# Module-level compiled graph cache — rebuilt once per process lifetime.
+# Graph compilation (node/edge validation) is expensive (~30-50ms) and
+# produces a stateless object — all run state lives in the checkpointer.
+_compiled_graph: Any | None = None
+_graph_lock = asyncio.Lock()
 from nexus.observability.outcomes import InvocationOutcome, persist_outcome
 from nexus.observability.tracing import get_tracer
 from nexus.redis_client.client import get_redis_client
@@ -76,6 +82,7 @@ return 0
 _tool_cache: list[dict[str, Any]] = []
 _tool_cache_ts: float = 0
 _TOOL_CACHE_TTL: int = 60
+_tool_cache_lock = asyncio.Lock()
 
 
 def _get_cached_tools() -> list[dict[str, Any]]:
@@ -93,17 +100,24 @@ async def _refresh_tool_cache(
     global _tool_cache, _tool_cache_ts
     import time as _time
     if selector is not None and session_factory is not None:
-        try:
-            from nexus.tools.schemas import ToolList  # noqa: PLC0415
-            async with session_factory() as session:
-                tl: ToolList = await selector._registry.list(session, page_size=1000)
-                _tool_cache = [
-                    {k: v for k, v in t.model_dump(mode="json").items() if k != "embedding"}
-                    for t in tl.items
-                ]
-                _tool_cache_ts = _time.time()
-        except Exception:
-            logger.warning("runner.available_tools_prepopulate_failed")
+        # Double-checked locking: only one coroutine refreshes the cache
+        if _tool_cache and (_time.time() - _tool_cache_ts) < _TOOL_CACHE_TTL:
+            return _tool_cache
+        async with _tool_cache_lock:
+            # Second check after acquiring lock (another coroutine may have refreshed)
+            if _tool_cache and (_time.time() - _tool_cache_ts) < _TOOL_CACHE_TTL:
+                return _tool_cache
+            try:
+                from nexus.tools.schemas import ToolList  # noqa: PLC0415
+                async with session_factory() as session:
+                    tl: ToolList = await selector._registry.list(session, page_size=1000)
+                    _tool_cache = [
+                        {k: v for k, v in t.model_dump(mode="json").items() if k != "embedding"}
+                        for t in tl.items
+                    ]
+                    _tool_cache_ts = _time.time()
+            except Exception:
+                logger.warning("runner.available_tools_prepopulate_failed")
     return _tool_cache
 
 
@@ -153,16 +167,26 @@ class AgentRunner:
         self._session_factory = session_factory
         self._checkpointer = checkpointer
 
-    def _build_graph(self) -> Any:
-        """Build a fresh compiled graph (stateless — all state in checkpointer)."""
-        return build_agent_graph(
-            llm_client=self._llm,
-            tool_selector=self._selector,
-            tool_executor=self._executor,
-            event_bus=self._event_bus,
-            session_factory=self._session_factory,
-            checkpointer=self._checkpointer,
-        )
+    async def _build_graph(self) -> Any:
+        """Return the compiled graph, cached at module level.
+
+        The graph is stateless — all run state lives in the checkpointer,
+        so a single compiled instance can be safely reused across all
+        invocations.  Rebuilding on every request adds 30-50ms overhead.
+        """
+        global _compiled_graph
+        if _compiled_graph is None:
+            async with _graph_lock:
+                if _compiled_graph is None:
+                    _compiled_graph = build_agent_graph(
+                        llm_client=self._llm,
+                        tool_selector=self._selector,
+                        tool_executor=self._executor,
+                        event_bus=self._event_bus,
+                        session_factory=self._session_factory,
+                        checkpointer=self._checkpointer,
+                    )
+        return _compiled_graph
 
     # ------------------------------------------------------------------
     # Lock helpers
@@ -227,7 +251,7 @@ class AgentRunner:
         """
         sid = str(session_id)
 
-        graph = self._build_graph()
+        graph = await self._build_graph()
         run_config: dict[str, Any] = dict(config or {})
         run_config.setdefault("configurable", {})["thread_id"] = sid
 
@@ -291,11 +315,7 @@ class AgentRunner:
             "total_cost_usd": 0.0,
             "_cost_breakdown": {},
             "_total_tokens": 0,
-            "_prompt_versions": {},
-            "self_consistency_samples": None,
-            "calibration_data": {},
             "_max_concurrent_tasks": None,
-            "_active_speculations": None,
             "_pending_splits": [],
             "_dag_generation": 0,
             "dag_tasks": [],
@@ -412,7 +432,7 @@ class AgentRunner:
         Yields:
             ``AgentEvent`` instances as the graph resumes.
         """
-        graph = self._build_graph()
+        graph = await self._build_graph()
         config = {"configurable": {"thread_id": session_id}}
 
         snapshot = await graph.aget_state(config)
@@ -521,14 +541,6 @@ class AgentRunner:
             if fr is not None:
                 event_type = "clarification_needed" if inner_name == "review_plan" else "interrupt"
                 events.append(AgentEvent(event_type, {"question": fr, "source": inner_name}))
-
-        elif inner_name == "self_consistency":
-            samples = state_update.get("self_consistency_samples")
-            if samples:
-                events.append(AgentEvent("self_consistency_result", {"samples": samples}))
-            final = state_update.get("final_response")
-            if final:
-                events.append(AgentEvent("clarification_needed", {"question": final}))
 
         elif inner_name == "gather_requirements":
             final = state_update.get("final_response")

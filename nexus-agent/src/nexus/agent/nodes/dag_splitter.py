@@ -168,8 +168,12 @@ async def dag_splitter(
                                 parent=task_id, count=len(subtasks), tool=parent_tool)
                     new_tasks.extend(subtasks)
 
-        # Strategy 2: LLM-based split decision for complex results
-        if not items and llm is not None and model is not None and isinstance(result_data, dict) and len(result_data) > 1:
+        # Strategy 2: LLM-based split decision for complex results.
+        # Only trigger when the result dict has array values (lists) —
+        # a dict with just scalar keys isn't split-worthy and doesn't
+        # justify an extra 500-800ms LLM call.
+        _has_array_val = isinstance(result_data, dict) and any(isinstance(v, list) for v in result_data.values())
+        if not items and llm is not None and model is not None and _has_array_val:
             try:
                 from nexus.agent.prompts import prompt_manager  # noqa: PLC0415
                 available_tools: list[dict[str, Any]] = state.get("available_tools", [])

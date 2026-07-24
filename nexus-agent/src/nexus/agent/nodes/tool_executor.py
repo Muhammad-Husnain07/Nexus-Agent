@@ -236,6 +236,17 @@ def _find_tool(
     return None
 
 
+def _has_placeholder(val: Any) -> bool:
+    """Quick check if ANY value in a nested structure contains `${`."""
+    if isinstance(val, str) and "${" in val:
+        return True
+    if isinstance(val, dict):
+        return any(_has_placeholder(v) for v in val.values())
+    if isinstance(val, list):
+        return any(_has_placeholder(v) for v in val)
+    return False
+
+
 def _resolve_placeholders(
     inputs: dict[str, Any],
     dag_results: dict[str, Any],
@@ -247,6 +258,11 @@ def _resolve_placeholders(
     Recursively walks the input dict and replaces placeholder strings
     with the actual values from completed task results or gathered info.
     """
+    # Fast path: skip recursion entirely if no placeholder syntax exists.
+    # Most tool calls have literal inputs with no placeholders.
+    if not _has_placeholder(inputs):
+        return inputs
+
     gathered = gathered_requirements or {}
 
     def _resolve(val: Any) -> Any:
