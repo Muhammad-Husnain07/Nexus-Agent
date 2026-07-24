@@ -42,13 +42,23 @@ async def discover_tools(
         ) or any(word in desc for word in query_lower.split() if len(word) > 3):
             direct_matches.append(t)
 
-    # Normal path: semantic search via selector
-    if session_factory:
-        async with session_factory() as session:
-            tools = await selector.select(session, message=query)
+    # Use pre-filtered tools from understand_intent if available (avoids
+    # redundant semantic search).  The semantic filter runs alongside intent
+    # parsing and uses the same embedding model as the selector.
+    pre_filtered: list[dict[str, Any]] | None = state.get("_filtered_tools")
+    if pre_filtered:
+        tool_dicts = []
+        for t in pre_filtered:
+            td = {k: v for k, v in t.items() if k != "_relevance_score"}
+            tool_dicts.append(td)
     else:
-        tools = await selector.select(None, message=query)
-    tool_dicts: list[dict[str, Any]] = [t.model_dump(mode="json") for t in tools]
+        # Normal path: semantic search via selector
+        if session_factory:
+            async with session_factory() as session:
+                tools = await selector.select(session, message=query)
+        else:
+            tools = await selector.select(None, message=query)
+        tool_dicts: list[dict[str, Any]] = [t.model_dump(mode="json") for t in tools]
 
     # Merge direct matches into semantic results to ensure prerequisite
     # tools (e.g. get_geocoding for get_weather) are not missed

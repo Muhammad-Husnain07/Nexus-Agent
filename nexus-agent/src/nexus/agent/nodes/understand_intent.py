@@ -286,8 +286,23 @@ async def understand_intent(
             analysis.confidence = 0.6
             logger.info("intent.fallback_success", tools=_fallback_tools[:4])
 
+    # Semantic tool filtering: pre-filter tools by embedding similarity
+    # so downstream nodes (discover_tools, dag_expander) work with a
+    # smaller, more relevant set.  Falls back to all tools if filtering fails.
+    _filtered_tools: list[dict[str, Any]] | None = None
+    if analysis.primary_goal and state.get("available_tools"):
+        try:
+            from nexus.tools.semantic_selector import select_tools  # noqa: PLC0415
+            _filtered_tools = await select_tools(
+                tools=state.get("available_tools", []),
+                query=analysis.primary_goal,
+                llm=llm,
+            )
+        except Exception:
+            logger.warning("intent.semantic_filter_failed")
+
     # Compute task difficulty for adaptive reflection
-    task_difficulty = _compute_task_difficulty(analysis, last_user)
+    task_difficulty = round(_compute_task_difficulty(analysis, last_user), 3)
 
     # Populate gathered_requirements from known_parameters and resolved missing slots
     prev_missing: list[str] = state.get("missing_info_slots") or []
@@ -358,6 +373,7 @@ async def understand_intent(
             "task_difficulty": task_difficulty,
             "working_memory": working_memory_update,
             "is_high_risk": is_high_risk,
+            "_filtered_tools": _filtered_tools,
             "_routing_decision": "respond_without_tool",
         }
 
@@ -388,6 +404,7 @@ async def understand_intent(
             "confidence": confidence,
             "is_high_risk": is_high_risk,
             "working_memory": working_memory_update,
+            "_filtered_tools": _filtered_tools,
             "_routing_decision": "ask",
         }
 
@@ -405,6 +422,7 @@ async def understand_intent(
             "confidence": confidence,
             "working_memory": working_memory_update,
             "is_high_risk": is_high_risk,
+            "_filtered_tools": _filtered_tools,
             "_routing_decision": "lightweight_verify",
         }
 
@@ -421,4 +439,5 @@ async def understand_intent(
         "confidence": confidence,
         "is_high_risk": is_high_risk,
         "working_memory": working_memory_update,
+        "_filtered_tools": _filtered_tools,
     }
