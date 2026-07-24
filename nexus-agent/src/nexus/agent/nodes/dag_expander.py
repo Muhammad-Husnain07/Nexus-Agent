@@ -251,8 +251,13 @@ def route_dag(state: AgentState) -> list[Send] | str:
 
     tasks: list[dict[str, Any]] = state.get("dag_tasks", [])
     results: dict[str, Any] = state.get("dag_results", {})
+    completed_ids: set[str] = set(state.get("completed_task_ids", []))
+    # Also treat tasks with data in dag_results as completed (backward compat
+    # for any results stored before completed_task_ids was introduced).
+    for tid in results:
+        completed_ids.add(tid)
 
-    remaining = [t for t in tasks if t["id"] not in results]
+    remaining = [t for t in tasks if t["id"] not in completed_ids]
     if not remaining:
         logger.info("dag_expander.all_done", total=len(tasks))
         return "finalize"

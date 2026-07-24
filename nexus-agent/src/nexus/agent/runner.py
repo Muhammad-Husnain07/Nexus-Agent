@@ -312,6 +312,7 @@ class AgentRunner:
             "_plan_validation_failures": [],
             "_invalid_results": [],
             "_split_tools": [],
+            "completed_task_ids": [],
             "dag_iteration": 0,
             "reflection_revisions": 0,
             "max_dag_iterations": 5,

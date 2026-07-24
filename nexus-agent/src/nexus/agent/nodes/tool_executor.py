@@ -407,6 +407,7 @@ async def _execute_task(
         return {
             "tool_results": [result],
             "dag_results": {**dag_results, task_id: result.get("data")},
+            "completed_task_ids": [task_id],
             "_tool_executed_in_turn": True if result.get("tool_name") else False,
         }
 
@@ -426,5 +427,6 @@ async def _execute_task(
     return {
         "tool_results": [result],
         "dag_results": {**dag_results, task_id: result.get("data")},
+        "completed_task_ids": [task_id],
         "_tool_executed_in_turn": True if result.get("tool_name") else False,
     }

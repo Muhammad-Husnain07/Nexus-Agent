@@ -138,6 +138,7 @@ _EPHEMERAL_FIELDS: list[str] = [
     "_pending_splits",
     "_dag_generation",
     "_split_tools",
+    "completed_task_ids",
 ]
 
 RESPONSE_TYPES = Literal["tool", "greeting", "meta", "memory_query"]
@@ -234,6 +235,7 @@ class AgentState(TypedDict):
     _dag_generation: int
     dag_tasks: list[dict[str, Any]]
     dag_results: Annotated[dict[str, Any], _merge_results]
+    completed_task_ids: Annotated[list[str], add]
     dag_phase: str
     _routing_decision: str
     _tool_executed_in_turn: Annotated[bool, _any_true]
