@@ -356,7 +356,15 @@ class ToolExecutor:
         # 7. Output validation (soft-fail)
         if result.data is not None and tool.output_schema:
             try:
-                jsonschema.validate(result.data, tool.output_schema)
+                if not isinstance(result.data, dict):
+                    logger.warning(
+                        "tool.output_not_dict",
+                        tool=tool.name,
+                        data_type=type(result.data).__name__,
+                        data_preview=str(result.data)[:200],
+                    )
+                else:
+                    jsonschema.validate(result.data, tool.output_schema)
             except jsonschema.ValidationError as exc:
                 logger.info("tool.output_validation_failed", tool=tool.name, error=str(exc))
                 result.status = "validation_error"

@@ -25,6 +25,8 @@ from typing import Any
 
 import structlog
 
+from nexus.agent.planners.dependency_analysis import analyze_dependencies as _analyze_dependencies
+
 logger = structlog.get_logger("nexus.agent.planners.dag_planner")
 
 
@@ -104,73 +106,61 @@ def _inject_prerequisite_tools(
     """Insert prerequisite tools when a tool's required inputs aren't available.
 
     Scans all tool schemas: if Tool B requires a field that no other tool
-    produces, and no matching tool is registered, inject a synthetic
-    prerequisite tool where possible (e.g. coordinate lookup for weather).
+    produces, search for a tool whose output schema provides that field.
+    If found, inject it as a prerequisite. Pure I/O schema matching —
+    no hardcoded tool names.
     """
-    tool_names = {t["name"] for t in tools}
     modified = list(tools)
 
-    # Build I/O signature map
-    outputs_by_tool: dict[str, set[str]] = {}
-    for t in tools:
-        out = set(t.get("output_schema", {}).get("properties", {}).keys())
-        outputs_by_tool[t["name"]] = out
-
-    # Collect all available output fields
-    all_outputs: set[str] = set()
-    for out_set in outputs_by_tool.values():
-        all_outputs |= out_set
-
-    # For each tool, check if any required input is unmet by any tool's output
-    for t in tools:
-        name = t.get("name", "")
-        required = set(t.get("input_schema", {}).get("required", []))
-        unmet = required - all_outputs
-        if not unmet:
-            continue
-
-        logger.info(
-            "dag_planner.unmet_inputs",
-            tool=name,
-            unmet=sorted(unmet),
-        )
-
-    return modified
-
-
-def _analyze_dependencies(
-    tools: list[dict[str, Any]],
-) -> list[tuple[str, str]]:
-    """Analyze I/O schemas to discover explicit dependencies between tools.
-
-    For each pair of tools (A, B), check if any output field of A matches
-    a required input field of B.  If so, A → B is a dependency.
-    """
-    # Build I/O signature map: tool_name → (required_inputs, output_fields)
+    # Build I/O signature map: tool_name -> (required_inputs, output_fields)
     signatures: dict[str, tuple[set[str], set[str]]] = {}
     for t in tools:
         name = t.get("name", "")
-        input_schema = t.get("input_schema", {})
-        output_schema = t.get("output_schema", {})
+        inp = t.get("input_schema", {})
+        out = t.get("output_schema", {})
+        required = set(inp.get("required", [])) if isinstance(inp, dict) else set()
+        outputs = set(out.get("properties", {}).keys()) if isinstance(out, dict) else set()
+        signatures[name] = (required, outputs)
 
-        required_inputs = set(input_schema.get("required", [])) if isinstance(input_schema, dict) else set()
-        output_fields = set(output_schema.get("properties", {}).keys()) if isinstance(output_schema, dict) else set()
+    # Collect all available output fields across all tools
+    all_outputs: set[str] = set()
+    for _, outs in signatures.values():
+        all_outputs |= outs
 
-        signatures[name] = (required_inputs, output_fields)
+    # For each tool, find unmet required inputs
+    for t in tools:
+        name = t.get("name", "")
+        reqs, _ = signatures.get(name, (set(), set()))
+        unmet = reqs - all_outputs
+        if not unmet:
+            continue
 
-    # Find dependency edges
-    dependencies: list[tuple[str, str]] = []
-    for name_b, (inputs_b, _) in signatures.items():
-        for name_a, (_, outputs_a) in signatures.items():
-            if name_a == name_b:
+        # Search for a tool whose output satisfies the unmet inputs
+        for other in tools:
+            other_name = other.get("name", "")
+            if other_name == name:
                 continue
-            # If tool B needs something that tool A produces
-            shared = inputs_b & outputs_a
-            if shared:
-                dependencies.append((name_a, name_b))
-                logger.debug("dag_planner.dep_edge", from_tool=name_a, to_tool=name_b, fields=list(shared))
+            _, other_outs = signatures.get(other_name, (set(), set()))
+            overlap = unmet & other_outs
+            if overlap:
+                # Only inject if not already in the list
+                if other_name not in {m.get("name") for m in modified}:
+                    modified.append(other)
+                    logger.info(
+                        "dag_planner.injected_prerequisite",
+                        prerequisite=other_name,
+                        for_tool=name,
+                        fields=sorted(overlap),
+                    )
 
-    return dependencies
+    if len(modified) > len(tools):
+        logger.info(
+            "dag_planner.injected_tools",
+            injected_count=len(modified) - len(tools),
+            injected=[m["name"] for m in modified if m not in tools],
+        )
+
+    return modified
 
 
 # ============================================================================

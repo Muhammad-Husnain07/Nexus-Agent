@@ -267,27 +267,7 @@ def _heuristic_classify(
     return None  # Ambiguous — fall through to LLM
 
 
-def _has_schema_dependency(matched_tools: set[str], all_tools: list[dict[str, Any]]) -> bool:
-    """Check if any matched tool's required input is another's output (schema-driven)."""
-    signatures: dict[str, tuple[set[str], set[str]]] = {}
-    for t in all_tools:
-        name = t.get("name", "")
-        inp = t.get("input_schema", {})
-        out = t.get("output_schema", {})
-        required = set(inp.get("required", [])) if isinstance(inp, dict) else set()
-        outputs = set(out.get("properties", {}).keys()) if isinstance(out, dict) else set()
-        signatures[name] = (required, outputs)
-
-    all_outputs: set[str] = set()
-    for name in matched_tools:
-        _, outs = signatures.get(name, (set(), set()))
-        all_outputs |= outs
-
-    for name in matched_tools:
-        reqs, _ = signatures.get(name, (set(), set()))
-        if reqs & all_outputs:
-            return True
-    return False
+from nexus.agent.planners.dependency_analysis import has_schema_dependency as _has_schema_dependency
 
 
 # ============================================================================

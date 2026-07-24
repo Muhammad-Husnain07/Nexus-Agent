@@ -149,31 +149,35 @@ class ToolRegistry:
         if tool is None:
             return None
 
-        old_text = _embedding_text(tool)
-        needs_reembed = False
-
+        # Run ORM attribute access + snapshot in a sync context to avoid
+        # MissingGreenlet from ARRAY/JSONB column lazy loading
         update_dict = data.model_dump(exclude_unset=True)
 
-        for field, raw_val in update_dict.items():
-            val = raw_val
-            if field == "examples" and val is not None:
-                val = [e.model_dump() for e in val]
-            setattr(tool, field, val)
-            if field in ("name", "description", "purpose", "tags"):
-                needs_reembed = True
+        def _sync_update(t_obj: Tool) -> tuple[ToolRead, str]:
+            old_txt = _embedding_text(t_obj)
+            for field, raw_val in update_dict.items():
+                val = raw_val
+                if field == "examples" and val is not None:
+                    val = [e.model_dump() for e in val]
+                setattr(t_obj, field, val)
+            if any(f in update_dict for f in ("name", "purpose", "tags", "aliases")):
+                from nexus.tools.keywords import extract_keywords
+                t_obj.keywords = extract_keywords(
+                    name=t_obj.name,
+                    purpose=t_obj.purpose or "",
+                    tags=t_obj.tags,
+                    aliases=data.aliases,
+                )
+            return _tool_to_read(t_obj), old_txt
 
-        # Recalculate keywords if name/purpose/tags/aliases changed
-        if any(f in update_dict for f in ("name", "purpose", "tags", "aliases")):
-            from nexus.tools.keywords import extract_keywords
-            tool.keywords = extract_keywords(
-                name=tool.name,
-                purpose=tool.purpose or "",
-                tags=tool.tags,
-                aliases=data.aliases,
-            )
+        updated_read, old_text = await session.run_sync(
+            lambda sync_sess: _sync_update(tool)
+        )
+
+        needs_reembed = any(f in update_dict for f in ("name", "description", "purpose", "tags"))
 
         if update_dict:
-            snapshot = _tool_to_read(tool).model_dump(mode="json")
+            snapshot = updated_read.model_dump(mode="json")
             version = ToolVersion(
                 tool_id=tool.id,
                 version=tool.version,
@@ -191,7 +195,7 @@ class ToolRegistry:
 
         await session.flush()
         logger.info("tool.updated", tool_id=str(tool.id), version=tool.version)
-        return _tool_to_read(tool)
+        return updated_read
 
     async def deregister(
         self,
@@ -460,7 +464,10 @@ class ToolRegistry:
         session: AsyncSession,
         tool_id: uuid.UUID,
     ) -> Tool | None:
+        from sqlalchemy.orm import selectinload
         result = await session.execute(
-            select(Tool).where(Tool.id == tool_id)
+            select(Tool)
+            .where(Tool.id == tool_id)
+            .options(selectinload(Tool.executions))
         )
         return result.scalar_one_or_none()

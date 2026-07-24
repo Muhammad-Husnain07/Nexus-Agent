@@ -280,7 +280,8 @@ class ConcurrentExecutor:
         Fault isolation: each task runs independently; one failure doesn't
         affect other tasks in the same wave.
         """
-        wave_tasks = wave.tasks[:max_concurrency]
+        # Use ALL tasks — the Semaphore limits concurrency.
+        # No slicing: tasks beyond max_concurrency are queued by the semaphore.
         semaphore = asyncio.Semaphore(max_concurrency)
 
         async def _run(task: Any) -> ToolExecutionResult:
@@ -293,25 +294,26 @@ class ConcurrentExecutor:
                 )
 
         outcomes = await asyncio.gather(
-            *(_run(t) for t in wave_tasks),
+            *(_run(t) for t in wave.tasks),
             return_exceptions=True,
         )
 
         results: list[ToolExecutionResult] = []
         for i, outcome in enumerate(outcomes):
+            task = wave.tasks[i]
             if isinstance(outcome, ToolExecutionResult):
                 results.append(outcome)
             elif isinstance(outcome, Exception):
                 results.append(ToolExecutionResult(
-                    task_id=wave_tasks[i].id,
-                    tool_name=wave_tasks[i].tool_name,
+                    task_id=task.id,
+                    tool_name=task.tool_name,
                     status="error",
                     error=str(outcome),
                 ))
             else:
                 results.append(ToolExecutionResult(
-                    task_id=wave_tasks[i].id,
-                    tool_name=wave_tasks[i].tool_name,
+                    task_id=task.id,
+                    tool_name=task.tool_name,
                     status="error",
                     error="Unknown error",
                 ))
