@@ -30,7 +30,7 @@ graph TB
 | Component | Module | Responsibility |
 |-----------|--------|---------------|
 | **FastAPI Server** | `src/nexus/api/` | HTTP routes, middleware, SSE streaming, websockets |
-| **LangGraph Agent (11-node)** | `src/nexus/agent/` | Router → Extraction → Normalization → ContextMerge → Validation → Clarification/Planner → ApprovalGate → Executor → Reflection → Response |
+| **LangGraph Agent (15-node)** | `src/nexus/agent/` | Router → Extraction → Normalization → ContextMerge → Validation → Clarification/Resolution → TaskGraphBuilder → GraphOptimizer/Planner → PlanValidator → ApprovalGate → Executor → Reflection → Response |
 | **LLM Client** | `src/nexus/llm/` | Unified interface to 100+ LLM providers (LiteLLM) |
 | **Tool Registry** | `src/nexus/tools/` | CRUD, discovery, semantic search, MCP exposure |
 | **Tool Executor** | `src/nexus/tools/executor.py` | Executes HTTP API calls and MCP server requests with retry logic — no code execution |
@@ -38,6 +38,10 @@ graph TB
 | **Sessions** | `src/nexus/sessions/` | Conversation history, context window management |
 | **HITL** | `src/nexus/tools/approval_gate.py` + graph.py:ApprovalGateNode | Dynamic risk-based approval checks — driven by tool `risk_level`/`requires_approval` metadata. No hardcoded tool names |
 | **Auth** | `src/nexus/security/` | Passthrough auth (no JWT, no RBAC), rate limiting |
+| **Intent Registry** | `src/nexus/agent/registry/` | Dynamic intent inference from tool metadata |
+| **Goal Registry** | `src/nexus/agent/registry/` | Auto-inferred goals from tool categories/prefixes |
+| **Capability Registry** | `src/nexus/agent/registry/` | Capabilities with consumes/produces/preconditions/postconditions |
+| **Artifact Registry** | `src/nexus/agent/registry/` | Typed entities with JSON Schema, trace_id, TTL |
 | **Logging** | inlined structlog | Structured logging across all modules |
 | **Configuration** | `src/nexus/config/` | Pydantic BaseSettings, secret management |
 | **Utilities** | `src/nexus/utils/` | Scheduled jobs, constants |
@@ -70,12 +74,19 @@ sequenceDiagram
         LLM-->>Agent: intent + entities + business_requirements
         Agent->>Agent: NormalizationNode (dates, locations, currencies)
         Agent->>Agent: ContextMergeNode (StructuredContext)
-        Agent->>Agent: ValidationNode (5-stage deterministic pipeline)
+        Agent->>Agent: ValidationNode (4-stage deterministic pipeline)
         alt Missing info
             Agent->>Agent: ClarificationNode → END
             FastAPI-->>Client: event: final_response (clarification)
         else Ready
-            Agent->>Agent: PlannerNode (DAG planner)
+            Agent->>Agent: ResolutionNode (A* graph search, pure Python)
+            alt Chain found
+                Agent->>Agent: TaskGraphBuilderNode (topological DAG)
+                Agent->>Agent: GraphOptimizerNode (policy tool selection)
+            else No chain
+                Agent->>Agent: PlannerNode (LLM fallback DAG planner)
+            end
+            Agent->>Agent: PlanValidatorNode (pre-execution checks)
             Agent->>Agent: ApprovalGateNode (check risk_level)
             alt High-risk + no decision
                 FastAPI-->>Client: event: approval_required
@@ -132,8 +143,10 @@ sequenceDiagram
     Client->>FastAPI: POST /sessions/{id}/approve
     FastAPI->>Agent: graph.aupdate_state({_approval_decision: "approved"})
     FastAPI->>Agent: runner.continue_after_approval(sid)
+    Note over Agent: Acquires Redis distributed lock + heartbeat
     Agent->>Agent: RouterNode (bypassed via _force_query_type)
-    Agent->>Agent: PlannerNode (fast-path: reuses existing plan)
+    Agent->>Agent: PlannerNode (fast-path: reuses existing plan, no LLM)
+    Agent->>Agent: PlanValidatorNode (pre-execution validation)
     Agent->>Agent: ApprovalGateNode: reads _approval_decision == "approved"
     Agent->>Tools: ExecutorNode: tool executes
     Tools-->>Agent: ToolResult
@@ -298,22 +311,34 @@ ValidationNode (5-stage pipeline — no LLM)
   ├─ Missing info → ClarificationNode → END
   │                   (user responds, new turn starts)
   │
-  └─ Ready → PlannerNode (DAG plan)
-              ↓
-           ApprovalGateNode
-
-              ├─ High-risk + no decision → ResponseNode → END
-              │   (POST /approve to continue)
+  └─ Ready → ResolutionNode (A* capability graph search)
               │
-              └─ Approved or low-risk → ExecutorNode
-                                          ↓
-                                       ReflectionNode
+              ├─ Chain found → TaskGraphBuilderNode (DAG)
+              │                  ↓
+              │               GraphOptimizerNode (tool selection)
+              │                  ↓
+              │               PlanValidatorNode (pre-execution check)
+              │                  ↓
+              │               ApprovalGateNode
+              │
+              └─ No chain → PlannerNode (LLM fallback)
+                              ↓
+                           PlanValidatorNode
+                              ↓
+                           ApprovalGateNode
 
-                                          ├─ Success → ResponseNode → END
-                                          │
-                                          └─ Failures + retries left → PlannerNode (loop)
-                                              |
-                                              └─ Max retries → ResponseNode → END
+                 ├─ High-risk + no decision → ResponseNode → END
+                 │   (POST /approve to continue)
+                 │
+                 └─ Approved or low-risk → ExecutorNode
+                                             ↓
+                                          ReflectionNode
+
+                                             ├─ Success → ResponseNode → END
+                                             │
+                                             └─ Failures + retries left → PlannerNode (loop)
+                                                 |
+                                                 └─ Max retries → ResponseNode → END
 ```
 
 ## Architecture Decision Records
@@ -323,8 +348,17 @@ ValidationNode (5-stage pipeline — no LLM)
 | Agent framework | LangGraph 1.0 | Purpose-built for stateful agents with interrupts, checkpointing |
 | LLM abstraction | LiteLLM | 100+ providers, unified API, cost tracking |
 | Single-tenancy | N/A | All data shared, simplified deployment |
-| HITL mechanism | ApprovalGateNode (conditional routing) + aupdate_state | Flag-based, no LangGraph interrupt; works with checkpointer state injection |
-| Streaming | SSE (preferred) + WebSocket | Browser-native EventSource, bidirectional fallback |
+| HITL mechanism | ApprovalGateNode (conditional routing) + aupdate_state | Flag-based, no LangGraph interrupt; works with checkpointer state injection, per-call scope with inputs, expiry |
+| Planner | 3-stage: Resolution (A*) → TaskGraphBuilder → GraphOptimizer + LLM fallback | Deterministic graph search first, LLM only for complex DAGs |
+| Planning approach | Hybrid deterministic + LLM | `_deterministic_plan()` pattern-matches single-tool/compare/keyword queries (~0ms). LLM fallback only when needed (~13s) |
+| Pre-execution validation | PlanValidatorNode | Pure Python cycle detection, prerequisite check, precondition validation |
+| Versioning | RoutingFeedback with embedding_model/registry_version/planner_version | Stale vector contamination prevented after model upgrades |
+| Tool selection policy | GraphOptimizerNode (cost weight 0.5, latency 0.3) | Policy-based selection from settings |
+| Entity hierarchy | 5-tier: Intent → Goal → Capability → Artifact → Tool | All tiers auto-inferred from tool metadata; no hardcoded names |
+| Streaming | SSE (preferred) + WebSocket | Browser-native EventSource, bidirectional fallback, `node_completed` events with timing |
 | Tool protocol | MCP + REST | Industry standard for tool discovery, dual interface |
 | Embedding similarity | pgvector (<=> cosine) | In-database search, no external vector store |
 | Async runtime | asyncio + FastAPI | Non-blocking I/O, SSE/WebSocket support |
+| Background tasks | Module-level set[asyncio.Task] with done_callback | Prevents GC drop of fire-and-forget tasks; drained on shutdown |
+| Cost tracking | LLMClient always returns cost data | Centralized in `_complete()`, captured even on LLM failure |
+| Testing | YAML scenario fixtures asserting on graph state | `tests/run_scenarios.py` checks router/extraction/planner/executor state
