@@ -245,6 +245,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         if remaining > 0:
             logger.warning("shutdown.force_exit", active_runs=remaining)
 
+    # Drain tracked background tasks
+    try:
+        from nexus.agent.runner import _pending_bg_tasks as _runner_bg
+        from nexus.agent.nodes.memory_helper import _pending_bg_tasks as _memory_bg
+        all_bg = _runner_bg | _memory_bg
+        if all_bg:
+            logger.info("shutdown.draining_background", count=len(all_bg))
+            done, pending = await asyncio.wait(all_bg, timeout=10.0)
+            for t in pending:
+                t.cancel()
+                logger.warning("shutdown.background_cancelled", task=str(t))
+    except Exception:
+        pass
+
     await stop_scheduler()
     await close_checkpointer()
     if hasattr(app.state, "http_client") and app.state.http_client is not None:

@@ -13,6 +13,15 @@ import structlog
 
 logger = structlog.get_logger("nexus.agent.nodes.memory_helper")
 
+# Track fire-and-forget background tasks so they aren't silently dropped.
+_pending_bg_tasks: set[asyncio.Task] = set()
+
+
+def _track_bg_task(task: asyncio.Task) -> None:
+    """Hold a strong reference to a fire-and-forget task."""
+    _pending_bg_tasks.add(task)
+    task.add_done_callback(_pending_bg_tasks.discard)
+
 
 def _truncate_for_memory(text: str, max_len: int = 200) -> str:
     return text[:max_len] if len(text) > max_len else text
@@ -86,13 +95,13 @@ async def persist_after_response(
                 from nexus.memory.store import MemoryStore  # noqa: PLC0415
 
                 manager = MemoryManager(store=MemoryStore(), llm=llm)
-                asyncio.ensure_future(
+                _track_bg_task(asyncio.ensure_future(
                     _persist_memory_background(
                         manager,
                         state.get("session_id", ""),
                         dict(state),
                     )
-                )
+                ))
             except Exception:
                 pass
 

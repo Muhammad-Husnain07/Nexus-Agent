@@ -39,6 +39,21 @@ _compiled_graph: Any | None = None
 _graph_lock = asyncio.Lock()
 from nexus.observability.outcomes import InvocationOutcome, persist_outcome
 from nexus.observability.tracing import get_tracer
+
+# Track fire-and-forget background tasks so they aren't silently dropped
+# when the request context tears down.  Tasks are removed automatically
+# via a done_callback.  Drain on shutdown via drain_background_tasks().
+_pending_bg_tasks: set[asyncio.Task] = set()
+
+
+def _track_bg_task(task: asyncio.Task) -> None:
+    """Hold a strong reference to a fire-and-forget task.
+
+    Without this, the task can be garbage collected during request-context
+    teardown before it finishes executing (a known asyncio footgun).
+    """
+    _pending_bg_tasks.add(task)
+    task.add_done_callback(_pending_bg_tasks.discard)
 from nexus.redis_client.client import get_redis_client
 from nexus.redis_client.pubsub import EventBus, agent_channel
 from nexus.tools.discovery import DynamicToolSelector
@@ -423,8 +438,8 @@ class AgentRunner:
                 outcome = InvocationOutcome.from_state(
                     _last_state, latency, error_message=_error_msg
                 )
-                # Fire and forget
-                asyncio.ensure_future(persist_outcome(outcome))
+                # Fire and forget — tracked to prevent GC dropping the task
+                _track_bg_task(asyncio.ensure_future(persist_outcome(outcome)))
             except Exception:
                 pass
             if heartbeat_task is not None:
