@@ -320,9 +320,9 @@ _EPHEMERAL_FIELDS: list[str] = [
     "_tool_retry_counts",
     "_pending_tasks",
     "_execution_plan",
-    # StructuredContext pipeline fields
-    # NOTE: _structured_context is NOT ephemeral — it's the Single Source of
-    # Truth and MUST persist across turns for cross-turn context accumulation.
+    # Compiler IR stack
+    # NOTE: _ir_stack and _context_version are NOT ephemeral — they persist
+    # across incremental re-compilations (Roslyn-style).
     "_extraction_result",
     "_validation_result",
     "_ready_to_plan",
@@ -414,6 +414,10 @@ class AgentState(TypedDict, total=False):
     _approval_decision: str
     _approval_granted: bool
     _approval_requested_at: float
+
+    # Compiler IR stack (persistent across incremental re-compilations)
+    _ir_stack: dict[str, Any]
+    _context_version: int
 
     # Runtime-only ephemeral fields (carried in state but not in TypedDict)
     _normalization_metadata: dict
