@@ -17,6 +17,7 @@ from typing import Any
 import structlog
 
 from nexus.agent.state import AgentState
+from nexus.config.settings import get_settings
 from nexus.llm.client import LLMClient
 
 logger = structlog.get_logger("nexus.agent.router")
@@ -297,7 +298,7 @@ async def _llm_classify(
                 {"role": "user", "content": prompt},
             ],
             temperature=0,
-            max_tokens=256,
+            max_tokens=get_settings().agent.router_max_tokens,
             response_format={"type": "json_object"},
         )
         content = response.content or ""

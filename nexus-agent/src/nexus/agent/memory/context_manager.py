@@ -32,6 +32,7 @@ from typing import Any
 
 import structlog
 
+from nexus.config.settings import get_settings
 from nexus.llm.client import LLMClient
 
 logger = structlog.get_logger("nexus.agent.memory.context_manager")
@@ -121,7 +122,7 @@ async def _llm_summarize(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
-            max_tokens=256,
+            max_tokens=get_settings().agent.summarizer_max_tokens,
         )
         return (response.content or "").strip()
     except Exception as exc:

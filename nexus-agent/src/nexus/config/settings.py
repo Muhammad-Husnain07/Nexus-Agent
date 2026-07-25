@@ -331,6 +331,8 @@ class AgentSettings(BaseModel):
     finalize_max_tokens: int = Field(default=1024, ge=64, description="LLM max tokens for final response")
     milestone_min_length: int = Field(default=20, ge=1, description="Min response length for milestone")
     max_intent_display: int = Field(default=20, ge=1, le=100, description="Max intents in extraction prompt")
+    router_max_tokens: int = Field(default=256, ge=64, description="LLM max tokens for router classifier")
+    summarizer_max_tokens: int = Field(default=256, ge=64, description="LLM max tokens for context summarizer")
     adaptive_reflection: AdaptiveReflectionSettings = Field(
         default_factory=AdaptiveReflectionSettings,
         description="Adaptive reflection and uncertainty settings",
