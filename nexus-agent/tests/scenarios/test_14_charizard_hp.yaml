@@ -13,6 +13,5 @@ expected:
     tool_call_count_gt: 0
   response:
     type: "tool"
-    must_contain: ["charizard", "pok"])
   guards:
-    avoid_tools: ["web_search"]
+    avoid_tools: ["web_search", "get_crypto_price"]

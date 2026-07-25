@@ -95,9 +95,9 @@ def route_after_router(state: AgentState) -> str:
     if qtype == QueryType.NO_TOOL_NEEDED.value:
         return "ResponseNode"
 
-    # All tool-requiring queries go through extraction for intent + entity extraction.
-    # This ensures entities are extracted even for multi-intent queries.
-    return "ExtractionNode"
+    # All tool-requiring queries go through SemanticParser for intent parsing.
+    # The SemanticParser checks its cache first; on miss, falls through to ExtractionNode.
+    return "SemanticParserNode"
 
 
 def route_after_validation(state: AgentState) -> str:
@@ -669,9 +669,11 @@ def build_agent_graph(
     from nexus.agent.nodes.resolution_node import resolution_node as _resolution_node
     from nexus.agent.nodes.task_graph_builder_node import task_graph_builder_node as _task_graph_builder_node
     from nexus.agent.nodes.graph_optimizer_node import graph_optimizer_node as _graph_optimizer_node
+    from nexus.agent.nodes.semantic_parser_node import semantic_parser_node as _semantic_parser_node
 
-    # 15 production nodes — 3-stage planner pipeline + existing
+    # 16 production nodes — SemanticParser + existing pipeline
     graph.add_node("RouterNode", node(router_node, _llm, _model))
+    graph.add_node("SemanticParserNode", node(_semantic_parser_node, _llm, _model))
     graph.add_node("ExtractionNode", node(_extraction_node, _llm, _model))
     graph.add_node("NormalizationNode", node(_normalization_node))
     graph.add_node("ContextMergeNode", node(_context_merge_node))
@@ -689,17 +691,18 @@ def build_agent_graph(
 
     graph.set_entry_point("RouterNode")
 
-    # Router → Extraction (tool queries) or Response (greeting/error)
+    # Router → SemanticParser (with cache) or Response (greeting/error)
     graph.add_conditional_edges(
         "RouterNode",
         route_after_router,
         {
-            "ExtractionNode": "ExtractionNode",
+            "SemanticParserNode": "SemanticParserNode",
             "ResponseNode": "ResponseNode",
         },
     )
 
-    # Extraction → Normalization → ContextMerge → Validation
+    # SemanticParser → Extraction (cache miss fallback) → Normalization → ContextMerge → Validation
+    graph.add_edge("SemanticParserNode", "ExtractionNode")
     graph.add_edge("ExtractionNode", "NormalizationNode")
     graph.add_edge("NormalizationNode", "ContextMergeNode")
     graph.add_edge("ContextMergeNode", "ValidationNode")
