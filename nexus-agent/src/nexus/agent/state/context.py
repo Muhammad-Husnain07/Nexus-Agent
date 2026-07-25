@@ -67,7 +67,7 @@ class StructuredContext(BaseModel):
     Derive everything from ``intent`` + ``entities.data`` at decision time.
     """
 
-    intent: str | None = Field(default=None, description="Current user intent")
+    intent: str | list[str] | None = Field(default=None, description="Current user intent(s)")
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     entities: EntitySet = Field(default_factory=EntitySet)
     business_requirements: dict[str, Any] = Field(
@@ -84,7 +84,7 @@ class StructuredContext(BaseModel):
     )
     trace_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
 
-    def reset_for_new_intent(self, new_intent: str) -> StructuredContext:
+    def reset_for_new_intent(self, new_intent: str | list[str]) -> StructuredContext:
         """Reset entities when intent changes (detected by extraction)."""
         return StructuredContext(
             intent=new_intent,

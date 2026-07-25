@@ -96,11 +96,8 @@ def route_after_router(state: AgentState) -> str:
     if qtype == QueryType.NO_TOOL_NEEDED.value:
         return "ResponseNode"
 
-    # Multi-intent queries bypass extraction — planner handles them directly
-    if qtype in (QueryType.INDEPENDENT_MULTI.value, QueryType.DEPENDENT_MULTI.value):
-        return "PlannerNode"
-
-    # Single-tool queries go through extraction for parameter extraction
+    # All tool-requiring queries go through extraction for intent + entity extraction.
+    # This ensures entities are extracted even for multi-intent queries.
     return "ExtractionNode"
 
 
@@ -414,6 +411,7 @@ async def reflection_node(state: AgentState) -> dict[str, Any]:
     - If all tasks succeeded → proceed to response
     - If partial failures and retries remain → retry the failed tasks
     - If max retries exceeded → proceed with partial results
+    - On unrecoverable failure, stores checkpoint for potential recovery
     """
     failed = state.get("_executor_failed", [])
     retry_counts = state.get("_tool_retry_counts", {})
@@ -421,7 +419,6 @@ async def reflection_node(state: AgentState) -> dict[str, Any]:
     if not failed:
         return {"_routing_decision": "finalize"}
 
-    # Check retry counts
     tasks_to_retry = []
     tasks_to_skip = []
 
@@ -434,7 +431,6 @@ async def reflection_node(state: AgentState) -> dict[str, Any]:
             tasks_to_skip.append(task_id)
 
     if tasks_to_retry:
-        # Increment retry counts
         new_counts = dict(retry_counts)
         for tid in tasks_to_retry:
             new_counts[tid] = new_counts.get(tid, 0) + 1
@@ -450,8 +446,13 @@ async def reflection_node(state: AgentState) -> dict[str, Any]:
             "_pending_tasks": tasks_to_retry,
         }
 
+    # Max retries exceeded — mark checkpoint for potential recovery
     logger.info("reflection_node.max_retries", tasks=tasks_to_skip)
-    return {"_routing_decision": "finalize"}
+    return {
+        "_routing_decision": "finalize",
+        "_recovery_available": True,
+        "_recovery_failed_tasks": tasks_to_skip,
+    }
 
 
 # ============================================================================
@@ -511,7 +512,19 @@ def _last_user_message(state: AgentState) -> str:
 
 
 def _get_intents(state: AgentState) -> list[str]:
-    """Extract parsed intents from state."""
+    """Extract parsed intents from state.
+
+    Prefers StructuredContext (single source of truth), falls back to
+    flat fields for backward compatibility with multi-intent queries.
+    """
+    # Try StructuredContext first
+    ctx = state.get("_structured_context")
+    if ctx and hasattr(ctx, "intent") and ctx.intent:
+        if isinstance(ctx.intent, list):
+            return ctx.intent
+        return [ctx.intent]
+
+    # Fallback to flat fields
     intent_analysis = state.get("intent_analysis")
     if isinstance(intent_analysis, dict):
         goal = intent_analysis.get("primary_goal", "")

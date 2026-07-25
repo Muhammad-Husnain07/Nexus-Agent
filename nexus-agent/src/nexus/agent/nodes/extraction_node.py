@@ -1,4 +1,9 @@
-"""Extraction node — LLM ONLY extracts intent + entities. No validation."""
+"""Extraction node — LLM ONLY extracts intent + entities. No validation.
+
+Supports both single and multi-intent extraction. For multi-intent queries,
+the LLM returns a list of intents and tool_names. The context merge node
+handles both cases.
+"""
 
 from __future__ import annotations
 
@@ -26,8 +31,9 @@ async def extraction_node(
 
     Pure extraction — no validation, no correction detection, no planning.
     Returns ONLY the structured context update.
+
+    Uses prompt v2 for multi-intent queries, v1 for single-intent.
     """
-    # Get the last user message
     messages = state.get("messages", [])
     last_message = ""
     for m in reversed(messages):
@@ -41,11 +47,10 @@ async def extraction_node(
     if not last_message:
         return {"_extraction_result": {"intent": None, "entities": {}, "confidence": 0.0}}
 
-    # Get registered intents from the registry
     registry = get_registry()
     available_intents = registry.get_intents()
 
-    # Build intent details with parameter names (keep compact for token budget)
+    # Build intent details with parameter names
     intent_details_lines = []
     for intent_name in available_intents:
         schema = registry.get_schema(intent_name)
@@ -58,10 +63,14 @@ async def extraction_node(
     max_intents = _extraction_settings.max_intent_display
     intent_details = "\n".join(intent_details_lines[:max_intents]) if intent_details_lines else "(none)"
 
-    # Render extraction prompt
+    # Determine if multi-intent: check query for conjunctions
+    qtype = state.get("_query_type", "single_tool")
+    is_multi = qtype in ("independent_multi", "dependent_multi")
+    prompt_version = "2.0" if is_multi else "1.0"
+
     system_prompt = prompt_manager.render(
         "extraction",
-        version="1.0",
+        version=prompt_version,
         intents=", ".join(available_intents[:max_intents]) if available_intents else "(none available)",
         intent_details=intent_details,
     )
@@ -85,9 +94,7 @@ async def extraction_node(
         parsed = json.loads(content)
     except json.JSONDecodeError:
         logger.warning("extraction.parse_failed", content=content[:200])
-        # Fallback: simple heuristic extraction from the raw message
         q_lower = last_message.lower()
-        # Check for common tool keywords
         fallback_conf = get_settings().agent.fallback_confidence
         for intent_name in available_intents:
             keywords = intent_name.replace("_", " ").lower()
@@ -99,13 +106,14 @@ async def extraction_node(
 
     intent = parsed.get("intent", "unknown")
     entities = parsed.get("entities", {})
+    tool_names = parsed.get("tool_names", [])
     business_requirements = parsed.get("business_requirements", {})
     confidence = float(parsed.get("confidence", 0.0))
     entity_confidence = parsed.get("entity_confidence", {})
 
     logger.info(
         "extraction_node.complete",
-        intent=intent,
+        intent=intent if isinstance(intent, str) else f"multi({len(intent)})",
         confidence=confidence,
         entity_count=len(entities),
         business_requirement_count=len(business_requirements),
@@ -115,6 +123,7 @@ async def extraction_node(
         "_extraction_result": {
             "intent": intent,
             "entities": entities,
+            "tool_names": tool_names,
             "business_requirements": business_requirements,
             "confidence": confidence,
             "entity_confidence": entity_confidence,

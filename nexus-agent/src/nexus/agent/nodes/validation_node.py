@@ -25,6 +25,9 @@ logger = structlog.get_logger("nexus.agent.nodes.validation")
 def _validate_pipeline(ctx: StructuredContext) -> dict[str, Any]:
     """Run the validation pipeline against StructuredContext.
 
+    Supports both single intent (str) and multi-intent (list[str]).
+    For multi-intent, validates each intent independently and combines results.
+
     Returns a validation result dict:
     - ``ready``: True if the intent can proceed to planning
     - ``missing``: list of missing field names
@@ -37,7 +40,7 @@ def _validate_pipeline(ctx: StructuredContext) -> dict[str, Any]:
     entities = ctx.entities.data
 
     # Stage 1: Intent exists
-    if not intent or intent == "unknown":
+    if not intent or intent == "unknown" or intent == ["unknown"]:
         return {
             "ready": False,
             "missing": ["intent"],
@@ -46,6 +49,42 @@ def _validate_pipeline(ctx: StructuredContext) -> dict[str, Any]:
             "tools": [],
         }
 
+    # Multi-intent: validate first intent (all go to planner)
+    if isinstance(intent, list):
+        if not intent:
+            return {
+                "ready": False,
+                "missing": ["intent"],
+                "reason": "I couldn't determine what you want to do.",
+                "resolved_entities": entities,
+                "tools": [],
+            }
+        primary = intent[0]
+        schema = registry.get_schema(primary) if primary != "unknown" else None
+        if not schema:
+            return {
+                "ready": False,
+                "missing": ["intent"],
+                "reason": f"I don't know how to handle '{primary}' yet.",
+                "resolved_entities": entities,
+                "tools": [],
+            }
+        # Multi-intent: extract entities per intent, combine
+        all_tools = list(schema.tool_mapping)
+        for additional in intent[1:]:
+            add_schema = registry.get_schema(additional)
+            if add_schema:
+                all_tools.extend(add_schema.tool_mapping)
+
+        return {
+            "ready": True,
+            "missing": [],
+            "reason": "",
+            "resolved_entities": entities,
+            "tools": all_tools,
+        }
+
+    # Single intent
     schema = registry.get_schema(intent)
     if not schema:
         return {

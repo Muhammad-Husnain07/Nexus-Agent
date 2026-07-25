@@ -365,15 +365,21 @@ class AgentRunner:
         span.set_attribute("model", _settings.llm.default_model)
 
         try:
+            _node_start_times: dict[str, float] = {}
             async for event in graph.astream(initial_state, run_config, stream_mode="updates"):
                 if not isinstance(event, dict):
                     logger.warning("runner.skipping_non_dict_event", event_type=type(event).__name__, event=repr(event)[:200])
                     continue
                 node_name: str = next(iter(event))
                 state_update: Any = event[node_name]
+
+                # Track per-node timing
+                now = time_module.perf_counter()
+                if node_name not in _node_start_times:
+                    _node_start_times[node_name] = now
+                _node_duration = int((now - _node_start_times.get(node_name, now)) * 1000)
+
                 if not isinstance(state_update, dict):
-                    # This can happen when a node returns a single annotated value
-                    # (e.g. messages with a custom reducer). Convert to dict.
                     logger.debug("runner.non_dict_update", node=node_name, value_type=type(state_update).__name__)
                     state_update = {node_name: state_update}
                     _last_state.update(state_update)
@@ -381,6 +387,16 @@ class AgentRunner:
                 else:
                     _last_state.update(state_update)
                     agent_events = self._translate(node_name, state_update)
+
+                # Emit node lifecycle events for observability
+                node_event = AgentEvent("node_completed", {
+                    "node": node_name,
+                    "duration_ms": _node_duration,
+                    "has_output": bool(state_update),
+                })
+                if self._event_bus:
+                    await self._event_bus.publish(agent_channel(sid), node_event.to_dict())
+                yield node_event
 
                 for agent_event in agent_events:
                     if self._event_bus:

@@ -89,8 +89,12 @@ async def context_merge_node(state: AgentState) -> dict[str, Any]:
         logger.info("context_merge.new_context", intent=intent, confidence=confidence)
         return {"_structured_context": ctx}
 
-    # Intent changed — reset
-    if intent != current_ctx.intent:
+    # Intent changed — reset (handles both str and list[str] intent)
+    _intent_changed = (
+        intent != current_ctx.intent
+        and str(intent) != str(current_ctx.intent)
+    )
+    if _intent_changed:
         new_ctx = current_ctx.reset_for_new_intent(intent)
         new_ctx.confidence = confidence
         new_ctx.entities = EntitySet(

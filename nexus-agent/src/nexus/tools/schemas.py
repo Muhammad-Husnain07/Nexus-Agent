@@ -55,6 +55,9 @@ class ToolCreate(BaseModel):
     tags: list[str] = Field(default_factory=list, description="Categorization tags")
     category: str = Field(default="general", description="Functional category")
     risk_level: str = Field(default="low", description="Risk level: low | medium | high")
+    requires_approval: bool = Field(
+        default=False, description="If True, tool execution requires explicit human approval"
+    )
     enabled: bool = Field(default=True, description="Whether the tool is active")
     tenant_public: bool = Field(default=False, description="Visible to all when true")
     idempotent: bool = Field(
@@ -103,6 +106,9 @@ class ToolUpdate(BaseModel):
     tags: list[str] | None = Field(default=None, description="Categorization tags")
     category: str | None = Field(default=None, description="Functional category")
     risk_level: str | None = Field(default=None, description="Risk level: low | medium | high")
+    requires_approval: bool | None = Field(
+        default=None, description="If True, tool execution requires explicit human approval"
+    )
     enabled: bool | None = Field(default=None, description="Whether the tool is active")
     rate_limit_per_minute: int | None = Field(
         default=None, description="Max requests per minute (null = unlimited)"
@@ -150,6 +156,9 @@ class ToolRead(BaseModel):
     tags: list[str] = Field(description="Categorization tags")
     category: str = Field(description="Functional category")
     risk_level: str = Field(description="Risk level")
+    requires_approval: bool = Field(
+        default=False, description="If True, tool execution requires explicit human approval"
+    )
     enabled: bool = Field(description="Whether the tool is active")
     tenant_public: bool = Field(default=False, description="Visible to all")
     idempotent: bool = Field(default=False, description="Supports idempotent execution")

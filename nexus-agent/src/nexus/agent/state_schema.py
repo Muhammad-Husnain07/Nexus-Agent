@@ -320,8 +320,9 @@ _EPHEMERAL_FIELDS: list[str] = [
     "_pending_tasks",
     "_execution_plan",
     # StructuredContext pipeline fields
+    # NOTE: _structured_context is NOT ephemeral — it's the Single Source of
+    # Truth and MUST persist across turns for cross-turn context accumulation.
     "_extraction_result",
-    "_structured_context",
     "_validation_result",
     "_ready_to_plan",
     "_needs_clarification",
@@ -330,6 +331,8 @@ _EPHEMERAL_FIELDS: list[str] = [
     "_needs_approval",
     "_pending_approval_tools",
     "_approval_granted",
+    "_recovery_available",
+    "_recovery_failed_tasks",
 ]
 
 

@@ -63,6 +63,7 @@ def _tool_to_read(tool: Tool) -> ToolRead:
         aliases=tool.aliases or [],
         category=tool.category or "general",
         risk_level=tool.risk_level or "low",
+        requires_approval=getattr(tool, "requires_approval", False) or tool.risk_level == "high",
         enabled=tool.enabled if tool.enabled is not None else True,
         version=tool.version or 1,
         created_at=tool.created_at,

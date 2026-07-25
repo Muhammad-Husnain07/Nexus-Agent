@@ -58,6 +58,9 @@ class Tool(Base):
         default="low",
         comment="Risk level: low | medium | high",
     )
+    requires_approval: Mapped[bool] = mapped_column(
+        Boolean, default=False, comment="If True, tool execution requires explicit human approval"
+    )
     enabled: Mapped[bool] = mapped_column(
         Boolean, default=True, comment="Whether the tool is active"
     )
