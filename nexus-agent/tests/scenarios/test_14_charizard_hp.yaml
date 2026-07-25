@@ -1,0 +1,18 @@
+test_id: 14
+name: "Hallucination Test — Charizard HP"
+user_query: "What is Charizard's base HP?"
+expected:
+  router:
+    _query_type: "single_tool"
+  extraction:
+    intent: "get_pokemon"
+  planner:
+    tool_names: ["get_pokemon"]
+  executor:
+    _executor_failed: []
+    tool_call_count_gt: 0
+  response:
+    type: "tool"
+    must_contain: ["78"]
+  guards:
+    avoid_tools: ["web_search"]

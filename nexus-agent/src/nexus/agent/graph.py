@@ -112,6 +112,18 @@ def route_after_validation(state: AgentState) -> str:
     return "ClarificationNode"
 
 
+def route_after_plan_validator(state: AgentState) -> str:
+    """Route based on plan validation result.
+
+    - If validation passed → ApprovalGateNode
+    - If validation failed → ClarificationNode (ends graph, asks user)
+    """
+    if state.get("_routing_decision") == "clarify":
+        logger.info("plan_validator.routing_to_clarification", errors=state.get("errors", [])[-1:])
+        return "ClarificationNode"
+    return "ApprovalGateNode"
+
+
 def route_after_approval_gate(state: AgentState) -> str:
     """Route based on approval gate decision.
 
@@ -325,6 +337,7 @@ async def planner_node(
         llm=llm,
         model=model,
         capabilities_context=capabilities_context,
+        state=dict(state),
     )
 
     # Store plan in state
@@ -640,9 +653,11 @@ def build_agent_graph(
     from nexus.agent.nodes.context_merge_node import context_merge_node as _context_merge_node
     from nexus.agent.nodes.validation_node import validation_node as _validation_node
     from nexus.agent.nodes.clarification_node import clarification_node as _clarification_node
+    from nexus.agent.nodes.plan_validator_node import plan_validator_node as _plan_validator_node
 
-    # 10 production nodes (Router, Extraction, Normalization, ContextMerge,
-    # Validation, Clarification, Planner, Executor, Reflection, Response)
+    # 12 production nodes (Router, Extraction, Normalization, ContextMerge,
+    # Validation, Clarification, Planner, PlanValidator, ApprovalGate,
+    # Executor, Reflection, Response)
     graph.add_node("RouterNode", node(router_node, _llm, _model))
     graph.add_node("ExtractionNode", node(_extraction_node, _llm, _model))
     graph.add_node("NormalizationNode", node(_normalization_node))
@@ -650,6 +665,7 @@ def build_agent_graph(
     graph.add_node("ValidationNode", node(_validation_node))
     graph.add_node("ClarificationNode", node(_clarification_node))
     graph.add_node("PlannerNode", node(planner_node, _llm, _model))
+    graph.add_node("PlanValidatorNode", node(_plan_validator_node))
     graph.add_node("ExecutorNode", node(executor_node, _executor))
     graph.add_node("ApprovalGateNode", node(approval_gate_node))
     graph.add_node("ReflectionNode", node(reflection_node))
@@ -686,8 +702,16 @@ def build_agent_graph(
     # Clarification → END (graph stops; user responds with new message)
     graph.add_edge("ClarificationNode", END)
 
-    # Planner → ApprovalGate (conditional) → Executor or Response
-    graph.add_edge("PlannerNode", "ApprovalGateNode")
+    # Planner → PlanValidator (conditional) → ApprovalGate or Clarification
+    graph.add_edge("PlannerNode", "PlanValidatorNode")
+    graph.add_conditional_edges(
+        "PlanValidatorNode",
+        route_after_plan_validator,
+        {
+            "ApprovalGateNode": "ApprovalGateNode",
+            "ClarificationNode": "ClarificationNode",
+        },
+    )
     graph.add_conditional_edges(
         "ApprovalGateNode",
         route_after_approval_gate,

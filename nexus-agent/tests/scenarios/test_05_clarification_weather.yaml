@@ -1,0 +1,8 @@
+test_id: 5
+name: "Clarification — Weather without city"
+user_query: "What's the weather?"
+expected:
+  executor:
+    tool_call_count: 0
+  guards:
+    avoid_tools: ["get_weather"]

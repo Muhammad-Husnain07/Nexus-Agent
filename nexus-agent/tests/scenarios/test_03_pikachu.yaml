@@ -1,0 +1,20 @@
+test_id: 3
+name: "Tool Selection — Pikachu"
+user_query: "Tell me about Pikachu"
+expected:
+  router:
+    _query_type: "single_tool"
+  extraction:
+    intent: "get_pokemon"
+    confidence_gt: 0.3
+  planner:
+    tool_names: ["get_pokemon"]
+    parallel_waves: 1
+  executor:
+    _executor_failed: []
+    tool_call_count_gt: 0
+  response:
+    type: "tool"
+    must_contain: ["pikachu", "electric"]
+  guards:
+    avoid_tools: ["web_search"]

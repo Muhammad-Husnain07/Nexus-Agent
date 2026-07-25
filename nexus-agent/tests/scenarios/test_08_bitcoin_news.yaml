@@ -1,0 +1,14 @@
+test_id: 8
+name: "Large Workflow — Bitcoin + News"
+user_query: "Show today's Bitcoin price in USD and search the latest Bitcoin news"
+expected:
+  router:
+    _query_type: "independent_multi"
+  planner:
+    tool_names: ["get_crypto_price", "web_search"]
+    parallel_waves: 1
+  executor:
+    tool_call_count_gt: 1
+    _executor_failed: []
+  response:
+    type: "tool"

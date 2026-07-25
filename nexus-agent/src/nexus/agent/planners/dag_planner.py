@@ -383,6 +383,7 @@ class PlannerRunner:
         llm: Any = None,
         model: str | None = None,
         capabilities_context: str = "",
+        state: dict[str, Any] | None = None,
     ) -> ExecutionPlan:
         """Build a complete execution plan (delegates to ``build_plan``)."""
         return await build_plan(
@@ -392,7 +393,85 @@ class PlannerRunner:
             llm=llm,
             model=model,
             capabilities_context=capabilities_context,
+            state=state,
         )
+
+
+def _deterministic_plan(
+    intents: list[str],
+    tools: list[dict[str, Any]],
+    user_input: str,
+    state: dict[str, Any] | None = None,
+) -> list[dict[str, Any]] | None:
+    """Attempt to build a plan deterministically without calling the LLM.
+
+    Returns a list of task dicts if a pattern is matched, or None if the
+    query is complex enough to warrant an LLM call.
+
+    Patterns matched:
+    - Single-tool: exactly one intent maps to one tool → single task
+    - Compare items: intent suggests comparison and 2+ entities found → parallel tasks
+    - Known tool name in query: user mentioned tool name directly
+
+    When available, populates task inputs from StructuredContext entities.
+    """
+    if not intents or not tools:
+        return None
+
+    # Extract entities from StructuredContext if available
+    entities: dict[str, Any] = {}
+    if state:
+        ctx = state.get("_structured_context")
+        if ctx and hasattr(ctx, "entities") and hasattr(ctx.entities, "data"):
+            entities = dict(ctx.entities.data)
+
+    # Build tool name → tool data map
+    tool_map = {t.get("name", "").lower(): t for t in tools if t.get("name")}
+    input_schemas = {t.get("name", "").lower(): t.get("input_schema", {}) for t in tools if t.get("name")}
+
+    def _build_task(tname: str, idx: int = 0) -> dict[str, Any]:
+        """Build a task with inputs inferred from entities."""
+        tdata = tool_map.get(tname.lower())
+        tname_original = tdata["name"] if tdata else tname
+        desc = tdata.get("description", tname) if tdata else tname
+
+        # Populate inputs from entities that match the tool's input schema
+        inputs: dict[str, Any] = {}
+        schema = input_schemas.get(tname.lower(), {})
+        props = schema.get("properties", {}) if isinstance(schema, dict) else {}
+        for field_name in props:
+            if field_name in entities:
+                inputs[field_name] = entities[field_name]
+
+        return {
+            "id": f"task_{idx + 1}",
+            "tool_name": tname_original,
+            "inputs": inputs,
+            "description": desc,
+            "depends_on": [],
+        }
+
+    # Pattern 1: Single intent → single tool
+    if len(intents) == 1:
+        intent = intents[0].lower()
+        if intent in tool_map:
+            return [_build_task(intent, 0)]
+        for tname in tool_map:
+            if intent.replace("_", " ") in tname.replace("_", " ") or tname.replace("_", " ") in intent:
+                return [_build_task(tname, 0)]
+
+    # Pattern 2: Known tool name in user query
+    q_lower = user_input.lower()
+    matched = []
+    for tname in tool_map:
+        keywords = tname.replace("_", " ").lower()
+        if keywords in q_lower:
+            matched.append(tname)
+
+    if matched:
+        return [_build_task(t, i) for i, t in enumerate(matched)]
+
+    return None  # Fall through to LLM
 
 
 async def build_plan(
@@ -402,8 +481,13 @@ async def build_plan(
     llm: Any = None,
     model: str | None = None,
     capabilities_context: str = "",
+    state: dict[str, Any] | None = None,
 ) -> ExecutionPlan:
     """Build a complete execution plan from user intent + available tools.
+
+    Two-stage planner:
+    1. Deterministic pattern matching (no LLM, ~0ms)
+    2. LLM fallback for complex/ambiguous DAGs (~13s)
 
     Args:
         intents: Parsed intent from the router (list of goal strings).
@@ -425,12 +509,16 @@ async def build_plan(
     # 1. Inject prerequisite tools for unmet inputs
     tools = _inject_prerequisite_tools(tools, user_input)
 
-    # 2. LLM proposes tasks (only if we have intent — otherwise use all tools)
+    # 2. Try deterministic planning first (no LLM call)
     raw_tasks: list[dict[str, Any]] = []
-    if llm is not None and model is not None and user_input:
+    if intents:
+        raw_tasks = _deterministic_plan(intents, tools, user_input, state=state) or []
+
+    # 3. Fallback to LLM for complex/ambiguous DAGs
+    if not raw_tasks and llm is not None and model is not None and user_input:
         raw_tasks = await _llm_propose_tasks(user_input, tools, llm, model, capabilities_context)
 
-    # Fallback: if LLM returned nothing, create one task per tool
+    # 4. Ultimate fallback: one task per tool
     if not raw_tasks:
         fallback_limit = get_settings().agent.fallback_max_tools
         raw_tasks = [
@@ -438,7 +526,7 @@ async def build_plan(
             for i, t in enumerate(tools[:fallback_limit])
         ]
 
-    # 3. Build ExecutionTask objects
+    # 5. Build ExecutionTask objects
     tasks = []
     for i, t in enumerate(raw_tasks):
         task = ExecutionTask(
