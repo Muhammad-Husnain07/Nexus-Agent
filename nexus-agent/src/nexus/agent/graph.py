@@ -670,10 +670,12 @@ def build_agent_graph(
     from nexus.agent.nodes.task_graph_builder_node import task_graph_builder_node as _task_graph_builder_node
     from nexus.agent.nodes.graph_optimizer_node import graph_optimizer_node as _graph_optimizer_node
     from nexus.agent.nodes.semantic_parser_node import semantic_parser_node as _semantic_parser_node
+    from nexus.agent.nodes.goal_expander_node import goal_expander_node as _goal_expander_node
 
-    # 16 production nodes — SemanticParser + existing pipeline
+    # 17 production nodes — SemanticParser + GoalExpander + existing pipeline
     graph.add_node("RouterNode", node(router_node, _llm, _model))
     graph.add_node("SemanticParserNode", node(_semantic_parser_node, _llm, _model))
+    graph.add_node("GoalExpanderNode", node(_goal_expander_node))
     graph.add_node("ExtractionNode", node(_extraction_node, _llm, _model))
     graph.add_node("NormalizationNode", node(_normalization_node))
     graph.add_node("ContextMergeNode", node(_context_merge_node))
@@ -701,8 +703,9 @@ def build_agent_graph(
         },
     )
 
-    # SemanticParser → Extraction (cache miss fallback) → Normalization → ContextMerge → Validation
-    graph.add_edge("SemanticParserNode", "ExtractionNode")
+    # SemanticParser → GoalExpander → Extraction → Normalization → ContextMerge → Validation
+    graph.add_edge("SemanticParserNode", "GoalExpanderNode")
+    graph.add_edge("GoalExpanderNode", "ExtractionNode")
     graph.add_edge("ExtractionNode", "NormalizationNode")
     graph.add_edge("NormalizationNode", "ContextMergeNode")
     graph.add_edge("ContextMergeNode", "ValidationNode")
