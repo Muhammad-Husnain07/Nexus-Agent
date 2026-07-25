@@ -380,13 +380,24 @@ class ToolRegistry:
 
         start = time.perf_counter()
         try:
+            # Resolve URL template placeholders (e.g. {id} → actual value)
+            import re as _re
+            url = tool.endpoint_url
+            params = dict(sample_input or {})
+            if "{" in url and sample_input:
+                for match in _re.finditer(r"\{(\w+)\}", url):
+                    param = match.group(1)
+                    if param in sample_input:
+                        url = url.replace(match.group(0), str(sample_input[param]))
+                        params.pop(param, None)
+
             async with httpx.AsyncClient(timeout=30) as client:
                 method = tool.http_method.lower()
                 if method == "get":
-                    resp = await client.get(tool.endpoint_url, params=sample_input or {})
+                    resp = await client.get(url, params=params or None)
                 else:
                     resp = await client.request(
-                        method, tool.endpoint_url, json=sample_input or {}
+                        method, url, json=params or None
                     )
                 resp.raise_for_status()
                 data = resp.json() if resp.text else None
