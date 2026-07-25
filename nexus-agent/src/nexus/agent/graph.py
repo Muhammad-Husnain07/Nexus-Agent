@@ -38,7 +38,6 @@ from typing import Any
 
 import structlog
 from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import END, StateGraph
 
 from nexus.agent.executors.concurrent_executor import ConcurrentExecutor
@@ -116,15 +115,18 @@ def route_after_validation(state: AgentState) -> str:
 def route_after_approval_gate(state: AgentState) -> str:
     """Route based on approval gate decision.
 
-    - If approval needed → ResponseNode (ends graph, waits for user decision)
-    - If approval granted/rejected → ExecutorNode (proceed)
+    - If approval needed + no decision OR rejected → ResponseNode (ends graph)
+    - If approval granted (exact value "approved") → ExecutorNode (proceed)
     """
     needs = state.get("_needs_approval", False)
     decision = state.get("_approval_decision")
-    if needs and not decision:
+    # Only explicit "approved" proceeds to execution — everything else halts
+    if needs and decision != "approved":
         logger.info("approval_gate.routing_to_response", needs=needs, decision=decision)
         return "ResponseNode"
-    logger.info("approval_gate.routing_to_executor", needs=needs, decision=decision)
+    if needs and decision == "approved":
+        logger.info("approval_gate.routing_to_executor", needs=needs, decision=decision)
+        return "ExecutorNode"
     return "ExecutorNode"
 
 
@@ -245,7 +247,21 @@ async def planner_node(
     - Explicit I/O schema dependency analysis
     - Cycle detection
     - Topological sort into execution waves
+
+    Fast-path: if resuming from an approved plan, reuse existing plan
+    without calling the LLM again (ensures exactly what was approved
+    is what executes).
     """
+    # Fast-path: approval resume — don't re-plan, use the approved plan
+    if state.get("_approval_decision") == "approved" and state.get("_execution_plan"):
+        logger.info("planner_node.approval_fast_path", plan_exists=True)
+        existing_plan = state["_execution_plan"]
+        existing_tasks = state.get("dag_tasks", [])
+        return {
+            "_execution_plan": existing_plan,
+            "dag_tasks": existing_tasks,
+        }
+
     tools = state.get("available_tools", [])
     user_input = _last_user_message(state)
     intents = _get_intents(state)
@@ -657,14 +673,14 @@ def build_agent_graph(
 
     graph.add_edge("ResponseNode", END)
 
-    # Compile with interrupt support for high-risk tools
+    # Compile with checkpointer.
+    # The checkpointer should be provided by the caller (initialized at API startup).
+    # If None, fall back to MemorySaver (in-memory, no persistence across restarts).
     _cp = checkpointer
     if _cp is None:
-        try:
-            _cp = PostgresSaver.from_conn_string(settings.database.url)
-        except Exception:
-            from langgraph.checkpoint.memory import MemorySaver
-            _cp = MemorySaver()
+        from langgraph.checkpoint.memory import MemorySaver
+        _cp = MemorySaver()
+        logger.warning("graph.using_memory_saver", reason="no checkpointer provided to build_agent_graph")
 
     return graph.compile(
         checkpointer=_cp,

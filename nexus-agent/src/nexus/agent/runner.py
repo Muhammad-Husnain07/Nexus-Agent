@@ -445,8 +445,10 @@ class AgentRunner:
         builds a fresh initial state preserving the existing execution plan,
         and streams the graph. The router is bypassed via ``_force_query_type``.
 
-        This is a fire-and-forget method — events are streamed to Redis pub/sub
-        for the frontend to consume.
+        Acquires the same Redis distributed lock as ``invoke()`` to prevent
+        concurrent graph executions for the same session.
+
+        Events are streamed to Redis pub/sub for the frontend to consume.
         """
         sid = str(session_id)
         graph = await self._build_graph()
@@ -464,6 +466,25 @@ class AgentRunner:
         if not approval_decision:
             logger.warning("continue_after_approval.no_decision", session_id=sid)
             return
+
+        # Acquire Redis lock to prevent concurrent graph executions
+        redis = get_redis_client()
+        lock_acquired = False
+        lock_key = f"lock:agent_run:{sid}"
+        lock_token = ""
+        heartbeat_task: asyncio.Task[None] | None = None
+
+        if redis is not None:
+            ttl = get_settings().agent.run_lock_ttl_s
+            lock_token, lock_acquired = await self._try_acquire_lock(redis, lock_key, ttl)
+            if not lock_acquired:
+                logger.warning("continue_after_approval.lock_busy", session_id=sid)
+                # Don't return — proceed since the plan is already persisted in state
+                # and the lock will be released when the previous invocation finishes
+            else:
+                heartbeat_task = asyncio.ensure_future(
+                    self._renew_lock(redis, lock_key, lock_token, ttl)
+                )
 
         # Build state that preserves the plan and approval decision
         resume_state: AgentState = {
@@ -498,7 +519,7 @@ class AgentRunner:
             "_pending_tasks": [],
         }
 
-        # Stream the graph (fire-and-forget — events go to Redis pub/sub)
+        # Stream the graph
         try:
             async for event in graph.astream(resume_state, config, stream_mode="updates"):
                 if not isinstance(event, dict):
@@ -514,6 +535,13 @@ class AgentRunner:
                         )
         except Exception as exc:
             logger.error("continue_after_approval.failed", session_id=sid, error=str(exc))
+        finally:
+            if heartbeat_task is not None:
+                heartbeat_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await heartbeat_task
+            if lock_acquired and redis is not None:
+                await self._release_lock(redis, lock_key, lock_token)
 
         logger.info("continue_after_approval.complete", session_id=sid)
 

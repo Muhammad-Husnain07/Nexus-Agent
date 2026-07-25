@@ -4,10 +4,12 @@ The graph terminates after this node. The user's next message starts
 a fresh extraction -> validation -> clarify/plan cycle.
 
 Records what was asked so the next turn's merge can detect resolution.
+Also appends the question to the message history for continuity.
 """
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 import structlog
@@ -24,6 +26,8 @@ async def clarification_node(state: AgentState) -> dict[str, Any]:
     Reads ``_validation_result`` to determine what's missing.
     Composes a natural question. Returns without continuing the graph.
     Records what was asked for next-turn context.
+    Appends the question to messages so the conversation history
+    is complete for the next turn.
     """
     validation = state.get("_validation_result", {})
 
@@ -47,4 +51,11 @@ async def clarification_node(state: AgentState) -> dict[str, Any]:
             "missing": missing,
             "question": question,
         },
+        "messages": [
+            {
+                "role": "assistant",
+                "content": question,
+                "id": str(uuid.uuid4()),
+            }
+        ],
     }

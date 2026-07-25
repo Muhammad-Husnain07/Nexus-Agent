@@ -3,6 +3,9 @@
 Supports both single and multi-intent extraction. For multi-intent queries,
 the LLM returns a list of intents and tool_names. The context merge node
 handles both cases.
+
+On LLM failure, returns a distinguishable ``extraction_error`` intent
+(instead of reusing ``unknown`` for both system errors and genuine ambiguity).
 """
 
 from __future__ import annotations
@@ -33,6 +36,8 @@ async def extraction_node(
     Returns ONLY the structured context update.
 
     Uses prompt v2 for multi-intent queries, v1 for single-intent.
+    On failure, records cost if available and returns ``extraction_error``
+    intent so downstream nodes can distinguish system errors from ambiguity.
     """
     messages = state.get("messages", [])
     last_message = ""
@@ -63,7 +68,7 @@ async def extraction_node(
     max_intents = _extraction_settings.max_intent_display
     intent_details = "\n".join(intent_details_lines[:max_intents]) if intent_details_lines else "(none)"
 
-    # Determine if multi-intent: check query for conjunctions
+    # Determine if multi-intent
     qtype = state.get("_query_type", "single_tool")
     is_multi = qtype in ("independent_multi", "dependent_multi")
     prompt_version = "2.0" if is_multi else "1.0"
@@ -75,34 +80,70 @@ async def extraction_node(
         intent_details=intent_details,
     )
 
-    response = await llm.complete(
-        model=model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": last_message},
-        ],
-        temperature=_extraction_settings.extraction_temperature,
-        max_tokens=_extraction_settings.extraction_max_tokens,
-        response_format={"type": "json_object"},
-    )
-
-    content = response.content or "{}"
-    content = re.sub(r"^```[a-zA-Z]*\n?", "", content)
-    content = re.sub(r"\n```$", "", content)
+    # Wrap LLM call in try/except to catch failures (timeout, API error, etc.)
+    # and return a distinguishable error intent rather than silently defaulting
+    cost_usd = 0.0
+    total_tokens = 0
 
     try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError:
-        logger.warning("extraction.parse_failed", content=content[:200])
-        q_lower = last_message.lower()
-        fallback_conf = get_settings().agent.fallback_confidence
-        for intent_name in available_intents:
-            keywords = intent_name.replace("_", " ").lower()
-            if keywords in q_lower:
-                parsed = {"intent": intent_name, "entities": {}, "confidence": fallback_conf}
-                break
-        else:
-            parsed = {"intent": "unknown", "entities": {}, "confidence": 0.0}
+        response = await llm.complete(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": last_message},
+            ],
+            temperature=_extraction_settings.extraction_temperature,
+            max_tokens=_extraction_settings.extraction_max_tokens,
+            response_format={"type": "json_object"},
+        )
+
+        # Record cost/tokens even if parsing fails (the call was made and billed)
+        if hasattr(response, "usage") and response.usage:
+            usage = response.usage
+            total_tokens = getattr(usage, "total_tokens", 0) or 0
+            cost_usd = getattr(usage, "cost_usd", 0.0) or 0.0
+
+        content = response.content or "{}"
+        content = re.sub(r"^```[a-zA-Z]*\n?", "", content)
+        content = re.sub(r"\n```$", "", content)
+
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            logger.warning("extraction.parse_failed", content=content[:200])
+            # Fallback: heuristic keyword matching
+            q_lower = last_message.lower()
+            fallback_conf = get_settings().agent.fallback_confidence
+            for intent_name in available_intents:
+                keywords = intent_name.replace("_", " ").lower()
+                if keywords in q_lower:
+                    parsed = {"intent": intent_name, "entities": {}, "confidence": fallback_conf}
+                    break
+            else:
+                parsed = {"intent": "unknown", "entities": {}, "confidence": 0.0}
+
+    except Exception as exc:
+        logger.error("extraction_node.llm_failed", error=str(exc), exc_info=True)
+        # Cost may have been incurred even on failure
+        if hasattr(response, "usage") and response.usage:
+            usage = response.usage
+            total_tokens = getattr(usage, "total_tokens", 0) or 0
+            cost_usd = getattr(usage, "cost_usd", 0.0) or 0.0
+
+        return {
+            "_extraction_result": {
+                "intent": "extraction_error",
+                "entities": {},
+                "tool_names": [],
+                "business_requirements": {},
+                "confidence": 0.0,
+                "entity_confidence": {},
+            },
+            "errors": [f"ExtractionNode: LLM call failed — {exc}"],
+            "_total_tokens": total_tokens,
+            "_cost_breakdown": {"extraction": cost_usd},
+            "total_cost_usd": cost_usd,
+        }
 
     intent = parsed.get("intent", "unknown")
     entities = parsed.get("entities", {})
@@ -127,5 +168,8 @@ async def extraction_node(
             "business_requirements": business_requirements,
             "confidence": confidence,
             "entity_confidence": entity_confidence,
-        }
+        },
+        "_total_tokens": total_tokens,
+        "_cost_breakdown": {"extraction": cost_usd},
+        "total_cost_usd": cost_usd,
     }
