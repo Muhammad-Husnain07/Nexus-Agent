@@ -268,8 +268,9 @@ async def planner_node(
         pass
 
     # Filter tools to relevant ones
+    _agent_settings = get_settings().agent
     intent_text = " ".join(intents) or user_input
-    relevant_tools = filter_relevant_tools(intent_text, tools, top_k=10)
+    relevant_tools = filter_relevant_tools(intent_text, tools, top_k=_agent_settings.max_planning_tools)
 
     # Build the plan
     plan = await PlannerRunner.build_plan(
@@ -371,14 +372,14 @@ async def executor_node(
     tool_map = {t["name"]: t for t in available_tools if isinstance(t, dict) and t.get("name")}
 
     executor = ConcurrentExecutor(tool_executor=tool_executor, tool_map=tool_map)
-    settings = get_settings()
+    _settings = get_settings()
 
     results = await executor.execute(
         tasks=list(task_map.values()),
         waves=waves,
-        max_concurrency=settings.agent.adaptive_reflection.max_concurrent_tasks,
-        per_tool_timeout=settings.tools.execution_timeout_s if hasattr(settings, "tools") else 15.0,
-        global_timeout=60.0,
+        max_concurrency=_settings.agent.adaptive_reflection.max_concurrent_tasks,
+        per_tool_timeout=_settings.tools.execution_timeout_s,
+        global_timeout=_settings.agent.global_execution_timeout_s,
     )
 
     # Update working memory with results
@@ -424,9 +425,10 @@ async def reflection_node(state: AgentState) -> dict[str, Any]:
     tasks_to_retry = []
     tasks_to_skip = []
 
+    max_retries_allowed = get_settings().agent.max_reflection_retries
     for task_id in failed:
         retries = retry_counts.get(task_id, 0)
-        if retries < 2:
+        if retries < max_retries_allowed:
             tasks_to_retry.append(task_id)
         else:
             tasks_to_skip.append(task_id)

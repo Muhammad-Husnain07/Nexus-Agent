@@ -26,6 +26,7 @@ from typing import Any
 import structlog
 
 from nexus.agent.planners.dependency_analysis import analyze_dependencies as _analyze_dependencies
+from nexus.config.settings import get_settings
 
 logger = structlog.get_logger("nexus.agent.planners.dag_planner")
 
@@ -326,10 +327,12 @@ async def _llm_propose_tasks(
     capabilities_context: str = "",
 ) -> list[dict[str, Any]]:
     """Call the LLM to propose the initial set of tools and arguments."""
+    _agent = get_settings().agent
     tool_descriptions = _format_tool_descriptions(tools)
     prompt_template = _get_planner_prompt()
     # Inject capabilities context if available (prepended to query)
-    enriched_query = query[:1000]
+    max_query_chars = 1000
+    enriched_query = query[:max_query_chars]
     if capabilities_context:
         enriched_query = f"{capabilities_context}\nUser Request: {enriched_query}"
     prompt = prompt_template.format(
@@ -341,7 +344,7 @@ async def _llm_propose_tasks(
         model=model,
         messages=[{"role": "user", "content": prompt}],
         temperature=0,
-        max_tokens=2048,
+        max_tokens=_agent.planner_max_tokens,
         response_format={"type": "json_object"},
     )
 
@@ -429,9 +432,10 @@ async def build_plan(
 
     # Fallback: if LLM returned nothing, create one task per tool
     if not raw_tasks:
+        fallback_limit = get_settings().agent.fallback_max_tools
         raw_tasks = [
             {"id": f"task_{i+1}", "tool_name": t["name"], "inputs": {}, "description": t.get("description", "")}
-            for i, t in enumerate(tools[:5])
+            for i, t in enumerate(tools[:fallback_limit])
         ]
 
     # 3. Build ExecutionTask objects

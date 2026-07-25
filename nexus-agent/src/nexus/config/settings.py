@@ -289,6 +289,20 @@ class AgentSettings(BaseModel):
         max_iterations: Maximum agent iterations per conversation turn.
         context_window_tokens: Maximum context window in tokens.
         summarization_threshold_tokens: Token count triggering summarization.
+        max_planning_tools: Max tools to pass to the planner.
+        global_execution_timeout_s: Global timeout for all execution waves.
+        max_reflection_retries: Max retries before finalizing.
+        extraction_max_tokens: Max LLM tokens for extraction node.
+        extraction_temperature: LLM temperature for extraction.
+        planner_max_tokens: Max LLM tokens for planner.
+        fallback_confidence: Confidence when heuristic fallback matches intent.
+        fallback_max_tools: Max tools in fallback plan (LLM returned nothing).
+        max_result_chars: Max chars per tool result before truncation.
+        max_result_list_items: Max items per list in tool result truncation.
+        finalize_temperature: LLM temperature for response composition.
+        finalize_max_tokens: Max LLM tokens for final response.
+        milestone_min_length: Min response length to qualify as milestone.
+        max_intent_display: Max intents to show in extraction prompt.
         adaptive_reflection: Adaptive reflection and uncertainty settings.
     """
 
@@ -303,6 +317,20 @@ class AgentSettings(BaseModel):
         le=3600,
         description="TTL in seconds for the per-session run lock (heartbeat renews every ttl/3)",
     )
+    max_planning_tools: int = Field(default=10, ge=1, le=50, description="Max tools passed to planner")
+    global_execution_timeout_s: int = Field(default=60, ge=1, description="Global execution timeout")
+    max_reflection_retries: int = Field(default=2, ge=0, le=10, description="Max retries before finalize")
+    extraction_max_tokens: int = Field(default=512, ge=64, description="LLM max tokens for extraction")
+    extraction_temperature: float = Field(default=0.0, ge=0, le=1, description="LLM temperature for extraction")
+    planner_max_tokens: int = Field(default=2048, ge=128, description="LLM max tokens for planner")
+    fallback_confidence: float = Field(default=0.6, ge=0, le=1, description="Heuristic fallback confidence")
+    fallback_max_tools: int = Field(default=5, ge=1, le=50, description="Max tools in fallback plan")
+    max_result_chars: int = Field(default=2000, ge=100, description="Max chars per tool result")
+    max_result_list_items: int = Field(default=5, ge=1, le=100, description="Max list items in result")
+    finalize_temperature: float = Field(default=0.7, ge=0, le=2, description="LLM temp for final response")
+    finalize_max_tokens: int = Field(default=1024, ge=64, description="LLM max tokens for final response")
+    milestone_min_length: int = Field(default=20, ge=1, description="Min response length for milestone")
+    max_intent_display: int = Field(default=20, ge=1, le=100, description="Max intents in extraction prompt")
     adaptive_reflection: AdaptiveReflectionSettings = Field(
         default_factory=AdaptiveReflectionSettings,
         description="Adaptive reflection and uncertainty settings",

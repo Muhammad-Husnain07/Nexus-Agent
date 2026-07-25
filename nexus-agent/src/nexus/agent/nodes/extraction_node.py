@@ -11,6 +11,7 @@ import structlog
 from nexus.agent.prompts import prompt_manager
 from nexus.agent.registry.intent_registry import get_registry
 from nexus.agent.state import AgentState
+from nexus.config.settings import get_settings
 from nexus.llm.client import LLMClient
 
 logger = structlog.get_logger("nexus.agent.nodes.extraction")
@@ -53,13 +54,15 @@ async def extraction_node(
             intent_details_lines.append(
                 f"  - {intent_name}: params={','.join(all_params)}" if all_params else f"  - {intent_name}: params=none"
             )
-    intent_details = "\n".join(intent_details_lines[:20]) if intent_details_lines else "(none)"
+    _extraction_settings = get_settings().agent
+    max_intents = _extraction_settings.max_intent_display
+    intent_details = "\n".join(intent_details_lines[:max_intents]) if intent_details_lines else "(none)"
 
     # Render extraction prompt
     system_prompt = prompt_manager.render(
         "extraction",
         version="1.0",
-        intents=", ".join(available_intents[:20]) if available_intents else "(none available)",
+        intents=", ".join(available_intents[:max_intents]) if available_intents else "(none available)",
         intent_details=intent_details,
     )
 
@@ -69,8 +72,8 @@ async def extraction_node(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": last_message},
         ],
-        temperature=0,
-        max_tokens=512,
+        temperature=_extraction_settings.extraction_temperature,
+        max_tokens=_extraction_settings.extraction_max_tokens,
         response_format={"type": "json_object"},
     )
 
@@ -85,10 +88,11 @@ async def extraction_node(
         # Fallback: simple heuristic extraction from the raw message
         q_lower = last_message.lower()
         # Check for common tool keywords
+        fallback_conf = get_settings().agent.fallback_confidence
         for intent_name in available_intents:
             keywords = intent_name.replace("_", " ").lower()
             if keywords in q_lower:
-                parsed = {"intent": intent_name, "entities": {}, "confidence": 0.6}
+                parsed = {"intent": intent_name, "entities": {}, "confidence": fallback_conf}
                 break
         else:
             parsed = {"intent": "unknown", "entities": {}, "confidence": 0.0}

@@ -17,6 +17,7 @@ import structlog
 from nexus.agent.registry.intent_registry import get_registry
 from nexus.agent.state import AgentState
 from nexus.agent.state.context import StructuredContext
+from nexus.config.settings import get_settings
 
 logger = structlog.get_logger("nexus.agent.nodes.validation")
 
@@ -71,7 +72,8 @@ def _validate_pipeline(ctx: StructuredContext) -> dict[str, Any]:
         }
 
     # Stage 4: Low confidence check
-    if ctx.confidence < 0.5:
+    low_conf_threshold = get_settings().agent.adaptive_reflection.confidence_low
+    if ctx.confidence < low_conf_threshold:
         return {
             "ready": False,
             "missing": ["low_confidence"],

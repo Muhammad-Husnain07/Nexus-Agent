@@ -11,6 +11,7 @@ import structlog
 
 from nexus.agent.prompts import prompt_manager
 from nexus.agent.state import AgentState
+from nexus.config.settings import get_settings
 from nexus.llm.client import LLMClient
 from nexus.memory.store import MemoryStore
 
@@ -85,13 +86,17 @@ async def finalize(
     elif errors and not results:
         final = "I encountered some issues:\n" + "\n".join(f"- {e}" for e in errors)
     elif results and tool_executed:
-        def _truncate_data(d: Any, max_chars: int = 2000) -> Any:
-            if isinstance(d, str) and len(d) > max_chars:
-                return d[:max_chars] + "..."
+        _fin_settings = get_settings().agent
+        _max_chars = _fin_settings.max_result_chars
+        _max_items = _fin_settings.max_result_list_items
+
+        def _truncate_data(d: Any) -> Any:
+            if isinstance(d, str) and len(d) > _max_chars:
+                return d[:_max_chars] + "..."
             if isinstance(d, dict):
-                return {k: _truncate_data(v, max_chars) for k, v in d.items()}
+                return {k: _truncate_data(v) for k, v in d.items()}
             if isinstance(d, list):
-                return [_truncate_data(v, max_chars) for v in d[:5]] + (["..."] if len(d) > 5 else [])
+                return [_truncate_data(v) for v in d[:_max_items]] + (["..."] if len(d) > _max_items else [])
             return d
 
         tool_citations = json.dumps(
@@ -168,22 +173,22 @@ async def finalize(
         if reflection_context:
             system_prompt = reflection_context + system_prompt
 
+        _finalize_settings = get_settings().agent
         response = await llm.complete(
             model=model,
             messages=[
                 {"role": "system", "content": system_prompt},
             ],
-            temperature=0.7,
-            max_tokens=1024,
-            stop=["User:", "user:", "###"],
+            temperature=_finalize_settings.finalize_temperature,
+            max_tokens=_finalize_settings.finalize_max_tokens,
         )
         final = response.content or "Task completed."
     else:
         final = "No results were produced."
 
     # Only milestone actual answers — skip for clarification/failure messages
-    # so the milestone_reducer can trim them when the window overflows.
-    _is_clarification = not final or len(final) < 20 or any(
+    _milestone_min = get_settings().agent.milestone_min_length
+    _is_clarification = not final or len(final) < _milestone_min or any(
         final.lower().startswith(p) for p in [
             "i'm not entirely sure", "i'm a bit confused", "i'm having trouble",
             "i'm not confident", "i don't understand", "i didn't catch",
