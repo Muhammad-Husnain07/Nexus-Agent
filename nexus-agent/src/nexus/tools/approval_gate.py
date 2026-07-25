@@ -58,8 +58,11 @@ def check_plan_approval(
 def format_approval_message(pending_tools: list[dict[str, Any]]) -> str:
     """Format a human-readable approval request message.
 
+    Includes tool inputs when available (per-call approval scope).
+
     Args:
         pending_tools: List of tool data dicts requiring approval.
+            Each entry has ``name`` and optionally ``inputs``, ``description``.
 
     Returns:
         A natural language message asking the user to approve or reject.
@@ -72,6 +75,11 @@ def format_approval_message(pending_tools: list[dict[str, Any]]) -> str:
         name = t.get("name", "unknown")
         desc = t.get("description", "") or t.get("purpose", "")
         risk = t.get("risk_level", "unknown")
-        parts.append(f"  - {name}: {desc} (risk: {risk})")
+        inputs = t.get("inputs", {})
+        line = f"  - {name}: {desc} (risk: {risk})"
+        if inputs:
+            input_str = ", ".join(f"{k}={v}" for k, v in inputs.items())
+            line += f" [{input_str}]"
+        parts.append(line)
     parts.append("Reply with 'approve' to proceed or 'reject' to cancel.")
     return "\n".join(parts)

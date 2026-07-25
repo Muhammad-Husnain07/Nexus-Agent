@@ -309,7 +309,8 @@ _EPHEMERAL_FIELDS: list[str] = [
     "_safety_result",
     "dag_tasks",
     "tool_results",
-    "errors",
+    "errors",       # flat backward-compat, not typed in AgentState
+
     "_query_type",
     "_force_query_type",
     "_preferred_tools",
@@ -333,6 +334,13 @@ _EPHEMERAL_FIELDS: list[str] = [
     "_approval_granted",
     "_recovery_available",
     "_recovery_failed_tasks",
+    # Cost tracking
+    "_total_tokens",
+    "_cost_breakdown",
+    # Approval decision (cleared by approval_gate_node after reading)
+    "_approval_decision",
+    # Approval request timestamp (set when approval is first requested)
+    "_approval_requested_at",
 ]
 
 
@@ -372,6 +380,7 @@ class AgentState(TypedDict, total=False):
     total_cost_usd: float
     _cost_breakdown: dict[str, Any]
     _total_tokens: int
+    # All _-prefixed fields must also be in _EPHEMERAL_FIELDS above
 
     # Graph routing & execution state
     _routing_decision: str
@@ -387,9 +396,10 @@ class AgentState(TypedDict, total=False):
     _pending_tasks: list[str]
     _execution_plan: dict[str, Any]
 
-    # Tool execution state
+    # Tool execution state (also in _EPHEMERAL_FIELDS)
     tool_results: list[dict[str, Any]]
     dag_tasks: list[dict[str, Any]]
+    errors: list[str]
 
     # StructuredContext (extraction → validation → planning)
     _extraction_result: dict[str, Any]
@@ -400,6 +410,13 @@ class AgentState(TypedDict, total=False):
 
     # HITL approval
     _needs_approval: bool
-    _pending_approval_tools: list[str]
+    _pending_approval_tools: list[dict[str, Any]]
     _approval_decision: str
     _approval_granted: bool
+    _approval_requested_at: float
+
+    # Runtime-only ephemeral fields (carried in state but not in TypedDict)
+    _normalization_metadata: dict
+    _recovery_available: bool
+    _recovery_failed_tasks: list
+    _clarification_asked: dict

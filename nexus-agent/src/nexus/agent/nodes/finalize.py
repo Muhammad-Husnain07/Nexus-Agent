@@ -9,11 +9,11 @@ from typing import Any
 
 import structlog
 
+from nexus.agent.nodes.memory_helper import persist_after_response
 from nexus.agent.prompts import prompt_manager
 from nexus.agent.state import AgentState
 from nexus.config.settings import get_settings
 from nexus.llm.client import LLMClient
-from nexus.memory.store import MemoryStore
 
 logger = structlog.get_logger("nexus.agent.nodes.finalize")
 
@@ -197,56 +197,10 @@ async def finalize(
     )
     final_msg = _openai_message("assistant", final, _milestone=not _is_clarification)
 
-    # Add working memory entry for the final response
-    try:
-        from nexus.memory.working import WorkingMemory  # noqa: PLC0415
-        wm = WorkingMemory.from_dict(state.get("working_memory"))
-        wm.add(
-            key="final_response",
-            content=final[:200],
-            source="inference",
-            importance=0.6,
-            turn_id=state.get("iteration_count", 0),
-        )
-        working_memory_update = wm.to_dict()
-    except Exception:
-        working_memory_update = state.get("working_memory", {"entries": []})
-
-    # Persist to long-term memory (Redis Stream if available, else in-process)
-    if session_factory and state.get("response_type") == "tool":
-        _tried_stream = False
-        try:
-            import json as _json
-            from nexus.redis_client.client import get_redis_client  # noqa: PLC0415
-            _r = get_redis_client()
-            if _r is not None:
-                _sid = state.get("session_id", "")
-                _state_snapshot = dict(state)
-                _state_snapshot.pop("messages", None)
-                _state_snapshot.pop("dag_tasks", None)
-                _state_snapshot.pop("available_tools", None)
-                _state_snapshot.pop("tool_results", None)
-                # Test connection with ping before xadd
-                await _r.ping()
-                await _r.xadd(
-                    "memory_extraction_queue",
-                    {
-                        "session_id": _sid,
-                        "agent_state": _json.dumps(_state_snapshot),
-                    },
-                    maxlen=1000,
-                )
-                _tried_stream = True
-        except Exception:
-            pass
-
-        if not _tried_stream:
-            try:
-                from nexus.memory.manager import MemoryManager
-                manager = MemoryManager(store=MemoryStore(), llm=llm)
-                asyncio.ensure_future(_persist_memory_background(manager, state.get("session_id", ""), dict(state)))
-            except Exception:
-                pass
+    # Persist to working memory + long-term memory
+    working_memory_update = await persist_after_response(
+        state, final, llm=llm, session_factory=session_factory
+    )
 
     logger.info(
         "finalize.completed",

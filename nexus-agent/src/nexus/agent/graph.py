@@ -193,6 +193,7 @@ async def approval_gate_node(state: AgentState) -> dict[str, Any]:
     plan = state.get("_execution_plan", {})
     tool_names = plan.get("tool_names", [])
     available_tools = state.get("available_tools", [])
+    tasks_data = state.get("dag_tasks", [])
 
     logger.debug("approval_gate.check", tool_names=tool_names, avail_count=len(available_tools))
 
@@ -200,6 +201,13 @@ async def approval_gate_node(state: AgentState) -> dict[str, Any]:
         return {"_approval_granted": True}
 
     from nexus.tools.approval_gate import check_plan_approval, format_approval_message
+
+    # Build task input map: tool_name → inputs (for per-call approval scope)
+    task_inputs: dict[str, list[dict[str, Any]]] = {}
+    for t in tasks_data if isinstance(tasks_data, list) else []:
+        tname = t.get("tool_name", "") if isinstance(t, dict) else ""
+        if tname:
+            task_inputs.setdefault(tname, []).append(t.get("inputs", {}))
 
     # Check risk_level of each tool in available_tools
     for t in available_tools:
@@ -223,14 +231,38 @@ async def approval_gate_node(state: AgentState) -> dict[str, Any]:
         logger.info("approval_gate.rejected", tools=tool_names)
         return {"_approval_granted": False, "_approval_decision": None, "_needs_approval": False, "errors": ["Tool execution rejected by user"]}
 
+    # Check if a previous approval request has expired
+    import time as _time
+    requested_at = state.get("_approval_requested_at")
+    if requested_at is not None:
+        expiry = get_settings().agent.run_lock_ttl_s  # reuse run_lock TTL for approval expiry
+        if _time.time() - requested_at > expiry:
+            logger.info("approval_gate.expired", tool_names=[t["name"] for t in pending])
+            return {
+                "_approval_granted": False,
+                "_approval_decision": None,
+                "_needs_approval": False,
+                "errors": ["Approval request has expired — please try again"],
+            }
+
+    # Build per-call approval payload (tool name + inputs for scoped approval)
+    pending_with_inputs: list[dict[str, Any]] = []
+    for t in pending:
+        entry: dict[str, Any] = {"name": t["name"]}
+        t_inputs = task_inputs.get(t["name"], [])
+        if t_inputs:
+            entry["inputs"] = t_inputs[0]  # primary task inputs
+        pending_with_inputs.append(entry)
+
     # No decision yet — ask for approval
-    msg = format_approval_message(pending)
+    msg = format_approval_message(pending_with_inputs)
     logger.info("approval_gate.awaiting", tool_names=[t["name"] for t in pending])
 
     return {
         "final_response": msg,
         "_needs_approval": True,
-        "_pending_approval_tools": [t["name"] for t in pending],
+        "_pending_approval_tools": pending_with_inputs,
+        "_approval_requested_at": _time.time(),
         "_routing_decision": "finalize",
     }
 
