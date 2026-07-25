@@ -5,4 +5,4 @@ expected:
   executor:
     tool_call_count: 0
   guards:
-    avoid_tools: ["get_weather"]
+    avoid_tools: ["get_weather", "get_crypto_price", "get_pokemon"]

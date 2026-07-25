@@ -316,6 +316,17 @@ class AgentRunner:
                 _populate_capabilities(available_tools)
             except Exception:
                 pass
+            try:
+                from nexus.agent.registry.goal_registry import populate_from_tools as _populate_goals
+                _populate_goals(available_tools)
+            except Exception:
+                pass
+            try:
+                from nexus.agent.registry.artifact_registry import get_artifact_registry
+                _artifact_reg = get_artifact_registry()
+                _artifact_reg.register_from_tools(available_tools)
+            except Exception:
+                pass
 
         initial_state: AgentState = {
             "messages": prior_messages + [user_msg],
