@@ -103,13 +103,25 @@ def route_after_router(state: AgentState) -> str:
 def route_after_validation(state: AgentState) -> str:
     """Route based on validation result.
 
-    - If validation ready → PlannerNode
+    - If validation ready → ResolutionNode (stage 1 deterministic planner)
     - If clarification needed → ClarificationNode (which ends the graph)
     """
     if state.get("_ready_to_plan"):
-        return "PlannerNode"
+        return "ResolutionNode"
 
     return "ClarificationNode"
+
+
+def route_after_resolution(state: AgentState) -> str:
+    """Route based on resolution result.
+
+    - If a resolution chain was found → TaskGraphBuilderNode (stage 2)
+    - If no chain found → PlannerNode (LLM fallback)
+    """
+    if state.get("_resolution_chain"):
+        return "TaskGraphBuilderNode"
+
+    return "PlannerNode"
 
 
 def route_after_plan_validator(state: AgentState) -> str:
@@ -654,16 +666,20 @@ def build_agent_graph(
     from nexus.agent.nodes.validation_node import validation_node as _validation_node
     from nexus.agent.nodes.clarification_node import clarification_node as _clarification_node
     from nexus.agent.nodes.plan_validator_node import plan_validator_node as _plan_validator_node
+    from nexus.agent.nodes.resolution_node import resolution_node as _resolution_node
+    from nexus.agent.nodes.task_graph_builder_node import task_graph_builder_node as _task_graph_builder_node
+    from nexus.agent.nodes.graph_optimizer_node import graph_optimizer_node as _graph_optimizer_node
 
-    # 12 production nodes (Router, Extraction, Normalization, ContextMerge,
-    # Validation, Clarification, Planner, PlanValidator, ApprovalGate,
-    # Executor, Reflection, Response)
+    # 15 production nodes — 3-stage planner pipeline + existing
     graph.add_node("RouterNode", node(router_node, _llm, _model))
     graph.add_node("ExtractionNode", node(_extraction_node, _llm, _model))
     graph.add_node("NormalizationNode", node(_normalization_node))
     graph.add_node("ContextMergeNode", node(_context_merge_node))
     graph.add_node("ValidationNode", node(_validation_node))
     graph.add_node("ClarificationNode", node(_clarification_node))
+    graph.add_node("ResolutionNode", node(_resolution_node))
+    graph.add_node("TaskGraphBuilderNode", node(_task_graph_builder_node))
+    graph.add_node("GraphOptimizerNode", node(_graph_optimizer_node))
     graph.add_node("PlannerNode", node(planner_node, _llm, _model))
     graph.add_node("PlanValidatorNode", node(_plan_validator_node))
     graph.add_node("ExecutorNode", node(executor_node, _executor))
@@ -679,7 +695,6 @@ def build_agent_graph(
         route_after_router,
         {
             "ExtractionNode": "ExtractionNode",
-            "PlannerNode": "PlannerNode",
             "ResponseNode": "ResponseNode",
         },
     )
@@ -689,18 +704,31 @@ def build_agent_graph(
     graph.add_edge("NormalizationNode", "ContextMergeNode")
     graph.add_edge("ContextMergeNode", "ValidationNode")
 
-    # Validation → Planner (ready) or Clarification (missing info)
+    # Validation → Resolution (stage 1 planner) or Clarification (missing info)
     graph.add_conditional_edges(
         "ValidationNode",
         route_after_validation,
         {
-            "PlannerNode": "PlannerNode",
+            "ResolutionNode": "ResolutionNode",
             "ClarificationNode": "ClarificationNode",
         },
     )
 
     # Clarification → END (graph stops; user responds with new message)
     graph.add_edge("ClarificationNode", END)
+
+    # 3-stage planner pipeline: Resolution → TaskGraphBuilder → GraphOptimizer
+    # Falls through to PlannerNode (LLM) if resolution finds no chain
+    graph.add_conditional_edges(
+        "ResolutionNode",
+        route_after_resolution,
+        {
+            "TaskGraphBuilderNode": "TaskGraphBuilderNode",
+            "PlannerNode": "PlannerNode",
+        },
+    )
+    graph.add_edge("TaskGraphBuilderNode", "GraphOptimizerNode")
+    graph.add_edge("GraphOptimizerNode", "PlanValidatorNode")
 
     # Planner → PlanValidator (conditional) → ApprovalGate or Clarification
     graph.add_edge("PlannerNode", "PlanValidatorNode")

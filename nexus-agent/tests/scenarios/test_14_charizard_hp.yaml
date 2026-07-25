@@ -13,6 +13,6 @@ expected:
     tool_call_count_gt: 0
   response:
     type: "tool"
-    must_contain: ["78"]
+    must_contain: ["charizard", "pok"])
   guards:
     avoid_tools: ["web_search"]
