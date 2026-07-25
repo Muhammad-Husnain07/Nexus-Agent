@@ -103,23 +103,23 @@ def route_after_router(state: AgentState) -> str:
 def route_after_validation(state: AgentState) -> str:
     """Route based on validation result.
 
-    - If validation ready → ResolutionNode (stage 1 deterministic planner)
+    - If validation ready → CapabilityResolverNode (stage 1 resolution)
     - If clarification needed → ClarificationNode (which ends the graph)
     """
     if state.get("_ready_to_plan"):
-        return "ResolutionNode"
+        return "CapabilityResolverNode"
 
     return "ClarificationNode"
 
 
 def route_after_resolution(state: AgentState) -> str:
-    """Route based on resolution result.
+    """Route based on capability resolver result.
 
-    - If a resolution chain was found → TaskGraphBuilderNode (stage 2)
-    - If no chain found → PlannerNode (LLM fallback)
+    - If candidate set was found → DependencyResolverNode (stage 2)
+    - If no candidate set → PlannerNode (LLM fallback)
     """
-    if state.get("_resolution_chain"):
-        return "TaskGraphBuilderNode"
+    if state.get("_candidate_set"):
+        return "DependencyResolverNode"
 
     return "PlannerNode"
 
@@ -671,11 +671,15 @@ def build_agent_graph(
     from nexus.agent.nodes.graph_optimizer_node import graph_optimizer_node as _graph_optimizer_node
     from nexus.agent.nodes.semantic_parser_node import semantic_parser_node as _semantic_parser_node
     from nexus.agent.nodes.goal_expander_node import goal_expander_node as _goal_expander_node
+    from nexus.agent.nodes.capability_resolver_node import capability_resolver_node as _capability_resolver_node
+    from nexus.agent.nodes.dependency_resolver_node import dependency_resolver_node as _dependency_resolver_node
 
-    # 17 production nodes — SemanticParser + GoalExpander + existing pipeline
+    # 19 production nodes — SemanticParser + GoalExpander + CapabilityResolver + DependencyResolver + existing
     graph.add_node("RouterNode", node(router_node, _llm, _model))
     graph.add_node("SemanticParserNode", node(_semantic_parser_node, _llm, _model))
     graph.add_node("GoalExpanderNode", node(_goal_expander_node))
+    graph.add_node("CapabilityResolverNode", node(_capability_resolver_node))
+    graph.add_node("DependencyResolverNode", node(_dependency_resolver_node))
     graph.add_node("ExtractionNode", node(_extraction_node, _llm, _model))
     graph.add_node("NormalizationNode", node(_normalization_node))
     graph.add_node("ContextMergeNode", node(_context_merge_node))
@@ -703,9 +707,11 @@ def build_agent_graph(
         },
     )
 
-    # SemanticParser → GoalExpander → Extraction → Normalization → ContextMerge → Validation
+    # SemanticParser → GoalExpander → CapabilityResolver → DependencyResolver → TaskGraphBuilder
     graph.add_edge("SemanticParserNode", "GoalExpanderNode")
-    graph.add_edge("GoalExpanderNode", "ExtractionNode")
+    graph.add_edge("GoalExpanderNode", "CapabilityResolverNode")
+    graph.add_edge("CapabilityResolverNode", "DependencyResolverNode")
+    graph.add_edge("DependencyResolverNode", "ExtractionNode")
     graph.add_edge("ExtractionNode", "NormalizationNode")
     graph.add_edge("NormalizationNode", "ContextMergeNode")
     graph.add_edge("ContextMergeNode", "ValidationNode")
@@ -715,7 +721,7 @@ def build_agent_graph(
         "ValidationNode",
         route_after_validation,
         {
-            "ResolutionNode": "ResolutionNode",
+            "CapabilityResolverNode": "CapabilityResolverNode",
             "ClarificationNode": "ClarificationNode",
         },
     )
@@ -723,16 +729,17 @@ def build_agent_graph(
     # Clarification → END (graph stops; user responds with new message)
     graph.add_edge("ClarificationNode", END)
 
-    # 3-stage planner pipeline: Resolution → TaskGraphBuilder → GraphOptimizer
-    # Falls through to PlannerNode (LLM) if resolution finds no chain
+    # 2-stage resolution pipeline: CapabilityResolver → DependencyResolver → TaskGraphBuilder
+    # Falls through to PlannerNode (LLM) if resolver finds no candidate set
     graph.add_conditional_edges(
-        "ResolutionNode",
+        "CapabilityResolverNode",
         route_after_resolution,
         {
-            "TaskGraphBuilderNode": "TaskGraphBuilderNode",
+            "DependencyResolverNode": "DependencyResolverNode",
             "PlannerNode": "PlannerNode",
         },
     )
+    graph.add_edge("DependencyResolverNode", "TaskGraphBuilderNode")
     graph.add_edge("TaskGraphBuilderNode", "GraphOptimizerNode")
     graph.add_edge("GraphOptimizerNode", "PlanValidatorNode")
 
