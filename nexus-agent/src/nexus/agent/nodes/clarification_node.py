@@ -71,6 +71,7 @@ async def clarification_node(state: AgentState) -> dict[str, Any]:
     return {
         "final_response": question,
         "_routing_decision": "finalize",
+        "response_type": "clarification",
         "_clarification_asked": {
             "missing": missing,
             "question": question,

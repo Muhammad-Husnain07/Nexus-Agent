@@ -530,10 +530,22 @@ async def response_node(
     errors = state.get("errors", [])
 
     if not tool_results and not errors:
-        return {"final_response": "I processed your request.", "_routing_decision": "finalize"}
+        return {
+            "final_response": "I processed your request.",
+            "_routing_decision": "finalize",
+            "response_type": "tool",
+        }
+
+    if errors and not tool_results:
+        from nexus.agent.nodes.finalize import finalize as compose_response
+        result = await compose_response(state, llm, model)
+        result["response_type"] = "error"
+        return result
 
     from nexus.agent.nodes.finalize import finalize as compose_response
-    return await compose_response(state, llm, model)
+    result = await compose_response(state, llm, model)
+    result["response_type"] = "tool"
+    return result
 
 
 # ============================================================================

@@ -362,6 +362,12 @@ async def node_classify_query(
 
     result: dict[str, Any] = {"_query_type": qtype.value}
 
+    # Set response_type based on actual query type — not a generic default
+    if qtype == QueryType.NO_TOOL_NEEDED:
+        result["response_type"] = "greeting"
+    elif qtype == QueryType.CONVERSATIONAL:
+        result["response_type"] = "conversational"
+
     # For multi-tool types, pre-select preferred tools using weighted index
     if qtype in (QueryType.INDEPENDENT_MULTI, QueryType.DEPENDENT_MULTI):
         matched = _match_tools(last_user.lower(), available_tools)

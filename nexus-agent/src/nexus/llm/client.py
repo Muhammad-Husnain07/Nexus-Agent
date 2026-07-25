@@ -281,7 +281,25 @@ class LLMClient:
             span.set_attribute("llm.model", model)
             span.set_attribute("llm.provider", provider_name)
             span.set_attribute("llm.temperature", str(kwargs.get("temperature", "")))
-            response = await litellm.acompletion(**kwargs)
+            try:
+                response = await litellm.acompletion(**kwargs)
+            except Exception as exc:
+                # Capture cost data even on failure — provider may include it
+                cost_usd = getattr(exc, "cost_usd", 0.0) if hasattr(exc, "cost_usd") else 0.0
+                latency_ms = (time.monotonic() - start) * 1000
+                span.set_attribute("llm.latency_ms", latency_ms)
+                span.set_attribute("llm.error", str(exc)[:200])
+                if cost_usd > 0:
+                    span.set_attribute("llm.cost_usd", cost_usd)
+                # Return an error-indicating response with whatever cost data exists
+                return LLMResponse(
+                    content="",
+                    model=model,
+                    provider=provider_name,
+                    latency_ms=latency_ms,
+                    cost_usd=cost_usd or 0.0,
+                    usage=UsageInfo(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+                )
             latency_ms = (time.monotonic() - start) * 1000
             usage = response.usage if hasattr(response, "usage") else None
             if usage:
