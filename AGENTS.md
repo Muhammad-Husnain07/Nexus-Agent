@@ -6,12 +6,18 @@ Monorepo containing:
 
 ## Architecture
 
-The agent uses a **5-node production LangGraph**:
+The agent uses an **11-node production LangGraph**:
 ```
-RouterNode → PlannerNode → ExecutorNode → ReflectionNode → ResponseNode
+RouterNode → ExtractionNode → NormalizationNode → ContextMergeNode → ValidationNode
+    │                                                                │
+    │                          ┌─────────────────────────────────────┘
+    │                          ▼
+    │                   ClarificationNode (missing info → END)
+    │                          │
+    │                   PlannerNode → ApprovalGateNode → ExecutorNode → ReflectionNode → ResponseNode → END
 ```
 
-Query routing: `NO_TOOL_NEEDED` goes directly to `ResponseNode`; all other types go through full planning + execution. Failed tasks auto-retry via `ReflectionNode` (up to 2x with backoff).
+Query routing: `NO_TOOL_NEEDED` goes directly to `ResponseNode`; all other types go through extraction → normalization → validation → clarification/planning → execution. Failed tasks auto-retry via `ReflectionNode` (configurable via settings, default 2x with backoff). High-risk tools require HITL approval via `ApprovalGateNode` before execution.
 
 ## Backend Rules
 

@@ -40,9 +40,9 @@
 1. **Tool-driven** — All business capability is behind tool boundaries. The agent never calls a database or external API directly.
 2. **Vendor-neutral** — LLM providers, vector stores, and infrastructure are swappable via config/env vars.
 3. **Single-tenant** — No tenant isolation; all data is shared. Simplified deployment for single-user/single-team use cases.
-4. **HITL-first (Human-in-the-Loop)** — Every tool invocation can require human approval. The agent never executes destructive actions autonomously unless explicitly configured.
+4. **HITL-first (Human-in-the-Loop)** — High-risk tools require explicit human approval via `ApprovalGateNode`. Approvals are scoped per-call (tool name + inputs), not per-tool-name.
 5. **Stateless agent, stateful session** — The agent is ephemeral; conversation state, memory, and tool results live in PostgreSQL/Redis.
-6. **Fail closed** — On error, ambiguity, or policy violation, the agent defers to the human.
+6. **Fail closed** — On error, ambiguity, or policy violation, the agent defers to the human. Distinguishes system errors (`extraction_error`) from genuine ambiguity (`unknown`).
 
 ---
 
@@ -52,7 +52,7 @@
 - **Type-hinted everywhere** — Every function/method has full type annotations. Use `TYPE_CHECKING` for circular imports.
 - **Pydantic for all schemas** — Every input, output, config, and data transfer object is a Pydantic v2 `BaseModel`.
 - **Dependency injection** — Use FastAPI `Depends` and `Annotated` patterns. No `request` globals.
-- **No global mutable state** — Zero module-level mutable variables. Use `functools.lru_cache` or `@singledispatch` where needed.
+- **No global mutable state** — Zero module-level mutable variables. Background tasks tracked via `asyncio.Task` sets with done-callbacks.
 - **Structured logging** — `structlog` for all logging. No `print()`, no `logging.debug(...)` strings.
 - **Error handling** — Custom exception hierarchy in `src/nexus/errors/`. All unexpected errors captured by middleware.
 - **Idempotency** — Tool invocations should be idempotent where possible.
@@ -74,6 +74,9 @@ uv run mypy src/nexus
 
 # Run tests
 uv run pytest
+
+# Run ephemeral fields drift test
+uv run pytest tests/test_ephemeral_fields.py -v
 
 # Run DB migrations
 uv run alembic upgrade head
@@ -107,6 +110,8 @@ uv run alembic revision --autogenerate -m "description"
 5. **Every tool must declare idempotency, cost, and safety level** — via metadata on the tool schema.
 6. **All secrets via environment variables** — never hardcoded, never committed.
 7. **All migrations must be reversible** — Alembic `downgrade()` always present.
+8. **All `_`-prefixed AgentState fields must be in `_EPHEMERAL_FIELDS`** — enforced by `tests/test_ephemeral_fields.py`.
+9. **`_structured_context` is NOT ephemeral** — it is the Single Source of Truth and persists across turns.
 
 ---
 
@@ -120,28 +125,32 @@ See [docs/architecture.md](docs/architecture.md) for detailed architecture docum
 
 ### `src/nexus/agent/` — LangGraph Orchestration
 
-This module owns the LangGraph StateGraph that implements a 5-node production reasoning loop: **Router → Planner → Executor → Reflection → Response**. Key responsibilities:
-- Define `StateGraph` topology with 5 production nodes (no subgraph).
+This module owns the LangGraph StateGraph that implements an **11-node production reasoning loop**: Router → Extraction → Normalization → ContextMerge → Validation → Clarification/Planner → ApprovalGate → Executor → Reflection → Response. Key responsibilities:
+- Define `StateGraph` topology with 11 production nodes.
 - Manage graph lifecycle (compile with checkpointer, stream updates, cache per process lifetime).
 - Provide `AgentRunner` class that wires LLM, tools, memory, event bus, and Redis distributed session lock.
-- DAG-based parallel tool execution via `ConcurrentExecutor` (wave-based `asyncio.gather`, not `Send()`).
-- Self-reflection via `ReflectionNode` — auto-retries failed tasks up to 2 times with exponential backoff.
-- Efficient state management via 3-tier `state_schema.py` (persistent/working/cost) with rolling-window reducers.
+- Entity extraction + normalization + deterministic validation pipeline.
+- DAG-based parallel tool execution via `ConcurrentExecutor` (wave-based `asyncio.gather`).
+- Self-reflection via `ReflectionNode` — auto-retries failed tasks with configurable max retries.
+- HITL approval via `ApprovalGateNode` — driven by tool metadata, scoped per-call.
+- State management via `state_schema.py` (3-tier persistent/working/cost) with rolling-window reducers.
 
 ### `src/nexus/tools/` — Tool Registration, Discovery & Invocation
 
 This module owns the tool lifecycle. Key responsibilities:
-- `ToolRegistry` — Pydantic-backed registry of all known tools with automatic embedding generation.
-- MCP server via `fastapi-mcp` — exposes tool registry as MCP `tools/list` and `tools/call`.
-- `ToolExecutor` — resilient async HTTP execution with auth injection, schema validation, and retry.
+- `ToolRegistry` — Pydantic-backed registry with automatic embedding + pgvector search.
+- MCP server via `fastapi-mcp` for external MCP clients.
+- `ToolExecutor` — resilient async HTTP execution with auth, retry, sandbox, audit.
 - `DynamicToolSelector` — semantic + LLM-reranked discovery with Redis caching.
-- HITL gate — approval checking before destructive/risky tool execution.
+- `approval_gate` — HITL approval checks driven by tool `risk_level` / `requires_approval`.
 
 ### `src/nexus/api/` — FastAPI Application & Public API Layer
 
 This module owns the FastAPI application. Key responsibilities:
 - Route definitions: `/tools`, `/sessions`, `/chat`, `/approvals`, `/memory`, `/ws`.
-- SSE and WebSocket endpoints for streaming agent responses with heartbeat keep-alive.
+- SSE and WebSocket endpoints for streaming agent responses with heartbeat keep-alive and per-node timing.
+- HITL approval management — approve/reject via checkpointer state injection.
+- Checkpoint recovery — restore graph to state before any named node.
 - Middleware: CORS, rate limiting, request ID, structured logging, error handling, drain.
 
 ### `src/nexus/memory/` — Long-Term Memory System
@@ -163,7 +172,7 @@ This module owns conversation session management. Key responsibilities:
 ### `src/nexus/llm/` — LLM Integration
 
 This module owns the LLM integration layer. Key responsibilities:
-- `LLMClient` — unified interface to 100+ providers via LiteLLM.
+- `LLMClient` — unified interface to 100+ providers via LiteLLM. Always returns `LLMResponse` with cost data, even on failure.
 - `ProviderRegistry` — loads provider configs from settings, resolves API keys.
 - `ModelRouter` — routes task types (chat, embedding) to the appropriate model.
 - Fallback chains and retry policies for provider resilience.

@@ -30,13 +30,13 @@ graph TB
 | Component | Module | Responsibility |
 |-----------|--------|---------------|
 | **FastAPI Server** | `src/nexus/api/` | HTTP routes, middleware, SSE streaming, websockets |
-| **LangGraph Agent (5-node)** | `src/nexus/agent/` | Router → Planner → Executor → Reflection → Response |
+| **LangGraph Agent (11-node)** | `src/nexus/agent/` | Router → Extraction → Normalization → ContextMerge → Validation → Clarification/Planner → ApprovalGate → Executor → Reflection → Response |
 | **LLM Client** | `src/nexus/llm/` | Unified interface to 100+ LLM providers (LiteLLM) |
 | **Tool Registry** | `src/nexus/tools/` | CRUD, discovery, semantic search, MCP exposure |
 | **Tool Executor** | `src/nexus/tools/executor.py` | Executes HTTP API calls and MCP server requests with retry logic — no code execution |
 | **Memory** | `src/nexus/memory/` | PostgresSaver checkpointer + pgvector long-term store |
 | **Sessions** | `src/nexus/sessions/` | Conversation history, context window management |
-| **HITL** | `src/nexus/agent/hitl.py` | Human-in-the-loop approval interrupts (via approval_gate) |
+| **HITL** | `src/nexus/tools/approval_gate.py` + graph.py:ApprovalGateNode | Dynamic risk-based approval checks — driven by tool `risk_level`/`requires_approval` metadata. No hardcoded tool names |
 | **Auth** | `src/nexus/security/` | Passthrough auth (no JWT, no RBAC), rate limiting |
 | **Logging** | inlined structlog | Structured logging across all modules |
 | **Configuration** | `src/nexus/config/` | Pydantic BaseSettings, secret management |
@@ -61,40 +61,53 @@ sequenceDiagram
     alt NO_TOOL_NEEDED (greeting/meta)
         Agent->>FastAPI: SSE: final_response
         FastAPI-->>Client: event: final_response
-    else tool query (SINGLE / INDEPENDENT / DEPENDENT)
+    else tool query
         Agent->>FastAPI: SSE: tool_selected
         FastAPI-->>Client: event: tool_selected
-        Agent->>Agent: PlannerNode (DAG planner)
-        Note over Agent: LLM proposes tasks + dependency analysis
-        Agent->>LLM: PLANNER_PROMPT
-        LLM-->>Agent: Task list with dependencies
-        Agent->>FastAPI: SSE: plan_created
-        FastAPI-->>Client: event: plan_created
-        Agent->>Agent: ExecutorNode (ConcurrentExecutor)
-        Note over Agent: Executes DAG waves in parallel
-        par Wave 0: independent tasks
-            Agent->>Tools: ToolExecutor.execute(task_1)
-            Tools->>DB: INSERT ToolExecution
-            Tools-->>Agent: ToolResult
-            Agent->>Tools: ToolExecutor.execute(task_N)
-        end
-        Agent->>FastAPI: SSE: tool_call_completed
-        FastAPI-->>Client: event: tool_call_completed
-        alt All tasks succeeded
-            Agent->>Agent: ResponseNode (finalize)
-        else Some tasks failed
-            Agent->>Agent: ReflectionNode
-            alt Retries remaining (< 2)
-                Agent->>Agent: PlannerNode (re-plan)
-            else Max retries exceeded
-                Agent->>Agent: ResponseNode (partial results)
+        Agent->>Agent: ExtractionNode (LLM intent + entity extraction)
+        Note over Agent: Uses prompt v2 for multi-intent queries
+        Agent->>LLM: EXTRACTION_PROMPT
+        LLM-->>Agent: intent + entities + business_requirements
+        Agent->>Agent: NormalizationNode (dates, locations, currencies)
+        Agent->>Agent: ContextMergeNode (StructuredContext)
+        Agent->>Agent: ValidationNode (5-stage deterministic pipeline)
+        alt Missing info
+            Agent->>Agent: ClarificationNode → END
+            FastAPI-->>Client: event: final_response (clarification)
+        else Ready
+            Agent->>Agent: PlannerNode (DAG planner)
+            Agent->>Agent: ApprovalGateNode (check risk_level)
+            alt High-risk + no decision
+                FastAPI-->>Client: event: approval_required
+                Note over Client: POST /approve to continue
+            else Approved or low-risk
+                Agent->>Agent: ExecutorNode (ConcurrentExecutor)
+                Note over Agent: Executes DAG waves in parallel
+                par Wave 0: independent tasks
+                    Agent->>Tools: ToolExecutor.execute(task_1)
+                    Tools->>DB: INSERT ToolExecution
+                    Tools-->>Agent: ToolResult
+                    Agent->>Tools: ToolExecutor.execute(task_N)
+                end
+                Agent->>FastAPI: SSE: tool_call_completed
+                FastAPI-->>Client: event: tool_call_completed
+                alt All tasks succeeded
+                    Agent->>Agent: ResponseNode (finalize)
+                else Some tasks failed
+                    Agent->>Agent: ReflectionNode
+                    alt Retries remaining
+                        Agent->>Agent: PlannerNode (re-plan)
+                    else Max retries exceeded
+                        Agent->>Agent: ResponseNode (partial results)
+                    end
+                end
+                Agent->>LLM: finalize (compose response)
+                LLM-->>Agent: Final response
+                Agent->>FastAPI: SSE: final_response
+                FastAPI-->>Client: event: final_response
             end
         end
     end
-    Agent->>LLM: finalize (compose response)
-    LLM-->>Agent: Final response
-    Agent->>FastAPI: SSE: final_response
-    FastAPI-->>Client: event: final_response
 ```
 
 ---
@@ -104,21 +117,25 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant Client
+    participant FastAPI
     participant Agent
-    participant HITL
     participant Tools
     participant DB
 
-    Agent->>HITL: requires_approval(tool, step)
-    HITL-->>Agent: True
-    Agent->>HITL: interrupt_for_approval(payload)
-    HITL->>FastAPI: SSE: approval_required
-    FastAPI-->>Client: event: approval_required (stream closes)
+    Agent->>Agent: ApprovalGateNode: check_plan_approval(tool_names)
+    Note over Agent: Reads risk_level from tool metadata
+    Agent->>FastAPI: SSE: approval_required
+    FastAPI-->>Client: event: approval_required + pending_tools + inputs
     
-    Client->>FastAPI: POST /api/v1/approvals/{id}/decide {action:"approve"}
-    FastAPI->>DB: INSERT Approval(status=approved)
-    FastAPI->>Agent: graph.astream(Command(resume={action:"approve"}))
-    Agent->>Tools: ToolExecutor.execute()
+    Note over Client: POST /sessions/{id}/approve
+    
+    Client->>FastAPI: POST /sessions/{id}/approve
+    FastAPI->>Agent: graph.aupdate_state({_approval_decision: "approved"})
+    FastAPI->>Agent: runner.continue_after_approval(sid)
+    Agent->>Agent: RouterNode (bypassed via _force_query_type)
+    Agent->>Agent: PlannerNode (fast-path: reuses existing plan)
+    Agent->>Agent: ApprovalGateNode: reads _approval_decision == "approved"
+    Agent->>Tools: ExecutorNode: tool executes
     Tools-->>Agent: ToolResult
     Agent->>FastAPI: SSE: final_response
     FastAPI-->>Client: event: final_response
@@ -263,16 +280,40 @@ credential itself) using one of these formats:
 
 ## Conversational Loop
 
-The agent is **multi-turn** by design. Prior state is loaded from the Postgres checkpointer on each invoke, preserving the accumulated `messages` list for context continuity. Ephemeral fields (`_EPHEMERAL_FIELDS`) are cleared between turns to prevent stale routing state.
+The agent is **multi-turn** by design. Prior state is loaded from the Postgres checkpointer on each invoke, preserving the accumulated `messages` list for context continuity. Ephemeral fields (`_EPHEMERAL_FIELDS`) are cleared between turns to prevent stale routing state. **`_structured_context`** is NOT ephemeral — it persists across turns as the Single Source of Truth.
 
 ```
-User message → RouterNode
-  ├─ NO_TOOL_NEEDED → ResponseNode → END
-  └─ Tool query → PlannerNode → ExecutorNode
-       ├─ All tasks done → ResponseNode → END
-       └─ Some failed → ReflectionNode
-            ├─ Retries left → PlannerNode (loop)
-            └─ Max retries → ResponseNode → END
+User message
+  ↓
+RouterNode (classify)
+  ↓
+ExtractionNode (LLM intent + entity extraction)
+  ↓
+NormalizationNode (dates, locations, currencies)
+  ↓
+ContextMergeNode (StructuredContext)
+  ↓
+ValidationNode (5-stage pipeline — no LLM)
+
+  ├─ Missing info → ClarificationNode → END
+  │                   (user responds, new turn starts)
+  │
+  └─ Ready → PlannerNode (DAG plan)
+              ↓
+           ApprovalGateNode
+
+              ├─ High-risk + no decision → ResponseNode → END
+              │   (POST /approve to continue)
+              │
+              └─ Approved or low-risk → ExecutorNode
+                                          ↓
+                                       ReflectionNode
+
+                                          ├─ Success → ResponseNode → END
+                                          │
+                                          └─ Failures + retries left → PlannerNode (loop)
+                                              |
+                                              └─ Max retries → ResponseNode → END
 ```
 
 ## Architecture Decision Records
@@ -282,7 +323,7 @@ User message → RouterNode
 | Agent framework | LangGraph 1.0 | Purpose-built for stateful agents with interrupts, checkpointing |
 | LLM abstraction | LiteLLM | 100+ providers, unified API, cost tracking |
 | Single-tenancy | N/A | All data shared, simplified deployment |
-| HITL mechanism | LangGraph interrupt() | First-class resume support, checkpointing |
+| HITL mechanism | ApprovalGateNode (conditional routing) + aupdate_state | Flag-based, no LangGraph interrupt; works with checkpointer state injection |
 | Streaming | SSE (preferred) + WebSocket | Browser-native EventSource, bidirectional fallback |
 | Tool protocol | MCP + REST | Industry standard for tool discovery, dual interface |
 | Embedding similarity | pgvector (<=> cosine) | In-database search, no external vector store |

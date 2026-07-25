@@ -1,12 +1,11 @@
-"""Comprehensive agent test — 25 scenarios + killer query."""
+"""Comprehensive agent test — 25 scenarios + killer query with timing."""
 import asyncio, json, sys, time, uuid
 import httpx
 
 BASE = "http://localhost:8000/api/v1"
-PASS = 0
-FAIL = 0
+results = []
 
-async def chat(sid, msg, timeout=180):
+async def chat(sid, msg, timeout=300):
     events = []
     try:
         async with httpx.AsyncClient(timeout=timeout) as c:
@@ -28,167 +27,198 @@ async def chat(sid, msg, timeout=180):
         events.append({"type": "error", "payload": {"message": str(e)}})
     return events
 
-def has_type(t, name):
-    return name in t
+def has(events, keyword):
+    return any(keyword in str(e.get("payload",{})) for e in events)
 
-def has_payload(p, keyword):
-    return any(keyword in str(x) for x in p)
+def count(events, t):
+    return sum(1 for e in events if e.get("type")==t)
 
-def count_type(t, name):
-    return t.count(name)
+def get_final(events):
+    for e in events:
+        if e.get("type")=="final_response":
+            return e.get("payload",{}).get("text","")
+    return ""
 
-async def run(num, name, msg, checks):
-    global PASS, FAIL
-    print(f"\n{'='*60}")
+async def run(num, name, msg, wanted_tools, avoid_tools=None, min_tools=0):
+    print(f"\n{'─'*60}")
     print(f"Test {num}: {name}")
-    print(f"  Q: {msg[:80]}...")
+    print(f"  Q: {msg[:100]}...")
     sid = str(uuid.uuid4())
     await chat(sid, "Hi")
     t0 = time.time()
     events = await chat(sid, msg)
     elapsed = time.time() - t0
-    types = [e.get("type", "?") for e in events]
-    print(f"  Events ({len(events)}, {elapsed:.0f}s): {', '.join(types[:15])}{'...' if len(types)>15 else ''}")
-    for c in checks:
-        ok = c["fn"](types, events)
-        if ok:
-            PASS += 1
-            print(f"  ✅ [{num}] {c['name']}")
-        else:
-            FAIL += 1
-            print(f"  ❌ [{num}] {c['name']}")
+    types = [e.get("type","?") for e in events]
+    tools_used = []
+    for e in events:
+        p = e.get("payload",{})
+        if isinstance(p, dict) and p.get("tool_name"):
+            tools_used.append(p["tool_name"])
+    final = get_final(events)[:80]
+
+    # Score
+    passed = 0
+    total = 0
+    checks = []
+    for wt in wanted_tools:
+        total += 1
+        found = any(wt in str(e) for e in events)
+        checks.append((f"used {wt}", found))
+        if found: passed += 1
+    for at in (avoid_tools or []):
+        total += 1
+        avoided = not any(at in str(e) for e in events)
+        checks.append((f"avoided {at}", avoided))
+        if avoided: passed += 1
+    if min_tools > 0:
+        total += 1
+        enough = count(events,"tool_call_completed") >= min_tools
+        checks.append((f"{min_tools}+ tool calls", enough))
+        if enough: passed += 1
+    if "final_response" not in types:
+        total += 1
+        checks.append(("final_response", False))
+    else:
+        total += 1
+        checks.append(("final_response", True))
+        passed += 1
+
+    status = "✅" if passed == total else "❌"
+    print(f"  ⏱  {elapsed:6.1f}s  {status} {passed}/{total} passes")
+    print(f"  Tools: {tools_used[:8]}")
+    for label, ok in checks:
+        print(f"    {'✅' if ok else '❌'} {label}")
+    if final:
+        print(f"  Response: {final}...")
+
+    results.append((num, f"{elapsed:.1f}s", f"{passed}/{total}", status, name))
 
 async def main():
-    global PASS, FAIL
-    print("="*60)
-    print("COMPREHENSIVE AGENT TEST SUITE")
-    print("="*60)
+    print("="*70)
+    print("COMPREHENSIVE AGENT TEST SUITE — WITH TIMING")
+    print(f"Model: nvidia/nemotron-3-ultra-550b-a55b (~13s baseline)")
+    print("="*70)
 
-    # 1: Multi-Tool Chain
-    await run(1, "Multi-Tool Chain", "Find the weather in Tokyo and search for books about Japanese culture", [
-        {"name":"Weather tool", "fn":lambda t,e: has_payload([e[i].get("payload",{}) for i in range(len(e))],"weather")},
-        {"name":"Books tool", "fn":lambda t,e: has_payload([e[i].get("payload",{}) for i in range(len(e))],"search_books")},
-        {"name":"Final response", "fn":lambda t,e: has_type(t,"final_response")},
-    ])
+    # 1
+    await run(1, "Multi-Tool Chain",
+        "Find the weather in Tokyo and search for books about Japanese culture",
+        ["weather", "search_books"], min_tools=1)
 
-    # 2: Parallel Search
-    await run(2, "Parallel Search", "Search the web for latest AI developments", [
-        {"name":"web_search used", "fn":lambda t,e: has_payload([e[i].get("payload",{}) for i in range(len(e))],"web_search")},
-        {"name":"Final response", "fn":lambda t,e: has_type(t,"final_response")},
-    ])
+    # 2
+    await run(2, "Parallel Search",
+        "Search the web for latest AI developments",
+        ["web_search"])
 
-    # 3: Tool Selection
-    await run(3, "Tool Selection - Pikachu", "Tell me about Pikachu", [
-        {"name":"get_pokemon used", "fn":lambda t,e: has_payload([e[i].get("payload",{}) for i in range(len(e))],"get_pokemon")},
-        {"name":"NOT web_search", "fn":lambda t,e: not has_payload([e[i].get("payload",{}) for i in range(len(e))],"web_search")},
-        {"name":"Final response", "fn":lambda t,e: has_type(t,"final_response")},
-    ])
+    # 3 — Tool Selection
+    await run(3, "Tool Selection — Pikachu",
+        "Tell me about Pikachu",
+        ["get_pokemon"], ["web_search"])
 
-    # 4: Avoid Wrong Tool
-    await run(4, "Avoid Wrong Tool", "Who wrote Harry Potter?", [
-        {"name":"web_search used", "fn":lambda t,e: has_payload([e[i].get("payload",{}) for i in range(len(e))],"web_search")},
-        {"name":"Final response", "fn":lambda t,e: has_type(t,"final_response")},
-    ])
+    # 4 — Avoid Wrong Tool
+    await run(4, "Avoid Wrong Tool — Harry Potter",
+        "Who wrote Harry Potter?",
+        ["web_search"], ["search_books"])
 
-    # 5: Clarification
-    await run(5, "Clarification", "What's the weather?", [
-        {"name":"No tool executed", "fn":lambda t,e: not has_type(t,"tool_call_completed")},
-    ])
+    # 5 — Clarification
+    await run(5, "Clarification — Weather no city",
+        "What's the weather?",
+        [], min_tools=0)
+    # Override: expect NO tool calls
+    results[-1] = (5, results[-1][1], "✓", "✅" if count(await chat(str(uuid.uuid4()), "What's the weather?"), "tool_call_completed") == 0 else "❌", "Clarification")
 
-    # 6: Parameter Extraction
-    await run(6, "Parameter Extraction", "What's the weather in Lahore?", [
-        {"name":"Weather tool", "fn":lambda t,e: has_payload([e[i].get("payload",{}) for i in range(len(e))],"weather")},
-        {"name":"Final response", "fn":lambda t,e: has_type(t,"final_response")},
-    ])
+    # 6
+    await run(6, "Parameter Extraction",
+        "What's the weather in Lahore?",
+        ["weather"], min_tools=0)
 
-    # 7: Multiple Independent
-    await run(7, "Multiple Independent", "Tell me a joke, a trivia question, and a cat fact", [
-        {"name":"3+ tools", "fn":lambda t,e: count_type(t,"tool_call_completed") >= 2},
-        {"name":"Final response", "fn":lambda t,e: has_type(t,"final_response")},
-    ])
+    # 7 — Multiple Independent
+    await run(7, "Multiple Independent",
+        "Tell me a joke, a trivia question, and a cat fact",
+        [], min_tools=2)
 
-    # 8: Large Workflow
-    await run(8, "Large Workflow", "Show today's Bitcoin price in USD and search the latest Bitcoin news", [
-        {"name":"Crypto tool", "fn":lambda t,e: has_payload([e[i].get("payload",{}) for i in range(len(e))],"crypto")},
-        {"name":"web_search", "fn":lambda t,e: has_payload([e[i].get("payload",{}) for i in range(len(e))],"web_search")},
-        {"name":"Final response", "fn":lambda t,e: has_type(t,"final_response")},
-    ])
+    # 8 — Large Workflow
+    await run(8, "Large Workflow — Bitcoin",
+        "Show today's Bitcoin price in USD and search the latest Bitcoin news",
+        ["crypto", "web_search"])
 
-    # 10: Memory
-    await run(10, "Memory Test", "Bookmark https://langchain.com as LangChain", [
-        {"name":"create_bookmark", "fn":lambda t,e: has_payload([e[i].get("payload",{}) for i in range(len(e))],"create_bookmark")},
-    ])
+    # 10 — Memory (bookmark creation)
+    await run(10, "Memory — Bookmark",
+        "Bookmark https://langchain.com as LangChain",
+        ["create_bookmark"])
 
-    # 11: Delete Confirmation
-    await run(11, "Delete Confirmation", "Delete bookmark 21", [
-        {"name":"Approval triggered", "fn":lambda t,e: has_type(t,"approval_required")},
-    ])
+    # 11 — Delete Confirmation
+    await run(11, "Delete Confirmation",
+        "Delete bookmark 21",
+        ["approval"], min_tools=0)
 
-    # 14: Hallucination Test
-    await run(14, "Hallucination Test", "What is Charizard's base HP?", [
-        {"name":"get_pokemon used", "fn":lambda t,e: has_payload([e[i].get("payload",{}) for i in range(len(e))],"get_pokemon")},
-        {"name":"Final response", "fn":lambda t,e: has_type(t,"final_response")},
-    ])
+    # 14 — Hallucination Test
+    await run(14, "Hallucination — Charizard",
+        "What is Charizard's base HP?",
+        ["get_pokemon"], ["web_search"])
 
-    # 15: Search Fallback
-    await run(15, "Search Fallback", "Find information about LangGraph", [
-        {"name":"web_search used", "fn":lambda t,e: has_payload([e[i].get("payload",{}) for i in range(len(e))],"web_search")},
-        {"name":"Final response", "fn":lambda t,e: has_type(t,"final_response")},
-    ])
+    # 15 — Search Fallback
+    await run(15, "Search Fallback",
+        "Find information about LangGraph",
+        ["web_search"])
 
-    # 16: Chain Five
-    await run(16, "Chain Five", "Find the weather in Paris, recommend a travel book, search for Louvre tickets, and tell me a joke", [
-        {"name":"3+ tools", "fn":lambda t,e: count_type(t,"tool_call_completed") >= 2},
-        {"name":"Final response", "fn":lambda t,e: has_type(t,"final_response")},
-    ])
+    # 16 — Chain Five
+    await run(16, "Chain Five Tools",
+        "Find the weather in Paris, recommend a travel book, search for Louvre Museum tickets, and tell me a joke",
+        [], min_tools=2)
 
-    # 17: Multiple Entity
-    await run(17, "Multiple Entity", "Compare Ethereum and Solana prices in USD", [
-        {"name":"Crypto tool", "fn":lambda t,e: has_payload([e[i].get("payload",{}) for i in range(len(e))],"crypto")},
-        {"name":"Final response", "fn":lambda t,e: has_type(t,"final_response")},
-    ])
+    # 17 — Multiple Entity Extraction
+    await run(17, "Multiple Entity — Crypto",
+        "Compare Ethereum and Solana prices in USD",
+        ["crypto"])
 
-    # 18: Sequential
-    await run(18, "Sequential Dependency", "Predict the nationality of the name Muhammad and recommend a book about that country", [
-        {"name":"Predict tool", "fn":lambda t,e: has_payload([e[i].get("payload",{}) for i in range(len(e))],"predict")},
-        {"name":"Books tool", "fn":lambda t,e: has_payload([e[i].get("payload",{}) for i in range(len(e))],"books")},
-        {"name":"Final response", "fn":lambda t,e: has_type(t,"final_response")},
-    ])
+    # 18 — Sequential Dependency
+    await run(18, "Sequential Dependency",
+        "Predict the nationality of the name Muhammad and recommend a book about that country",
+        ["predict", "search_books"], min_tools=1)
 
-    # 19: Mixed Knowledge
-    await run(19, "Mixed Knowledge", "Who is Luke Skywalker? Also show today's Bitcoin price", [
-        {"name":"Star Wars tool", "fn":lambda t,e: has_payload([e[i].get("payload",{}) for i in range(len(e))],"starwars")},
-        {"name":"Crypto tool", "fn":lambda t,e: has_payload([e[i].get("payload",{}) for i in range(len(e))],"crypto")},
-        {"name":"Final response", "fn":lambda t,e: has_type(t,"final_response")},
-    ])
+    # 19 — Mixed Knowledge
+    await run(19, "Mixed Knowledge",
+        "Who is Luke Skywalker? Also show today's Bitcoin price",
+        ["starwars", "crypto"])
 
-    # 20: Long Chain
-    await run(20, "Long Chain", "Recommend a fantasy novel, tell me a joke, give me a trivia question, show me a dog picture", [
-        {"name":"3+ tools", "fn":lambda t,e: count_type(t,"tool_call_completed") >= 2},
-        {"name":"Final response", "fn":lambda t,e: has_type(t,"final_response")},
-    ])
+    # 20 — Long Chain
+    await run(20, "Long Chain",
+        "Recommend a fantasy novel, tell me a joke, give me a trivia question, show me a dog picture",
+        [], min_tools=2)
 
-    # 22: Wrong Parameter
-    await run(22, "Wrong Parameter", "Weather at latitude 1000 longitude 400", [
-        {"name":"Validation catches", "fn":lambda t,e: not has_type(t,"tool_call_completed") or has_type(t,"error")},
-    ])
+    # 22 — Wrong Parameter
+    await run(22, "Wrong Parameter Validation",
+        "Weather at latitude 1000 longitude 400",
+        [], min_tools=0)
+    # Override: verify no tool executed
+    sid = str(uuid.uuid4())
+    ev = await chat(sid, "Weather at latitude 1000 longitude 400")
+    no_tool = count(ev, "tool_call_completed") == 0
+    results[-1] = (22, results[-1][1], "✓" if no_tool else "❌", "✅" if no_tool else "❌",
+                   "Wrong Parameter Validation")
 
-    # 25: Stress Test
-    await run(25, "Stress Test", "Get the weather in Paris, search three travel books, search the Louvre, search the Eiffel Tower, search local transportation, tell me a joke, give me a trivia question, show today's Bitcoin price", [
-        {"name":"5+ tools", "fn":lambda t,e: count_type(t,"tool_call_completed") >= 3},
-        {"name":"Final response", "fn":lambda t,e: has_type(t,"final_response")},
-    ])
+    # 25 — Stress Test
+    await run(25, "Stress Test — 10+ Tools",
+        "Get the weather in Paris, search three travel books, search the Louvre, search the Eiffel Tower, search local transportation, tell me a joke, give me a trivia question, show today's Bitcoin price",
+        [], min_tools=3)
 
-    # BONUS: Agent Killer
-    await run("BONUS", "Agent Killer", "I'm organizing a sci-fi themed weekend. Find today's weather for London, search for sci-fi books, find a Star Wars character, look up Bitcoin price, search the web for AI news, then finish with a joke, a trivia question, a cat fact, and a dog image", [
-        {"name":"5+ tools", "fn":lambda t,e: count_type(t,"tool_call_completed") >= 4},
-        {"name":"Final response", "fn":lambda t,e: has_type(t,"final_response")},
-    ])
+    # BONUS — Agent Killer
+    await run("BONUS", "Agent Killer",
+        "I'm organizing a sci-fi themed weekend. Find today's weather for London, search for sci-fi books, find a Star Wars character, look up Bitcoin price, search the web for AI news, then finish with a joke, a trivia question, a cat fact, and a dog image",
+        [], min_tools=4)
 
-    print(f"\n{'='*60}")
-    print(f"RESULTS: {PASS}/{PASS+FAIL} passed ({FAIL} failed)")
-    print(f"{'='*60}")
-    if FAIL > 0:
+    # ─── Report ────────────────────────────────────────────────
+    print(f"\n{'='*70}")
+    print(f"{'TEST':<8} {'TIME':>6} {'PASS':>6}  {'DESCRIPTION'}")
+    print(f"{'─'*8} {'─'*6} {'─'*6}  {'─'*50}")
+    for num, dur, score, status, desc in results:
+        print(f"  {str(num):<6} {dur:>6} {score:>6}  {desc}")
+    print(f"{'─'*70}")
+    passed = sum(1 for r in results if "✅" in r[3])
+    total = len(results)
+    print(f"\n  {passed}/{total} tests passing")
+    print(f"{'='*70}")
+    if passed < total:
         sys.exit(1)
 
 if __name__ == "__main__":
