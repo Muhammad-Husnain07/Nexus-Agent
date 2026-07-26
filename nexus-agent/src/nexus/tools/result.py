@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 TOOL_RESULT_STATUS = Literal["success", "error", "timeout", "validation_error", "interrupted"]
 
@@ -14,6 +14,7 @@ RAW_RESPONSE_MAX_CHARS: int = 2000
 
 class ToolResult(BaseModel):
     """Outcome of a single tool execution returned to the agent."""
+    model_config = ConfigDict(extra="forbid")
 
     tool_id: uuid.UUID = Field(description="Executed tool identifier")
     tool_name: str = Field(description="Executed tool name")

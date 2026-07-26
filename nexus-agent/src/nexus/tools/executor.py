@@ -510,10 +510,16 @@ class ToolExecutor:
         """Construct a ``ToolResult`` from the HTTP response or error."""
         if response is not None:
             raw = response.text
-            try:
-                data = response.json()
-            except (json.JSONDecodeError, ValueError):
-                data = None
+            data: dict = {"raw": raw[:2000]} if raw else {}
+            if raw and raw.strip():
+                try:
+                    parsed = response.json()
+                    if isinstance(parsed, dict):
+                        data = parsed
+                    elif isinstance(parsed, list):
+                        data = {"results": parsed}
+                except (json.JSONDecodeError, ValueError):
+                    data = {"raw": raw[:2000]}
 
             return ToolResult(
                 tool_id=tool.id,

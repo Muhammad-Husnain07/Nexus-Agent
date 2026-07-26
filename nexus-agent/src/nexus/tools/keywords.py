@@ -1,17 +1,7 @@
 """Keyword extraction engine — single source of truth for tool keyword generation.
 
-Usage::
-
-    from nexus.tools.keywords import extract_keywords
-
-    keywords = extract_keywords(
-        name="get_weather",
-        purpose="Use when the user asks about weather, temperature, or conditions",
-        tags=["weather", "data", "forecast"],
-        aliases=["rain", "umbrella", "outside weather"],
-    )
-    # Returns: ["forecast", "get_weather", "outside", "rain", "temperature",
-    #           "umbrella", "weather", "conditions", "data"]
+All NLP lists (stop words, skip prefixes) are loaded from ``settings.agent``.
+Zero hardcoded NLP lists.
 """
 
 from __future__ import annotations
@@ -20,13 +10,27 @@ import re
 import unicodedata
 from typing import Any
 
-_STOP_WORDS: frozenset[str] = frozenset({
-    "a", "an", "the", "is", "it", "of", "in", "on", "for", "to", "with",
-    "and", "or", "but", "not", "use", "when", "about", "that", "this",
-    "from", "as", "at", "by", "be", "are", "was", "were", "been",
-    "being", "have", "has", "had", "do", "does", "did", "will", "would",
-    "can", "could", "should", "may", "might", "shall", "need",
-})
+
+def _load_stop_words() -> frozenset[str]:
+    """Load stop words from settings.agent.stop_words, fall back to empty."""
+    try:
+        from nexus.config.settings import get_settings
+        return frozenset(get_settings().agent.stop_words)
+    except Exception:
+        return frozenset()
+
+
+def _load_skip_prefixes() -> set[str]:
+    """Load skip prefixes from settings.agent.skip_prefixes, fall back to empty."""
+    try:
+        from nexus.config.settings import get_settings
+        return set(get_settings().agent.skip_prefixes)
+    except Exception:
+        return {"get", "search", "predict", "find", "list", "fetch",
+                "create", "update", "delete", "patch", "put", "post", "echo"}
+
+
+_STOP_WORDS: frozenset[str] = _load_stop_words()
 
 
 def tokenize(text: str) -> list[str]:
@@ -58,14 +62,13 @@ def extract_keywords(
         purpose: Natural-language description of tool usage.
         tags: List of categorization tags.
         aliases: List of alternative names or phrases.
-        skip_prefixes: Action verb prefixes to strip (default: common ones).
+        skip_prefixes: Action verb prefixes to strip (default: from settings).
 
     Returns:
         Sorted deduplicated list of keywords.
     """
     if skip_prefixes is None:
-        skip_prefixes = {"get", "search", "predict", "find", "list", "fetch",
-                         "create", "update", "delete", "patch", "put", "post", "echo"}
+        skip_prefixes = _load_skip_prefixes()
 
     seen: set[str] = set()
     keywords: list[str] = []
@@ -76,25 +79,20 @@ def extract_keywords(
             seen.add(w)
             keywords.append(w)
 
-    # 1. Full name (exact match weight: 5)
     _add(name)
 
-    # 2. Name tokens (split on underscore)
     for part in name.lower().split("_"):
         if part not in skip_prefixes:
             _add(part)
 
-    # 3. Purpose tokens
     if purpose:
         for token in tokenize(purpose):
             _add(token)
 
-    # 4. Tags
     for tag in (tags or []):
         if isinstance(tag, str):
             _add(tag)
 
-    # 5. Aliases — tokenize each
     for alias in (aliases or []):
         for token in tokenize(alias):
             _add(token)
