@@ -6,18 +6,18 @@ Monorepo containing:
 
 ## Architecture
 
-The agent uses an **11-node production LangGraph**:
+The agent uses a **13-node deterministic workflow compiler**:
 ```
-RouterNode → ExtractionNode → NormalizationNode → ContextMergeNode → ValidationNode
-    │                                                                │
-    │                          ┌─────────────────────────────────────┘
+RouterNode → SemanticPlannerNode → CompilerNode → OptimizerNode → EstimatorNode → ValidationNode
+    │                                                                                     │
+    │                          ┌──────────────────────────────────────────────────────────┘
     │                          ▼
-    │                   ClarificationNode (missing info → END)
+    │                   ClarificationNode (0 nodes → ResponseNode)
     │                          │
-    │                   PlannerNode → ApprovalGateNode → ExecutorNode → ReflectionNode → ResponseNode → END
+    │                   ApprovalGateNode → ExecutorNode → AggregatorNode → ReflectionNode → ResponseNode → MemoryHelperNode → END
 ```
 
-Query routing: `NO_TOOL_NEEDED` goes directly to `ResponseNode`; all other types go through extraction → normalization → validation → clarification/planning → execution. Failed tasks auto-retry via `ReflectionNode` (configurable via settings, default 2x with backoff). High-risk tools require HITL approval via `ApprovalGateNode` before execution.
+The pipeline: Router classifies → SemanticPlanner emits `LogicalWorkflow` → Compiler resolves tools → Optimizer runs fixpoint passes → Estimator checks budget → Validation routes to approval/clarification. Tools execute in parallel waves with per-domain adaptive concurrency. Failed tasks are structurally graph-diffed and retried via `ReflectionNode`. High-risk tools require HITL approval via `ApprovalGateNode`.
 
 ## Backend Rules
 
