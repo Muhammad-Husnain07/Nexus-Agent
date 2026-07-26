@@ -1,0 +1,23 @@
+{
+  "version": "1.0",
+  "nodes": {
+    "IGNORE_UUID": {
+      "kind": "tool",
+      "id": "IGNORE_UUID",
+      "symbolic_ref": "WeatherData",
+      "depends_on": [],
+      "failure_policy": "CONTINUE",
+      "minimum_success": 1.0,
+      "capability": "get_weather",
+      "tool_name": "get_weather",
+      "endpoint_url": "https://api.open-meteo.com/v1/forecast",
+      "http_method": "GET",
+      "inputs": {"location": "Tokyo", "profile": "current"},
+      "cost_estimate": 0.0,
+      "latency_estimate_ms": 1000,
+      "execution_key": null
+    }
+  },
+  "waves": [],
+  "graph_id": "IGNORE_UUID"
+}

@@ -1,0 +1,12 @@
+{
+  "version": "1.0",
+  "nodes": [
+    {
+      "op": "get_weather",
+      "ref": "WeatherData",
+      "inputs": {"location": "Tokyo", "profile": "current"},
+      "depends_on": []
+    }
+  ],
+  "collections": {}
+}

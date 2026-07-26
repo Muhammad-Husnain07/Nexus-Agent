@@ -1,0 +1,1 @@
+"""Golden compiler tests."""

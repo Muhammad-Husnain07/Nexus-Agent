@@ -7,7 +7,7 @@
 - SSE and WebSocket endpoints for streaming agent responses with heartbeat keep-alive.
 - Graceful shutdown — drain middleware rejects new requests during shutdown, drains background tasks.
 - HITL approval management — approve/reject pending high-risk tool executions via checkpointer state injection.
-- Checkpoint recovery — restore graph to state before any named node (PlannerNode, ExecutorNode, etc.).
+- Checkpoint recovery — restore graph to state before any named node.
 
 ## Key Files
 
@@ -40,12 +40,23 @@
 |-------|-------------|
 | `node_completed` | Every node finishes — includes `duration_ms` and `has_output` |
 | `tool_selected` | RouterNode classifies the query |
-| `plan_created` | PlannerNode produces DAG execution plan |
+| `plan_created` | PlannerNode/TaskGraphBuilderNode produces execution plan |
 | `tool_call_completed` | Each tool finishes execution |
 | `approval_required` | ApprovalGateNode detects high-risk tool |
-| `final_response` | ResponseNode completes |
+| `final_response` | ResponseNode/ClarificationNode completes |
 | `reflection_result` | ReflectionNode decides to retry |
 | `error` | Any node produces errors |
+| `done` | Stream ends — data is `{}` |
+
+## SSE Event Format
+
+```json
+event: final_response
+data: {"type": "final_response", "ts": "2026-07-26T00:00:00.000000+00:00", "payload": {"text": "Pikachu is an Electric-type Pokémon..."}}
+
+event: done
+data: {}
+```
 
 ## Middleware Stack
 
@@ -61,7 +72,8 @@
 
 ## Dependencies
 
-- `nexus/agent/` — AgentRunner for graph orchestration
+- `nexus/agent/` — AgentRunner for 13-node graph orchestration
 - `nexus/sessions/` — SessionService
 - `nexus/tools/` — ToolRegistry
 - `nexus/memory/` — MemoryManager, checkpointer
+- `nexus/compiler/` — CompiledCapabilityGraph for offline-compiled capability data

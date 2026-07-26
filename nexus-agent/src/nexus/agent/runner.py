@@ -304,34 +304,9 @@ class AgentRunner:
         if not available_tools and self._selector is not None and self._session_factory is not None:
             available_tools = await _refresh_tool_cache(self._selector, self._session_factory)
 
-        # Populate registries with available tools
-        if available_tools:
-            try:
-                from nexus.agent.registry.intent_registry import populate_from_tools as _populate_intents
-                _populate_intents(available_tools)
-            except Exception:
-                pass
-            try:
-                from nexus.agent.registry.capability_registry import populate_from_tools as _populate_capabilities
-                _populate_capabilities(available_tools)
-            except Exception:
-                pass
-            try:
-                from nexus.agent.registry.goal_registry import populate_from_tools as _populate_goals
-                _populate_goals(available_tools)
-            except Exception:
-                pass
-            try:
-                from nexus.agent.registry.artifact_registry import get_artifact_registry
-                _artifact_reg = get_artifact_registry()
-                _artifact_reg.register_from_tools(available_tools)
-            except Exception:
-                pass
-
         initial_state: AgentState = {
             "messages": prior_messages + [user_msg],
             "session_id": sid,
-            "plan": None,
             "gathered_requirements": prior_state.values.get("gathered_requirements", {}) if prior_state else {},
             "available_tools": available_tools,
             "_tool_executed_in_turn": False,
@@ -358,7 +333,6 @@ class AgentRunner:
             "_executor_all_success": True,
             "_tool_retry_counts": {},
             "_pending_tasks": [],
-            "_execution_plan": {},
         }
 
         redis = get_redis_client()
@@ -517,7 +491,6 @@ class AgentRunner:
             "messages": prior_messages,
             "session_id": sid,
             "available_tools": prior_values.get("available_tools", []),
-            "_execution_plan": prior_values.get("_execution_plan", {}),
             "plan": prior_values.get("plan"),
             "_query_type": prior_values.get("_query_type", "single_tool"),
             "_force_query_type": prior_values.get("_query_type", "single_tool"),
@@ -785,14 +758,13 @@ class AgentRunner:
                     },
                 ))
 
-        # --- PlannerNode → plan created ---
-        elif inner == "PlannerNode":
-            plan = state_update.get("plan") or state_update.get("_execution_plan")
-            if plan:
-                events.append(AgentEvent("plan_created", {"steps": plan}))
-            dag_tasks = state_update.get("dag_tasks", [])
-            if dag_tasks:
-                events.append(AgentEvent("plan_created", {"steps": dag_tasks}))
+        # --- CompilerNode → execution graph compiled ---
+        elif inner == "CompilerNode":
+            graph = state_update.get("_execution_graph") or state_update.get("_optimized_graph")
+            if graph and isinstance(graph, dict):
+                waves = graph.get("waves", [])
+                node_summary = {k: v.get("capability", v.get("tool_name", k)) for k, v in (graph.get("nodes", {}) or {}).items() if isinstance(v, dict)}
+                events.append(AgentEvent("plan_created", {"steps": node_summary, "waves": len(waves)}))
 
         # --- ExecutorNode → tool call results ---
         elif inner == "ExecutorNode":

@@ -100,7 +100,11 @@ class ArtifactGraph(BaseGraph):
 
 
 class CapabilityGraph(BaseGraph):
-    """Compiled capability graph — read-only at runtime, populated from registry_compiler."""
+    """Compiled capability graph — read-only at runtime, populated from registry_compiler.
+
+    Builds O(1) producer/consumer indices on load so ``find_producers()`` and
+    ``find_consumers()`` are dict lookups, not linear scans.
+    """
 
     def __init__(self) -> None:
         super().__init__("capabilities")
@@ -114,16 +118,24 @@ class CapabilityGraph(BaseGraph):
         self._data["nodes"] = {k: v.to_dict() for k, v in compiled.nodes.items()}
         self._data["missing_producers"] = compiled.missing_producers
         self._data["loaded"] = True
+        # Build O(1) indices
+        prod_index: dict[str, list[str]] = {}
+        cons_index: dict[str, list[str]] = {}
+        for name, node in self._data["nodes"].items():
+            for art in node.get("produces", []):
+                prod_index.setdefault(art, []).append(name)
+            for art in node.get("consumes", []):
+                cons_index.setdefault(art, []).append(name)
+        self._data["producer_index"] = prod_index
+        self._data["consumer_index"] = cons_index
 
     def find_producers(self, artifact: str) -> list[str]:
-        """Find capabilities that produce the given artifact."""
-        nodes = self._data.get("nodes", {})
-        return [name for name, node in nodes.items() if artifact in node.get("produces", [])]
+        """Find capabilities that produce the given artifact (O(1) lookup)."""
+        return self._data.get("producer_index", {}).get(artifact, [])
 
     def find_consumers(self, artifact: str) -> list[str]:
-        """Find capabilities that consume the given artifact."""
-        nodes = self._data.get("nodes", {})
-        return [name for name, node in nodes.items() if artifact in node.get("consumes", [])]
+        """Find capabilities that consume the given artifact (O(1) lookup)."""
+        return self._data.get("consumer_index", {}).get(artifact, [])
 
 
 class OntologyGraph(BaseGraph):
@@ -176,15 +188,22 @@ class MemoryGraph(BaseGraph):
         super().__init__("memory")
 
     def load_from_store(self, session_id: str, top_k: int = 5) -> None:
-        """Retrieve recent memories for a session."""
+        """Retrieve recent memories for a session via async pgvector query."""
         try:
+            import asyncio
             from nexus.memory.store import MemoryStore
             store = MemoryStore()
-            # search is async — this is best-effort synchronous load
+            loop = asyncio.get_event_loop()
+            results = loop.run_until_complete(store.search(session_id, top_k=top_k))
+            self._data["entries"] = [r.to_dict() if hasattr(r, "to_dict") else r for r in (results or [])]
             self._data["session_id"] = session_id
             self._data["top_k"] = top_k
+            self._data["count"] = len(self._data.get("entries", []))
         except Exception:
-            pass
+            self._data["entries"] = []
+            self._data["session_id"] = session_id
+            self._data["top_k"] = top_k
+            self._data["count"] = 0
 
 
 class PolicyGraph(BaseGraph):
@@ -197,9 +216,12 @@ class PolicyGraph(BaseGraph):
         try:
             from nexus.config.settings import get_settings
             s = get_settings()
-            self._data["budget_usd"] = s.agent.adaptive_reflection.cost_budget_usd
-            self._data["max_concurrent"] = s.agent.adaptive_reflection.max_concurrent_tasks
-            self._data["confidence_low"] = s.agent.adaptive_reflection.confidence_low
+            ag = s.agent
+            self._data["budget_usd"] = getattr(getattr(ag, "adaptive_reflection", None), "cost_budget_usd", 0.1)
+            self._data["max_concurrent"] = getattr(getattr(ag, "adaptive_reflection", None), "max_concurrent_tasks", 5)
+            self._data["confidence_low"] = getattr(getattr(ag, "adaptive_reflection", None), "confidence_low", 0.3)
+            self._data["max_reflection_retries"] = getattr(ag, "max_reflection_retries", 2)
+            self._data["extraction_max_tokens"] = getattr(ag, "extraction_max_tokens", 500)
         except Exception:
             pass
 

@@ -248,7 +248,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Drain tracked background tasks
     try:
         from nexus.agent.runner import _pending_bg_tasks as _runner_bg
-        from nexus.agent.nodes.memory_helper import _pending_bg_tasks as _memory_bg
+        from nexus.agent.nodes.memory_helper_node import _pending_bg_tasks as _memory_bg
         all_bg = _runner_bg | _memory_bg
         if all_bg:
             logger.info("shutdown.draining_background", count=len(all_bg))

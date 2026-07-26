@@ -106,14 +106,13 @@ async def extract_turn_metrics(
                             if intent:
                                 metrics["extraction_intent"] = str(intent)
 
-                    # Planner DAG size
-                    plan = vals.get("_execution_plan", {})
-                    if plan and isinstance(plan, dict):
-                        waves = plan.get("waves", [])
-                        task_count = sum(len(w.get("tasks", [])) for w in waves)
+                    # Planner DAG size (read from compiled graph)
+                    graph = vals.get("_optimized_graph") or vals.get("_execution_graph", {})
+                    if graph and isinstance(graph, dict):
+                        nodes = graph.get("nodes", {})
+                        task_count = len(nodes) if isinstance(nodes, dict) else 0
                         if task_count > metrics["dag_size"]:
                             metrics["dag_size"] = task_count
-                            metrics["planner_tool_count"] = len(plan.get("tool_names", []))
 
                     # Executor retries
                     retry_counts = vals.get("_tool_retry_counts", {})

@@ -319,7 +319,31 @@ class AgentSettings(BaseModel):
     )
     max_planning_tools: int = Field(default=10, ge=1, le=50, description="Max tools passed to planner")
     global_execution_timeout_s: int = Field(default=60, ge=1, description="Global execution timeout")
-    max_reflection_retries: int = Field(default=2, ge=0, le=10, description="Max retries before finalize")
+    max_reflection_retries: int = Field(default=0, ge=0, le=10, description="Max retries before finalize")
+    quorum_threshold: float = Field(default=0.5, ge=0.0, le=1.0, description="Max failed task ratio before quorum lost")
+    greetings: list[str] = Field(default_factory=lambda: [
+        "hi", "hello", "hey", "howdy", "yo", "sup", "greetings", "good morning",
+        "good afternoon", "good evening", "morning", "evening", "thanks", "thank you",
+        "goodbye", "bye",
+    ], description="Greeting keywords for router heuristic")
+    conjunction_markers: list[str] = Field(default_factory=lambda: [
+        "and", "or", "also", "plus", "then", "too", "additionally",
+    ], description="Conjunction keywords for multi-intent detection")
+    stop_words: list[str] = Field(default_factory=lambda: [
+        "a", "an", "the", "is", "it", "of", "in", "on", "for", "to", "with",
+        "and", "or", "but", "not", "this", "that", "from", "as", "at", "by",
+    ], description="Stop words for tokenization")
+    skip_prefixes: list[str] = Field(default_factory=lambda: [
+        "get", "search", "predict", "find", "list", "fetch", "create", "update", "delete",
+    ], description="Verb prefixes to skip in keyword index building")
+    validation_error_keywords: list[str] = Field(default_factory=lambda: [
+        "missing", "required", "invalid", "clarification", "validation",
+    ], description="Keywords that mark errors as validation failures for routing")
+    low_confidence_prefixes: list[str] = Field(default_factory=lambda: [
+        "i'm not entirely sure", "i'm a bit confused", "i'm having trouble",
+        "i'm not confident", "i don't understand", "i didn't catch",
+        "could you rephrase", "could you clarify", "no results were produced",
+    ], description="Response prefixes that indicate low confidence (skip milestone marking)")
     extraction_max_tokens: int = Field(default=512, ge=64, description="LLM max tokens for extraction")
     extraction_temperature: float = Field(default=0.0, ge=0, le=1, description="LLM temperature for extraction")
     planner_max_tokens: int = Field(default=2048, ge=128, description="LLM max tokens for planner")
@@ -337,6 +361,21 @@ class AgentSettings(BaseModel):
         default_factory=AdaptiveReflectionSettings,
         description="Adaptive reflection and uncertainty settings",
     )
+
+
+class CompilerSettings(BaseModel):
+    """Compiler — deterministic codegen endpoint scoring configuration.
+
+    Score = cost_weight * cost_per_call + latency_weight * (latency_p99_ms / latency_divisor)
+    """
+    cost_weight: float = Field(default=1.0, ge=0.0, description="Weight for cost in endpoint scoring")
+    latency_weight: float = Field(default=1.0, ge=0.0, description="Weight for latency in endpoint scoring")
+    latency_divisor: float = Field(default=1000.0, gt=0.0, description="Divisor to normalize latency_ms to seconds")
+    default_latency_ms: int = Field(default=1000, ge=1, description="Default latency when endpoint has none")
+    max_fixpoint_iterations: int = Field(default=5, ge=1, le=100, description="Max PassManager fixpoint iterations")
+    max_budget_usd: float = Field(default=0.50, ge=0.0, description="Max estimated cost before warning")
+    max_latency_ms: int = Field(default=30000, ge=1, description="Max estimated latency before warning")
+    max_workflow_nodes: int = Field(default=50, ge=1, le=200, description="Max nodes per compiled workflow")
 
 
 class ToolSettings(BaseModel):
@@ -359,6 +398,7 @@ class ToolSettings(BaseModel):
     execution_timeout_s: int = Field(default=30, ge=1, description="Tool execution timeout")
     max_retries: int = Field(default=3, ge=0, description="Max tool retries")
     retry_backoff_s: float = Field(default=1.0, ge=0, description="Retry backoff seconds")
+    max_domain_concurrency: int = Field(default=10, ge=1, le=100, description="Max concurrent calls per API domain")
     sandbox_enabled: bool = Field(default=True, description="Enable sandboxed execution")
     allowed_hosts: list[str] = Field(
         default_factory=list, description="Allowed external hosts (empty = block all)"
@@ -440,6 +480,9 @@ class Settings(BaseSettings):
     )
     memory: MemorySettings = Field(
         default_factory=MemorySettings, description="Long-term memory configuration"
+    )
+    compiler: CompilerSettings = Field(
+        default_factory=CompilerSettings, description="Compiler codegen configuration"
     )
     tools: ToolSettings = Field(
         default_factory=ToolSettings, description="Tool execution configuration"
