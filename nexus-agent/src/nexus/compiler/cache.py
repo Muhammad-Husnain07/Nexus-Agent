@@ -5,61 +5,79 @@ If a cache hit occurs, the SemanticParserNode and PlannerNode are entirely skipp
 saving ~13–30s per turn.
 
 No hardcoded cache keys. All hashes are derived from runtime data.
+Cache TTLs are read from settings (falling back to defaults).
+Registry version is included in fingerprints to invalidate on registry changes.
+``invalidate_all_caches()`` is called after registry re-compilation.
+``stats()`` provides hit/miss rates for observability.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import time
 from typing import Any
 
 import structlog
 
+from nexus.config.settings import get_settings
+
 logger = structlog.get_logger("nexus.compiler.cache")
 
-# Default TTLs in seconds
-_PARSE_CACHE_TTL: int = 3600  # 1 hour
-_PLAN_CACHE_TTL: int = 300    # 5 minutes
+_DEFAULT_PARSE_CACHE_TTL: int = 3600
+_DEFAULT_PLAN_CACHE_TTL: int = 300
+
+
+def _get_cache_ttl(cache_name: str) -> int:
+    try:
+        settings = get_settings()
+        cache_config = getattr(settings, "cache", None)
+        if cache_config is not None:
+            return int(getattr(cache_config, f"{cache_name}_ttl", 0) or 0)
+    except Exception:
+        pass
+    return 0
 
 
 def _make_key(*parts: str) -> str:
-    """Create a SHA256 cache key from parts."""
     raw = "|".join(parts)
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
-def _query_fingerprint(query: str, available_tools: list[dict[str, Any]]) -> str:
-    """Create a fingerprint of the query + available tools for cache keying.
+def _registry_fingerprint() -> str:
+    try:
+        from nexus.compiler.compiled_graph import get_compiled_graph
+        g = get_compiled_graph()
+        if g is not None and hasattr(g, "compiled_at"):
+            return str(g.compiled_at)
+    except Exception:
+        pass
+    return ""
 
-    Includes tool names + versions so cache invalidates when tools change.
-    """
+
+def _query_fingerprint(query: str, available_tools: list[dict[str, Any]]) -> str:
     tool_info = sorted(
         f"{t.get('name','')}:{t.get('version',1)}" for t in available_tools if t.get("name")
     )
-    return json.dumps({"q": query.strip().lower(), "tools": tool_info}, sort_keys=True)
+    reg_fp = _registry_fingerprint()
+    data: dict[str, Any] = {"q": query.strip().lower(), "tools": tool_info}
+    if reg_fp:
+        data["reg"] = reg_fp
+    return json.dumps(data, sort_keys=True)
 
 
 # ============================================================================
-# ParseCache — Cache IntentIR extraction results
+# BaseCache — shared hit/miss tracking + dual-backend
 # ============================================================================
 
 
-class ParseCache:
-    """Cache for IntentIR extraction results.
-
-    Key: SHA256 of (query fingerprint + model name).
-    Value: JSON-serialized list[IntentIR].
-
-    Cache hit: SemanticParserNode returns cached IntentIR without LLM call.
-    Cache miss: SemanticParserNode calls LLM, stores result in cache.
-
-    TTL: 1 hour (configurable via settings).
-    """
-
-    def __init__(self, ttl: int = _PARSE_CACHE_TTL) -> None:
-        self._ttl = ttl
+class _BaseCache:
+    def __init__(self, default_ttl: int) -> None:
+        self._default_ttl = default_ttl
         self._redis: Any = None
-        self._memory: dict[str, tuple[float, str]] = {}  # key → (expiry, value)
+        self._memory: dict[str, tuple[float, str]] = {}
+        self._hits: int = 0
+        self._misses: int = 0
 
     async def _get_redis(self) -> Any:
         if self._redis is None:
@@ -70,6 +88,83 @@ class ParseCache:
                 pass
         return self._redis
 
+    def _record_hit(self) -> None:
+        self._hits += 1
+
+    def _record_miss(self) -> None:
+        self._misses += 1
+
+    async def _get_from_redis(self, key: str) -> str | None:
+        redis = await self._get_redis()
+        if redis is None:
+            return None
+        try:
+            data = await redis.get(key)
+            if data:
+                await redis.expire(key, self._get_ttl())
+                return data
+        except Exception:
+            pass
+        return None
+
+    def _get_from_memory(self, key: str) -> str | None:
+        entry = self._memory.get(key)
+        if entry:
+            expiry, value = entry
+            if expiry > time.time():
+                return value
+        return None
+
+    def _store_in_memory(self, key: str, value: str) -> None:
+        expiry = time.time() + self._get_ttl()
+        self._memory[key] = (expiry, value)
+
+    async def _store_in_redis(self, key: str, value: str) -> bool:
+        redis = await self._get_redis()
+        if redis is None:
+            return False
+        try:
+            await redis.setex(key, self._get_ttl(), value)
+            return True
+        except Exception:
+            return False
+
+    def _get_ttl(self) -> int:
+        return self._default_ttl
+
+    async def clear_all(self) -> None:
+        self._memory.clear()
+        redis = await self._get_redis()
+        if redis is not None:
+            try:
+                await redis.flushdb()
+            except Exception:
+                pass
+
+    def stats(self) -> dict[str, Any]:
+        total = self._hits + self._misses
+        return {
+            "hits": self._hits,
+            "misses": self._misses,
+            "total": total,
+            "hit_rate": round(self._hits / total, 4) if total > 0 else 0.0,
+            "memory_entries": len(self._memory),
+        }
+
+
+# ============================================================================
+# ParseCache
+# ============================================================================
+
+
+class ParseCache(_BaseCache):
+    def __init__(self, ttl: int | None = None) -> None:
+        super().__init__(ttl or _DEFAULT_PARSE_CACHE_TTL)
+
+    def _get_ttl(self) -> int:
+        cfg_ttl = _get_cache_ttl("parse")
+        return cfg_ttl if cfg_ttl > 0 else self._default_ttl
+
     def _build_key(self, query: str, tools: list[dict[str, Any]], model: str) -> str:
         return _make_key("parse", _query_fingerprint(query, tools), model)
 
@@ -79,33 +174,18 @@ class ParseCache:
         tools: list[dict[str, Any]],
         model: str,
     ) -> list[dict[str, Any]] | None:
-        """Get cached IntentIR list for a query+tools+model combination.
-
-        Returns:
-            List of IntentIR dicts, or None if cache miss.
-        """
         key = self._build_key(query, tools, model)
-
-        # Try Redis first
-        redis = await self._get_redis()
-        if redis is not None:
-            try:
-                data = await redis.get(key)
-                if data:
-                    await redis.expire(key, self._ttl)
-                    logger.debug("cache.parse_hit_redis", key=key[:12])
-                    return json.loads(data)
-            except Exception:
-                pass
-
-        # Fallback: in-memory
-        entry = self._memory.get(key)
-        if entry:
-            expiry, value = entry
-            if expiry > __import__("time").time():
-                logger.debug("cache.parse_hit_memory", key=key[:12])
-                return json.loads(value)
-
+        raw = await self._get_from_redis(key)
+        if raw is not None:
+            self._record_hit()
+            logger.debug("cache.parse_hit_redis", key=key[:12])
+            return json.loads(raw)
+        raw = self._get_from_memory(key)
+        if raw is not None:
+            self._record_hit()
+            logger.debug("cache.parse_hit_memory", key=key[:12])
+            return json.loads(raw)
+        self._record_miss()
         logger.debug("cache.parse_miss", key=key[:12])
         return None
 
@@ -116,27 +196,15 @@ class ParseCache:
         model: str,
         intents: list[dict[str, Any]],
     ) -> None:
-        """Cache IntentIR list for a query+tools+model combination."""
         key = self._build_key(query, tools, model)
         value = json.dumps(intents)
-        expiry = __import__("time").time() + self._ttl
-
-        # Redis
-        redis = await self._get_redis()
-        if redis is not None:
-            try:
-                await redis.setex(key, self._ttl, value)
-                logger.debug("cache.parse_stored_redis", key=key[:12])
-                return
-            except Exception:
-                pass
-
-        # Fallback: in-memory
-        self._memory[key] = (expiry, value)
+        if await self._store_in_redis(key, value):
+            logger.debug("cache.parse_stored_redis", key=key[:12])
+            return
+        self._store_in_memory(key, value)
         logger.debug("cache.parse_stored_memory", key=key[:12])
 
     async def invalidate(self, query: str, tools: list[dict[str, Any]], model: str) -> None:
-        """Invalidate a cache entry (e.g., after registration change)."""
         key = self._build_key(query, tools, model)
         redis = await self._get_redis()
         if redis is not None:
@@ -148,48 +216,30 @@ class ParseCache:
 
 
 # ============================================================================
-# PlanCache — Cache compiled ExecutionIR DAGs
+# PlanCache
 # ============================================================================
 
 
-class PlanCache:
-    """Cache for compiled execution plan DAGs.
+class PlanCache(_BaseCache):
+    def __init__(self, ttl: int | None = None) -> None:
+        super().__init__(ttl or _DEFAULT_PLAN_CACHE_TTL)
 
-    Key: SHA256 of (GoalIR fingerprints + available tools fingerprint).
-    Value: JSON-serialized list[ExecutionIR].
+    def _get_ttl(self) -> int:
+        cfg_ttl = _get_cache_ttl("plan")
+        return cfg_ttl if cfg_ttl > 0 else self._default_ttl
 
-    Cache hit: planner pipeline returns cached ExecutionIR without resolution.
-    Cache miss: planner pipeline compiles, stores result in cache.
-
-    TTL: 5 minutes (configurable via settings).
-    """
-
-    def __init__(self, ttl: int = _PLAN_CACHE_TTL) -> None:
-        self._ttl = ttl
-        self._redis: Any = None
-        self._memory: dict[str, tuple[float, str]] = {}
-
-    async def _get_redis(self) -> Any:
-        if self._redis is None:
-            try:
-                from nexus.redis_client.client import get_redis_client
-                self._redis = get_redis_client()
-            except Exception:
-                pass
-        return self._redis
-
-    def _build_key(
-        self,
-        goals: list[dict[str, Any]],
-        tools: list[dict[str, Any]],
-    ) -> str:
+    def _build_key(self, goals: list[dict[str, Any]], tools: list[dict[str, Any]]) -> str:
         goal_fingerprint = json.dumps(
             sorted((g.get("action", ""), sorted(g.get("required_artifacts", []))) for g in goals)
         )
         tool_fingerprint = json.dumps(
             sorted(f"{t.get('name','')}:{t.get('version',1)}" for t in tools if t.get("name"))
         )
-        return _make_key("plan", goal_fingerprint, tool_fingerprint)
+        reg_fp = _registry_fingerprint()
+        parts = ["plan", goal_fingerprint, tool_fingerprint]
+        if reg_fp:
+            parts.append(reg_fp)
+        return _make_key(*parts)
 
     async def get(
         self,
@@ -197,20 +247,15 @@ class PlanCache:
         tools: list[dict[str, Any]],
     ) -> list[dict[str, Any]] | None:
         key = self._build_key(goals, tools)
-        redis = await self._get_redis()
-        if redis is not None:
-            try:
-                data = await redis.get(key)
-                if data:
-                    await redis.expire(key, self._ttl)
-                    return json.loads(data)
-            except Exception:
-                pass
-        entry = self._memory.get(key)
-        if entry:
-            expiry, value = entry
-            if expiry > __import__("time").time():
-                return json.loads(value)
+        raw = await self._get_from_redis(key)
+        if raw is not None:
+            self._record_hit()
+            return json.loads(raw)
+        raw = self._get_from_memory(key)
+        if raw is not None:
+            self._record_hit()
+            return json.loads(raw)
+        self._record_miss()
         return None
 
     async def set(
@@ -221,19 +266,13 @@ class PlanCache:
     ) -> None:
         key = self._build_key(goals, tools)
         value = json.dumps(plan)
-        expiry = __import__("time").time() + self._ttl
-        redis = await self._get_redis()
-        if redis is not None:
-            try:
-                await redis.setex(key, self._ttl, value)
-                return
-            except Exception:
-                pass
-        self._memory[key] = (expiry, value)
+        if await self._store_in_redis(key, value):
+            return
+        self._store_in_memory(key, value)
 
 
 # ============================================================================
-# Singleton instances
+# Singleton accessors
 # ============================================================================
 
 _parse_cache: ParseCache | None = None
@@ -252,3 +291,15 @@ def get_plan_cache() -> PlanCache:
     if _plan_cache is None:
         _plan_cache = PlanCache()
     return _plan_cache
+
+
+async def invalidate_all_caches() -> None:
+    """Clear all cache entries on registry re-compilation."""
+    global _parse_cache, _plan_cache
+    if _parse_cache is not None:
+        await _parse_cache.clear_all()
+    if _plan_cache is not None:
+        await _plan_cache.clear_all()
+    _parse_cache = None
+    _plan_cache = None
+    logger.info("cache.all_invalidated")

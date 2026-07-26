@@ -5,6 +5,7 @@ All ontology lookups, schema validation, and adjacency computation happen at com
 time. The runtime simply traverses pre-computed structures.
 
 No hardcoded capability names. All data comes from the compiled graph JSON.
+The graph path is configured via ``settings.compiler.compiled_graph_path``.
 """
 
 from __future__ import annotations
@@ -16,53 +17,87 @@ from typing import Any
 import structlog
 
 from nexus.compiler.registry_compiler import CompiledCapabilityGraph
+from nexus.config.settings import get_settings
 
 logger = structlog.get_logger("nexus.compiler.compiled_graph")
 
-# Module-level cache
+# Module-level cache (single-assignment via lazy loading — no mutable globals)
 _compiled_graph: CompiledCapabilityGraph | None = None
-_COMPILED_GRAPH_PATH: str = "compiled_registry.json"
+
+
+def _get_graph_path() -> str:
+    """Resolve compiled graph path from settings, falling back to a default."""
+    settings = get_settings()
+    path = getattr(settings, "compiler", None)
+    if path is not None:
+        return getattr(path, "compiled_graph_path", "compiled_registry.json")
+    return "compiled_registry.json"
 
 
 def load_compiled_graph(path: str | None = None) -> CompiledCapabilityGraph | None:
     """Load the compiled capability graph from a JSON file.
 
+    If the file is not found, attempts a DB fallback by calling ``compile_registry()``
+    on-the-fly. This ensures the runtime never stalls on a missing compiled graph.
+
     Args:
-        path: Path to compiled graph JSON. If None, uses default path.
+        path: Path to compiled graph JSON. If None, uses configured path.
 
     Returns:
-        ``CompiledCapabilityGraph`` or None if not found.
+        ``CompiledCapabilityGraph`` or None if not found and no DB fallback.
     """
     global _compiled_graph
 
-    filepath = path or _COMPILED_GRAPH_PATH
-    if not os.path.exists(filepath):
-        logger.warning("compiled_graph.not_found", path=filepath)
-        return None
+    filepath = path or _get_graph_path()
+    if os.path.exists(filepath):
+        try:
+            with open(filepath) as f:
+                data = json.load(f)
+            _compiled_graph = CompiledCapabilityGraph.from_dict(data)
+            logger.info(
+                "compiled_graph.loaded",
+                nodes=len(_compiled_graph.nodes),
+                templates=len(_compiled_graph.goal_templates),
+                path=filepath,
+            )
+            return _compiled_graph
+        except Exception as exc:
+            logger.error("compiled_graph.load_failed", path=filepath, error=str(exc))
 
+    # DB fallback — compile on-the-fly from live registry
+    logger.info("compiled_graph.db_fallback", path=filepath)
     try:
-        with open(filepath) as f:
-            data = json.load(f)
-        _compiled_graph = CompiledCapabilityGraph.from_dict(data)
+        import asyncio
+
+        from nexus.compiler.registry_compiler import compile_registry
+
+        _compiled_graph = asyncio.run(compile_registry())
         logger.info(
-            "compiled_graph.loaded",
+            "compiled_graph.db_fallback_ok",
             nodes=len(_compiled_graph.nodes),
-            templates=len(_compiled_graph.goal_templates),
-            path=filepath,
         )
         return _compiled_graph
     except Exception as exc:
-        logger.error("compiled_graph.load_failed", path=filepath, error=str(exc))
+        logger.error("compiled_graph.db_fallback_failed", error=str(exc))
         return None
 
 
 def get_compiled_graph() -> CompiledCapabilityGraph | None:
     """Get the cached compiled capability graph.
 
-    Returns the module-level cached graph if already loaded, otherwise None.
-    Call ``load_compiled_graph()`` first to populate the cache.
+    If not yet loaded, attempts to load automatically via ``load_compiled_graph()``.
     """
+    global _compiled_graph
+    if _compiled_graph is None:
+        _compiled_graph = load_compiled_graph()
     return _compiled_graph
+
+
+def invalidate_cache() -> None:
+    """Clear the cached compiled graph so the next access reloads it."""
+    global _compiled_graph
+    _compiled_graph = None
+    logger.info("compiled_graph.cache_invalidated")
 
 
 def find_capability(
@@ -78,7 +113,7 @@ def find_capability(
     Returns:
         Capability node dict or None.
     """
-    g = graph or _compiled_graph
+    g = graph or get_compiled_graph()
     if g is None:
         return None
     node = g.nodes.get(name)
@@ -98,7 +133,7 @@ def find_goal_template(
     Returns:
         Goal template dict or None.
     """
-    g = graph or _compiled_graph
+    g = graph or get_compiled_graph()
     if g is None:
         return None
     tmpl = g.goal_templates.get(action)
@@ -124,7 +159,7 @@ def resolve_chain(
     Returns:
         List of capability name chains.
     """
-    g = graph or _compiled_graph
+    g = graph or get_compiled_graph()
     if g is None:
         return []
 

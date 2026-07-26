@@ -245,9 +245,15 @@ async def compile_registry(
             from nexus.db.base import async_session as session_factory
 
         async with session_factory() as session:
-            # ── Load capabilities ────────────────────────────────────
+            # ── Load capabilities with eager-loaded relationships ──
+            from sqlalchemy.orm import selectinload
+
             result = await session.execute(
-                select(CapabilityModel).where(CapabilityModel.enabled == True)  # noqa: E712
+                select(CapabilityModel)
+                .where(CapabilityModel.enabled == True)  # noqa: E712
+                .options(
+                    selectinload(CapabilityModel.providers).selectinload(ProviderModel.endpoints)
+                )
             )
             capabilities = result.scalars().all()
 

@@ -1,193 +1,249 @@
-"""4-layer Intermediate Representation stack — Intent → Goal → Operation → Execution.
+"""Logical/Physical Intermediate Representation — discriminated union IR for the workflow compiler.
 
-Inspired by LLVM's IR: each layer is a typed, validated transformation of the
-previous. No magic strings. No mutable state. All models use ``extra="forbid"``
-for strict schema enforcement.
+Inspired by LLVM's IR separation: the **Logical** layer represents user intent as
+capability-agnostic operations. The **Physical** layer binds those operations to
+concrete tools, endpoints, and execution parameters.
 
-Layers:
-1. **IntentIR** — User's raw semantic intent extracted from natural language.
-2. **GoalIR** — Atomic steps required to satisfy the intent (derived from GoalTemplates).
-3. **OperationIR** — Capability-bound operations with resolved parameters.
-4. **ExecutionIR** — The final compiled DAG node with tool binding, control flow, and retry policy.
+All models use ``extra="forbid"`` for strict schema enforcement. Compiler and
+Optimizer functions operate on these models purely — no I/O, no datetime, no random.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
-from datetime import datetime, timezone
-from enum import Enum
-from typing import Any, Literal
+from typing import Any, Literal, Union
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
+from typing_extensions import Annotated
 
 
 # ============================================================================
-# Layer 1: IntentIR — Raw semantic intent from NL
+# Logical Layer — User intent as capability-agnostic operations
 # ============================================================================
 
 
-class IntentIR(BaseModel):
-    """User's raw semantic intent, extracted from natural language.
+class LogicalNode(BaseModel):
+    """A single logical operation in a workflow, emitted by the LLM planner.
 
     Attributes:
-        action: The action verb (e.g., "retrieve", "compare", "create", "delete").
-        domain: The domain/ subject area (e.g., "weather", "crypto", "bookmark").
-        entities: Key-value parameters extracted from the query.
-        confidence: Extraction confidence (0.0–1.0).
-        raw_query: Original user query for traceability.
+        op: The logical operation name (e.g., ``"get_weather"``, ``"search_books"``).
+            Must match ``CapabilityModel.logical_op_name`` in the registry.
+        ref: Logical reference label for dependency wiring (e.g., ``"WeatherData"``).
+        inputs: Input parameters for the operation.
+        depends_on: References of prerequisite nodes that must complete first.
+        condition: Optional conditional expression (for branching).
+        iterate_over: Optional collection reference to iterate over (for map).
     """
 
-    action: str = Field(description="Action verb (retrieve, compare, create, delete, etc.)")
-    domain: str = Field(default="general", description="Subject domain (weather, crypto, bookmark, etc.)")
-    entities: dict[str, Any] = Field(default_factory=dict, description="Extracted parameters")
-    confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="Extraction confidence")
-    raw_query: str = Field(default="", description="Original user query")
+    model_config = ConfigDict(extra="forbid")
 
-    model_config = {"extra": "forbid"}
-
-
-# ============================================================================
-# Layer 2: GoalIR — Atomic step derived from GoalTemplate
-# ============================================================================
-
-
-class GoalIR(BaseModel):
-    """An atomic step required to satisfy an intent.
-
-    Derived from GoalTemplate expansion. Each goal maps to one or more
-    capabilities that can fulfill it.
-
-    Attributes:
-        id: Unique goal identifier.
-        action: The action this goal represents.
-        domain: The domain this goal operates in.
-        required_artifacts: Artifact field names needed as input.
-        produced_artifacts: Artifact field names produced as output.
-        confidence: How well this goal satisfies the original intent.
-    """
-
-    id: str = Field(default_factory=lambda: f"goal_{uuid.uuid4().hex[:8]}")
-    action: str = Field(description="Action verb")
-    domain: str = Field(default="general", description="Subject domain")
-    required_artifacts: list[str] = Field(default_factory=list, description="Input artifacts needed")
-    produced_artifacts: list[str] = Field(default_factory=list, description="Output artifacts produced")
-    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
-
-    model_config = {"extra": "forbid"}
-
-
-# ============================================================================
-# Layer 3: OperationIR — Capability-bound resolved operation
-# ============================================================================
-
-
-class OperationIR(BaseModel):
-    """A capability-bound operation with resolved parameters.
-
-    Attributes:
-        id: Unique operation identifier.
-        capability_name: The capability fulfilling this operation.
-        tool_name: The specific tool selected (by Optimizer).
-        inputs: Resolved input parameters.
-        expected_outputs: Expected output artifact field names.
-        depends_on: IDs of operations that must complete first.
-        retry_policy: Strategy for handling failures (from Provider Contract).
-        cost_estimate: Estimated cost of this operation.
-    """
-
-    id: str = Field(default_factory=lambda: f"op_{uuid.uuid4().hex[:8]}")
-    capability_name: str = Field(description="Capability fulfilling this operation")
-    tool_name: str = Field(default="", description="Specific tool selected")
-    inputs: dict[str, Any] = Field(default_factory=dict, description="Resolved input parameters")
-    expected_outputs: list[str] = Field(default_factory=list, description="Expected output artifacts")
-    depends_on: list[str] = Field(default_factory=list, description="Prerequisite operation IDs")
-    retry_policy: str = Field(default="default", description="Retry strategy name")
-    cost_estimate: float = Field(default=0.0, ge=0.0, description="Estimated cost in USD")
-
-    model_config = {"extra": "forbid"}
-
-
-# ============================================================================
-# Layer 4: ExecutionIR — Compiled DAG node
-# ============================================================================
-
-
-class ExecutionControlFlow(str, Enum):
-    """Control flow type for an execution node."""
-    CALL = "call"
-    CONDITIONAL = "conditional"
-    FOR_EACH = "for_each"
-    GUARD = "guard"
-
-
-class ExecutionIR(BaseModel):
-    """A single node in the final compiled execution DAG.
-
-    Attributes:
-        id: Unique execution node identifier.
-        kind: Control flow type (call, conditional, for_each, guard).
-        tool_name: The resolved tool to call (for CALL nodes).
-        inputs: Resolved input parameters.
-        depends_on: IDs of prerequisite execution nodes.
-        condition: Conditional expression (for CONDITIONAL nodes).
-        iterate_over: Iteration source (for FOR_EACH nodes).
-        empty_fallback: Fallback when iteration source is empty.
-        timeout_s: Per-call timeout in seconds.
-        max_retries: Maximum retry attempts.
-    """
-
-    id: str = Field(default_factory=lambda: f"exec_{uuid.uuid4().hex[:8]}")
-    kind: ExecutionControlFlow = Field(default=ExecutionControlFlow.CALL, description="Control flow type")
-    tool_name: str = Field(default="", description="Tool to call")
+    op: str = Field(description="Logical operation name matching CapabilityModel.logical_op_name")
+    ref: str = Field(description="Logical reference label for dependency wiring")
     inputs: dict[str, Any] = Field(default_factory=dict, description="Input parameters")
-    depends_on: list[str] = Field(default_factory=list, description="Prerequisite node IDs")
-    condition: str = Field(default="", description="Conditional expression")
-    iterate_over: str = Field(default="", description="Iteration source field")
-    empty_fallback: dict[str, Any] = Field(default_factory=dict, description="Fallback when empty")
-    timeout_s: float = Field(default=30.0, ge=1.0, description="Per-call timeout")
-    max_retries: int = Field(default=2, ge=0, description="Max retry attempts")
-
-    model_config = {"extra": "forbid"}
+    depends_on: list[str] = Field(default_factory=list, description="Prerequisite node refs")
+    condition: str | None = Field(default=None, description="Conditional expression")
+    iterate_over: str | None = Field(default=None, description="Collection to iterate over")
 
 
-# ============================================================================
-# IRStack — The full stack for one turn
-# ============================================================================
+class LogicalWorkflow(BaseModel):
+    """The complete logical workflow output by the LLM Semantic Planner.
 
-
-class IRStack(BaseModel):
-    """Tracks the IR transformation pipeline for one turn.
-
-    Each turn produces: IntentIR → GoalIR[] → OperationIR[] → ExecutionIR[].
-    The stack preserves all layers for observability and incremental re-compilation.
-
-    Attributes:
-        intents: Extracted semantic intents (Layer 1).
-        goals: Expanded atomic goals (Layer 2).
-        operations: Resolved capability operations (Layer 3).
-        execution_plan: Compiled execution DAG nodes (Layer 4).
-        version: Incrementing version — each re-compilation bumps this.
+    Contains a sequence of LogicalNodes and any named collections for iteration.
     """
 
-    intents: list[IntentIR] = Field(default_factory=list, description="Layer 1: Semantic intents")
-    goals: list[GoalIR] = Field(default_factory=list, description="Layer 2: Atomic goals")
-    operations: list[OperationIR] = Field(default_factory=list, description="Layer 3: Resolved operations")
-    execution_plan: list[ExecutionIR] = Field(default_factory=list, description="Layer 4: Compiled DAG")
-    version: int = Field(default=0, description="Stack version — incremented on re-compilation")
+    model_config = ConfigDict(extra="forbid")
 
-    model_config = {"extra": "forbid"}
+    version: Literal["1.0"] = "1.0"
+    nodes: list[LogicalNode] = Field(default_factory=list, description="Ordered logical operations")
+    collections: dict[str, list[Any]] = Field(
+        default_factory=dict,
+        description="Named data collections for iteration (e.g., search results)",
+    )
 
-    def add_intent(self, intent: IntentIR) -> IRStack:
-        return self.model_copy(update={"intents": self.intents + [intent]})
 
-    def add_goal(self, goal: GoalIR) -> IRStack:
-        return self.model_copy(update={"goals": self.goals + [goal]})
+# ============================================================================
+# Physical Layer — Concrete tool bindings and execution DAG
+# ============================================================================
 
-    def add_operation(self, op: OperationIR) -> IRStack:
-        return self.model_copy(update={"operations": self.operations + [op]})
 
-    def set_execution_plan(self, nodes: list[ExecutionIR]) -> IRStack:
-        return self.model_copy(update={"execution_plan": nodes, "version": self.version + 1})
+class BasePhysicalNode(BaseModel):
+    """Base for all physical execution nodes.
 
-    def clear_turn(self) -> IRStack:
-        return IRStack(version=self.version + 1)
+    Attributes:
+        id: Globally unique node identifier.
+        symbolic_ref: The logical ref this node was compiled from.
+        depends_on: IDs of prerequisite physical nodes.
+        failure_policy: How failures in this node affect the graph.
+        minimum_success: Minimum fraction of sub-tasks that must succeed (0.0–1.0).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(description="Unique node identifier")
+    symbolic_ref: str = Field(description="Logical ref this node was compiled from")
+    depends_on: list[str] = Field(default_factory=list, description="Prerequisite node IDs")
+    failure_policy: Literal["STOP", "CONTINUE", "BEST_EFFORT"] = Field(
+        default="CONTINUE",
+        description="How failures propagate",
+    )
+    minimum_success: float = Field(
+        default=1.0, ge=0.0, le=1.0,
+        description="Minimum fraction of sub-tasks that must succeed",
+    )
+
+    def compute_execution_key(self, inputs: dict[str, Any], version: str) -> str:
+        """Deterministic SHA256 hash for idempotency checking.
+
+        Pure: no I/O, no datetime, no random — same inputs always produce same key.
+        """
+        payload = json.dumps(
+            {"ref": self.symbolic_ref, "inputs": inputs, "version": version},
+            sort_keys=True,
+        )
+        return hashlib.sha256(payload.encode()).hexdigest()
+
+
+class ToolNode(BasePhysicalNode):
+    """A concrete tool invocation node — the leaf of the physical DAG.
+
+    Attributes:
+        kind: Discriminator for the union type.
+        capability: The logical operation name this tool fulfills.
+        tool_name: The specific tool/endpoint selected by the optimizer.
+        inputs: Resolved input parameters for the HTTP call.
+        execution_key: SHA256 hash for idempotency (computed at execution time).
+    """
+
+    kind: Literal["tool"] = "tool"
+    capability: str = Field(description="Logical operation name")
+    tool_name: str = Field(description="Selected tool/endpoint name")
+    endpoint_url: str = Field(default="", description="Resolved endpoint URL")
+    http_method: str = Field(default="GET", description="HTTP method for the call")
+    inputs: dict[str, Any] = Field(default_factory=dict, description="Input parameters")
+    cost_estimate: float = Field(default=0.0, description="Estimated cost per call in USD")
+    latency_estimate_ms: int = Field(default=1000, description="Estimated P99 latency in ms")
+    execution_key: str | None = Field(default=None, description="Idempotency hash")
+
+
+class MapNode(BasePhysicalNode):
+    """A parallel-iteration node — executes its body ToolNode over each item.
+
+    Attributes:
+        kind: Discriminator for the union type.
+        iterate_over: Reference to the collection to iterate over.
+        body: The ToolNode to execute per item.
+    """
+
+    kind: Literal["map"] = "map"
+    iterate_over: str = Field(description="Collection reference to iterate over")
+    body: ToolNode = Field(description="ToolNode to execute per item")
+
+
+class ReduceNode(BasePhysicalNode):
+    """An aggregation node — reduces a collection of results into a single value.
+
+    Attributes:
+        kind: Discriminator for the union type.
+        aggregate_kind: The type of aggregation to perform.
+        source_ref: Reference to the collection to reduce.
+        key_path: Dot-separated key for group/filter operations.
+        predicate: Filter expression for filter operations.
+        limit: Maximum items for top-k operations.
+    """
+
+    kind: Literal["reduce"] = "reduce"
+    aggregate_kind: Literal["sort", "group_by", "average", "top_k", "filter", "summary"] = Field(
+        description="Type of aggregation",
+    )
+    source_ref: str = Field(description="Collection reference to reduce")
+    key_path: str = Field(default="", description="Key path for sort/group/filter")
+    predicate: str = Field(default="", description="Filter expression")
+    limit: int | None = Field(default=None, description="Max items for top-k")
+
+
+class ConditionalNode(BasePhysicalNode):
+    """A branching node — routes execution based on a condition.
+
+    Attributes:
+        kind: Discriminator for the union type.
+        source_ref: Reference to the data to evaluate.
+        condition: Boolean expression to evaluate.
+        branch_true: Node IDs to execute if condition is true.
+        branch_false: Node IDs to execute if condition is false.
+    """
+
+    kind: Literal["conditional"] = "conditional"
+    source_ref: str = Field(description="Data reference to evaluate")
+    condition: str = Field(description="Boolean expression")
+    branch_true: list[str] = Field(default_factory=list, description="Node IDs if true")
+    branch_false: list[str] = Field(default_factory=list, description="Node IDs if false")
+
+
+# Discriminated union of all physical node types
+PhysicalNode = Annotated[
+    Union[ToolNode, MapNode, ReduceNode, ConditionalNode],
+    Field(discriminator="kind"),
+]
+
+
+class ExecutionGraph(BaseModel):
+    """The complete physical execution DAG, produced by the Compiler and refined by the Optimizer.
+
+    Attributes:
+        version: Schema version for forward compatibility.
+        graph_id: Unique identifier for this graph instance.
+        nodes: All physical nodes keyed by ID.
+        waves: Pre-computed topological wave ordering for the Executor.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal["1.0"] = "1.0"
+    graph_id: str = Field(description="Unique graph instance identifier")
+    nodes: dict[str, PhysicalNode] = Field(
+        default_factory=dict,
+        description="All physical nodes keyed by ID",
+    )
+    waves: list[list[str]] = Field(
+        default_factory=list,
+        description="Pre-computed wave ordering (list of node ID batches)",
+    )
+
+
+# ============================================================================
+# Optimization Snapshots — Versioned history of graph transformations
+# ============================================================================
+
+
+class OptimizationReport(BaseModel):
+    """Records the transformations applied by a single optimization pass.
+
+    Attributes:
+        pass_name: Name of the pass that ran.
+        transformations: Human-readable descriptions of each transformation.
+        nodes_before: Node count before the pass.
+        nodes_after: Node count after the pass.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    pass_name: str = Field(description="Optimization pass name")
+    transformations: list[str] = Field(default_factory=list, description="Applied transformations")
+    nodes_before: int = Field(ge=0, description="Node count before pass")
+    nodes_after: int = Field(ge=0, description="Node count after pass")
+
+
+class GraphSnapshot(BaseModel):
+    """A versioned snapshot of the ExecutionGraph during optimization.
+
+    Used for observability, debugging, and rollback.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=0, description="Snapshot version (monotonic)")
+    graph: ExecutionGraph = Field(description="Graph at this snapshot")
+    pass_name: str = Field(description="Pass that produced this snapshot")
+    report: OptimizationReport | None = Field(default=None, description="Pass report")

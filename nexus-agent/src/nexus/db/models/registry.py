@@ -3,6 +3,10 @@
 These replace the runtime-inferred registries with explicit, compiled metadata.
 Each model is a SQLAlchemy ORM class for PostgreSQL persistence.
 
+Cost and latency are properties of the **endpoint** (the specific API route),
+not the provider (the vendor). The Cost-Based Optimizer evaluates at the
+endpoint level for precise constraint enforcement.
+
 No hardcoded names. All relationships are dynamic via foreign keys and JSONB contracts.
 """
 
@@ -16,8 +20,6 @@ from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Te
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from sqlalchemy import Column as SA_Column, Table as SA_Table
-
 from nexus.db.base import Base
 
 
@@ -26,6 +28,10 @@ class CapabilityModel(Base):
 
     Each capability declares what it consumes and produces, its ontology
     parent, and a contract describing its behavior.
+
+    ``logical_op_name`` is the key the Logical Planner LLM uses to reference
+    this capability (e.g., ``"get_weather"``). It replaces the old intent-based
+    resolution pipeline.
 
     Relationships:
         providers: ProviderModel instances that can fulfill this capability.
@@ -36,6 +42,14 @@ class CapabilityModel(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(
         String(255), nullable=False, unique=True, comment="Unique capability name"
+    )
+    logical_op_name: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, unique=True, index=True,
+        comment="Logical operation name used by the Semantic Planner (e.g., 'get_weather')",
+    )
+    batch_strategy: Mapped[str] = mapped_column(
+        String(50), default="none",
+        comment="Batch fusion strategy: 'none', 'fuse', or 'split'",
     )
     description: Mapped[str] = mapped_column(Text, default="", comment="Human-readable description")
     ontology_parent: Mapped[str | None] = mapped_column(
@@ -59,6 +73,19 @@ class CapabilityModel(Base):
     tags: Mapped[list[str]] = mapped_column(
         ARRAY(String), default=list, comment="Categorization tags"
     )
+    # Input/Output knowledge — zero hardcoding in compiler or executor
+    intent_profiles: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True, default=dict,
+        comment="Semantic intent → API param mappings (e.g. {'current': {'current_weather': True}})",
+    )
+    input_policy: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True, default=dict,
+        comment="Default params + computed field paths (e.g. {'defaults': {'timezone': 'auto'}})",
+    )
+    output_contract: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True, default=dict,
+        comment="Expected response shape for validation (e.g. {'required_any_of': ['$.current_weather']})",
+    )
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, comment="Whether the capability is active")
     version: Mapped[int] = mapped_column(Integer, default=1, comment="Capability definition version")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -75,6 +102,9 @@ class ProviderModel(Base):
     Each provider has a specific SLA, cost model, and privacy level.
     Multiple providers can fulfill the same capability.
 
+    Cost and latency are moved to ``EndpointModel`` — they vary per route,
+    not per vendor.
+
     Relationships:
         capability: The CapabilityModel this provider fulfills.
         endpoints: EndpointModel instances for this provider.
@@ -88,12 +118,6 @@ class ProviderModel(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False, comment="Provider name")
     description: Mapped[str] = mapped_column(Text, default="", comment="Provider description")
-    sla_p99_ms: Mapped[int | None] = mapped_column(
-        Integer, nullable=True, comment="P99 latency SLA in milliseconds"
-    )
-    cost_per_call: Mapped[float] = mapped_column(
-        Float, default=0.0, comment="Cost per invocation in USD"
-    )
     privacy_level: Mapped[str] = mapped_column(
         String(50), default="low", comment="Privacy level: low | medium | high"
     )
@@ -119,7 +143,12 @@ class ProviderModel(Base):
 class EndpointModel(Base):
     """A concrete endpoint for a provider.
 
-    Each provider can have multiple endpoints (e.g., different regions).
+    Cost and latency live here, not on ProviderModel, because different
+    API routes under the same vendor may have different pricing and
+    performance characteristics.
+
+    ``supports_batch`` enables the PassBatchFusion optimizer to merge
+    multiple identical MapNode calls into a single ToolNode call.
 
     Relationships:
         provider: The ProviderModel this endpoint belongs to.
@@ -136,55 +165,41 @@ class EndpointModel(Base):
     auth_type: Mapped[str] = mapped_column(String(50), default="none", comment="Authentication type")
     region: Mapped[str] = mapped_column(String(100), default="global", comment="Geographic region")
     weight: Mapped[int] = mapped_column(Integer, default=1, comment="Load balancing weight")
+    cost_per_call: Mapped[float] = mapped_column(
+        Float, default=0.0, comment="Cost per invocation in USD (moved from ProviderModel)"
+    )
+    latency_p99_ms: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, comment="P99 latency in milliseconds (moved from ProviderModel.sla_p99_ms)"
+    )
+    supports_batch: Mapped[bool] = mapped_column(
+        Boolean, default=False, comment="Whether this endpoint supports batch requests"
+    )
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, comment="Whether the endpoint is active")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     provider = relationship("ProviderModel", back_populates="endpoints")
 
 
-class GoalTemplateModel(Base):
-    """A template that expands an intent action into atomic goals.
+class RegistryVersionModel(Base):
+    """Tracks registry compilation history — each compile records a snapshot.
 
-    Templates are YAML/JSON-based rules that map high-level actions
-    (e.g., "compare", "retrieve", "create") to sequences of GoalIR.
-
-    Relationships:
-        capabilities: CapabilityModel instances required by this template.
+    Enables incremental compilation: the compiler can diff against the last
+    compiled version and only re-compile changed capabilities.
     """
 
-    __tablename__ = "goal_template"
+    __tablename__ = "registry_version"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name: Mapped[str] = mapped_column(
-        String(255), nullable=False, unique=True, comment="Unique template name"
+    version: Mapped[int] = mapped_column(Integer, nullable=False, comment="Monotonic version number")
+    checksum: Mapped[str] = mapped_column(String(64), nullable=False, comment="SHA256 of compiled graph")
+    capability_count: Mapped[int] = mapped_column(Integer, default=0, comment="Number of compiled capabilities")
+    provider_count: Mapped[int] = mapped_column(Integer, default=0, comment="Number of compiled providers")
+    template_count: Mapped[int] = mapped_column(Integer, default=0, comment="Number of compiled templates")
+    has_cycles: Mapped[bool] = mapped_column(Boolean, default=False, comment="Whether cycles were detected")
+    missing_producers: Mapped[list[str]] = mapped_column(
+        ARRAY(String), default=list, comment="Artifact gaps detected"
     )
-    trigger_action: Mapped[str] = mapped_column(
-        String(255), nullable=False, comment="Action that triggers this template (e.g., 'compare')"
+    compiled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    output_path: Mapped[str | None] = mapped_column(
+        String(1024), nullable=True, comment="Path to compiled JSON graph"
     )
-    expansion_logic: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, default=dict, comment="Expansion rules — YAML/JSON defining goal sequences"
-    )
-    description: Mapped[str] = mapped_column(Text, default="", comment="Template description")
-    version: Mapped[int] = mapped_column(Integer, default=1, comment="Template version")
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True, comment="Whether the template is active")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
-
-    capabilities = relationship(
-        "CapabilityModel",
-        secondary="goal_template_capability",
-        primaryjoin="GoalTemplateModel.id == goal_template_capability.c.goal_template_id",
-        secondaryjoin="goal_template_capability.c.capability_id == CapabilityModel.id",
-        lazy="selectin",
-    )
-
-
-# Association table for goal_template → capability
-goal_template_capability = SA_Table(
-    "goal_template_capability",
-    Base.metadata,
-    SA_Column("goal_template_id", UUID(as_uuid=True), ForeignKey("goal_template.id", ondelete="CASCADE"), primary_key=True),
-    SA_Column("capability_id", UUID(as_uuid=True), ForeignKey("capability.id", ondelete="CASCADE"), primary_key=True),
-)
