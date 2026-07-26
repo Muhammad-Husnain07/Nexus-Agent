@@ -49,69 +49,36 @@ class QueryType(str, Enum):
 
 
 # ============================================================================
-# Few-Shot System Prompt
+# Few-Shot System Prompt (managed by PromptManager)
 # ============================================================================
 
-_CLASSIFIER_PROMPT = """You are a query classifier. Given a user message and available tools, determine the query type.
-
-Types:
-- single_tool: One clear tool request
-- independent_multi: Multiple requests that don't depend on each other's output
-- dependent_multi: Multiple requests where one tool's output feeds another
-- conversational: Follow-up question with pronoun references ("it", "that", "his", "her", "their")
-- no_tool: Greeting, meta question about the agent, memory query
-
-<examples>
-User: Tell me a joke
-Tools: tool_a (returns a joke)
-Type: single_tool
-{"type": "single_tool", "tools": ["tool_a"], "reasoning": "Single clear tool request"}
-
-User: What's the weather in SomeCity and tell me a joke
-Tools: tool_b (geocode city), tool_c (get weather by coords), tool_a (returns a joke)
-Analysis: tool_c needs coordinates from tool_b (dependent). tool_a is independent.
-Type: dependent_multi
-{"type": "dependent_multi", "tools": ["tool_b", "tool_c", "tool_a"], "dependencies": [["tool_b", "tool_c"]], "reasoning": "Weather needs geocoding first, joke is independent"}
-
-User: What's the age of John and what's the Bitcoin price
-Tools: tool_d (predict age from name), tool_e (get crypto price)
-Analysis: Neither tool depends on the other's output.
-Type: independent_multi
-{"type": "independent_multi", "tools": ["tool_d", "tool_e"], "reasoning": "Age and crypto price are independent"}
-
-User: And his nationality?
-Tools: tool_f (predict nationality from name)
-Analysis: "his" refers to a person from previous context.
-Type: conversational
-{"type": "conversational", "tools": ["tool_f"], "reasoning": "Follow-up with pronoun reference"}
-
-User: Hi, how are you?
-Type: no_tool
-{"type": "no_tool", "reasoning": "Greeting"}
-
-User: What tools do you have?
-Tools: (all tools)
-Type: no_tool
-{"type": "no_tool", "reasoning": "Meta question about agent capabilities"}
-</examples>
-
-Return ONLY valid JSON. No explanation, no preamble.
-The JSON must contain "type" and optionally "tools" and "dependencies" keys."""
+_CLASSIFIER_PROMPT: str = ""
+try:
+    from nexus.agent.prompts.manager import prompt_manager
+    _CLASSIFIER_PROMPT = prompt_manager.render("router", version="1.1")
+except Exception:
+    _CLASSIFIER_PROMPT = "You are a query classifier. Return JSON with type: 'workflow' or 'conversational'."
 
 
 # ============================================================================
 # Heuristic Classification (Stage 1 — fast path)
 # ============================================================================
 
-# One-word greetings and common social phrases
-_GREETINGS = frozenset({
-    "hi", "hello", "hey", "howdy", "yo", "sup", "greetings", "good morning",
-    "good afternoon", "good evening", "morning", "evening", "thanks", "thank you",
-    "thanks!", "hello!", "hi!", "hey!", "goodbye", "bye", "bye!",
-})
+# Greetings, conjunctions, stop words, and skip prefixes loaded from settings.
+# Zero hardcoded NLP lists — all configurable via NEXUS_AGENT__* env vars.
+def _load_settings():
+    try:
+        from nexus.config.settings import get_settings
+        return get_settings().agent
+    except Exception:
+        return None
 
-# Conjunction markers suggesting multiple intents
-_CONJUNCTIONS = {"and", "or", "also", "plus", "then", "too", "beside", "additionally"}
+_agent_settings = _load_settings()
+
+_GREETINGS = frozenset(_agent_settings.greetings) if _agent_settings else frozenset()
+_CONJUNCTIONS = frozenset(_agent_settings.conjunction_markers) if _agent_settings else frozenset()
+_STOP_WORDS = frozenset(_agent_settings.stop_words) if _agent_settings else frozenset()
+_SKIP_PREFIXES = frozenset(_agent_settings.skip_prefixes) if _agent_settings else frozenset()
 
 # Module-level cached weighted keyword index
 # keyword → list of (tool_name, weight) pairs
@@ -125,12 +92,7 @@ def _tokenize_query(text: str) -> list[str]:
     text = text.lower()
     text = re.sub(r"[^\w\s]", " ", text)
     tokens = text.split()
-    stop = {"a", "an", "the", "is", "it", "of", "in", "on", "for", "to", "with",
-            "and", "or", "but", "not", "use", "when", "about", "that", "this",
-            "from", "as", "at", "by", "be", "are", "was", "were", "been",
-            "have", "has", "had", "do", "does", "did", "will", "would",
-            "can", "could", "should", "may", "might", "shall", "need"}
-    return [t for t in tokens if t not in stop and len(t) > 1]
+    return [t for t in tokens if t not in _STOP_WORDS and len(t) > 1]
 
 
 def _rebuild_keyword_index(available_tools: list[dict[str, Any]]) -> None:
@@ -140,7 +102,6 @@ def _rebuild_keyword_index(available_tools: list[dict[str, Any]]) -> None:
     """
     global _keyword_index, _keyword_index_key
     index: dict[str, list[tuple[str, float]]] = {}
-    skip = {"get", "search", "predict", "find", "list", "fetch", "create", "update", "delete", "patch", "echo"}
 
     for t in available_tools:
         name = t.get("name", "")
@@ -159,7 +120,7 @@ def _rebuild_keyword_index(available_tools: list[dict[str, Any]]) -> None:
         else:
             # Fallback: split name on underscore
             for part in name_lower.split("_"):
-                if part not in skip and len(part) > 2:
+                if part not in _SKIP_PREFIXES and len(part) > 2:
                     index.setdefault(part, []).append((name, 1.0))
 
         # Tags (weight 0.8)

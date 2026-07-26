@@ -33,7 +33,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict
 
 
@@ -44,6 +44,7 @@ from typing_extensions import TypedDict
 
 class ToolResult(BaseModel):
     """A single tool execution result with metadata for observability."""
+    model_config = ConfigDict(extra="forbid")
 
     tool_name: str
     status: Literal["success", "error", "timeout", "validation_error"]
@@ -57,6 +58,7 @@ class ToolResult(BaseModel):
 
 class ExecutionNode(BaseModel):
     """A node in the execution DAG (the task graph, not LangGraph's own graph)."""
+    model_config = ConfigDict(extra="forbid")
 
     id: str = Field(description="Unique task identifier")
     tool_name: str | None = Field(default=None, description="Tool to invoke")
@@ -71,6 +73,7 @@ class ExecutionNode(BaseModel):
 
 class ExecutionGraph(BaseModel):
     """Full DAG structure for observability and routing."""
+    model_config = ConfigDict(extra="forbid")
 
     nodes: dict[str, ExecutionNode] = Field(
         default_factory=dict, description="All nodes keyed by ID",
@@ -126,6 +129,7 @@ class ExecutionGraph(BaseModel):
 
 class CostTracker(BaseModel):
     """Token and cost accumulator with per-node breakdown."""
+    model_config = ConfigDict(extra="forbid")
 
     total_cost_usd: float = 0.0
     total_tokens: int = 0
@@ -148,6 +152,7 @@ class CostTracker(BaseModel):
 
 class MessageEntry(BaseModel):
     """A single message with metadata for efficient truncation and dedup."""
+    model_config = ConfigDict(extra="forbid")
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="Unique message identifier")
     role: Literal["user", "assistant", "system", "tool"]
@@ -161,6 +166,7 @@ class MessageEntry(BaseModel):
 
 class MessageHistory(BaseModel):
     """Ordered, deduplicated, bounded message list with convenience methods."""
+    model_config = ConfigDict(extra="forbid")
 
     entries: list[MessageEntry] = Field(default_factory=list, description="Ordered message list")
 
@@ -319,21 +325,22 @@ _EPHEMERAL_FIELDS: list[str] = [
     "_executor_all_success",
     "_tool_retry_counts",
     "_pending_tasks",
-    "_execution_plan",
     # Compiler IR stack
     # NOTE: _ir_stack and _context_version are NOT ephemeral — they persist
     # across incremental re-compilations (Roslyn-style).
+    # _context_snapshot IS ephemeral — rebuilt each turn from AgentState checkpoint.
+    "_context_snapshot",
     "_extraction_result",
     "_validation_result",
     "_ready_to_plan",
     "_needs_clarification",
     "_clarification_asked",
-    "_normalization_metadata",
     "_needs_approval",
     "_pending_approval_tools",
     "_approval_granted",
     "_recovery_available",
     "_recovery_failed_tasks",
+    "_total_retry_count",
     # Cost tracking
     "_total_tokens",
     "_cost_breakdown",
@@ -394,7 +401,6 @@ class AgentState(TypedDict, total=False):
     _executor_all_success: bool
     _tool_retry_counts: dict[str, int]
     _pending_tasks: list[str]
-    _execution_plan: dict[str, Any]
 
     # Tool execution state (also in _EPHEMERAL_FIELDS)
     tool_results: list[dict[str, Any]]
@@ -415,12 +421,26 @@ class AgentState(TypedDict, total=False):
     _approval_granted: bool
     _approval_requested_at: float
 
-    # Compiler IR stack (persistent across incremental re-compilations)
+    # Compiler IR (persistent across incremental re-compilations)
     _ir_stack: dict[str, Any]
     _context_version: int
+    _context_snapshot: dict[str, Any]
+
+    # New 13-node compiler pipeline fields
+    _logical_workflow: dict[str, Any]
+    _execution_graph: dict[str, Any]
+    _optimized_graph: dict[str, Any]
+    _optimization_snapshots: list[dict[str, Any]]
+    _cost_estimate: float
+    _latency_estimate_ms: int
+    _within_budget: bool
+    _estimate_warnings: list[str]
+    _aggregated_results: dict[str, Any]
+    _graph_patch: dict[str, Any] | None
+    _memory_persisted: dict[str, Any]
 
     # Runtime-only ephemeral fields (carried in state but not in TypedDict)
-    _normalization_metadata: dict
+    _total_retry_count: int
     _recovery_available: bool
     _recovery_failed_tasks: list
     _clarification_asked: dict

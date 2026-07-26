@@ -9,7 +9,7 @@ from typing import Any
 
 import structlog
 
-from nexus.agent.nodes.memory_helper import persist_after_response
+from nexus.agent.nodes.memory_helper_node import persist_after_response
 from nexus.agent.prompts import prompt_manager
 from nexus.agent.state import AgentState
 from nexus.config.settings import get_settings
@@ -159,7 +159,7 @@ async def finalize(
 
         system_prompt = prompt_manager.render_with_examples(
             "finalize",
-            version="3.0",
+            version="3.1",
             context=example_context,
             max_examples=2,
             max_mistakes=2,
@@ -188,12 +188,12 @@ async def finalize(
 
     # Only milestone actual answers — skip for clarification/failure messages
     _milestone_min = get_settings().agent.milestone_min_length
+    try:
+        _low_conf_prefixes = get_settings().agent.low_confidence_prefixes
+    except Exception:
+        _low_conf_prefixes = []
     _is_clarification = not final or len(final) < _milestone_min or any(
-        final.lower().startswith(p) for p in [
-            "i'm not entirely sure", "i'm a bit confused", "i'm having trouble",
-            "i'm not confident", "i don't understand", "i didn't catch",
-            "could you rephrase", "could you clarify", "no results were produced",
-        ]
+        final.lower().startswith(p) for p in _low_conf_prefixes
     )
     final_msg = _openai_message("assistant", final, _milestone=not _is_clarification)
 

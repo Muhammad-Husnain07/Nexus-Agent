@@ -14,7 +14,7 @@ from typing import Any
 
 import structlog
 
-from nexus.agent.nodes.memory_helper import persist_after_response
+from nexus.agent.nodes.memory_helper_node import persist_after_response
 from nexus.agent.nodes.validation_node import validation_result_as_string
 from nexus.agent.state import AgentState
 

@@ -1,11 +1,11 @@
-"""Validation node — pure Python validation pipeline.
+"""Validation node — pure Python validation for the 13-node compiler pipeline.
 
-No LLM calls. Fast (~0ms). Pipeline stages:
-1. Intent exists
-2. Apply defaults
-3. Required fields check
-4. Business validators
-5. Security rules
+Validates that:
+1. A ``_logical_workflow`` exists and has at least one node.
+2. The optimized graph (``_optimized_graph`` or ``_execution_graph``) is structurally sound.
+3. The budget estimate (``_within_budget``) allows execution.
+
+No LLM calls. Fast (~0ms).
 """
 
 from __future__ import annotations
@@ -14,182 +14,84 @@ from typing import Any
 
 import structlog
 
-from nexus.agent.registry.intent_registry import get_registry
 from nexus.agent.state import AgentState
-from nexus.agent.state.context import StructuredContext
-from nexus.config.settings import get_settings
 
 logger = structlog.get_logger("nexus.agent.nodes.validation")
 
 
-def _validate_pipeline(ctx: StructuredContext) -> dict[str, Any]:
-    """Run the validation pipeline against StructuredContext.
-
-    Supports both single intent (str) and multi-intent (list[str]).
-    For multi-intent, validates each intent independently and combines results.
-
-    Returns a validation result dict:
-    - ``ready``: True if the intent can proceed to planning
-    - ``missing``: list of missing field names
-    - ``resolved_entities``: entities with defaults applied
-    - ``tools``: tools to execute for this intent
-    - ``reason``: human-readable reason if not ready
-    """
-    registry = get_registry()
-    intent = ctx.intent
-    entities = ctx.entities.data
-
-    # Stage 1: Intent exists
-    if not intent or intent == "unknown" or intent == ["unknown"]:
-        return {
-            "ready": False,
-            "missing": ["intent"],
-            "reason": "I couldn't determine what you want to do. Could you rephrase?",
-            "resolved_entities": entities,
-            "tools": [],
-        }
-
-    # Multi-intent: validate first intent (all go to planner)
-    if isinstance(intent, list):
-        if not intent:
-            return {
-                "ready": False,
-                "missing": ["intent"],
-                "reason": "I couldn't determine what you want to do.",
-                "resolved_entities": entities,
-                "tools": [],
-            }
-        primary = intent[0]
-        schema = registry.get_schema(primary) if primary != "unknown" else None
-        if not schema:
-            return {
-                "ready": False,
-                "missing": ["intent"],
-                "reason": f"I don't know how to handle '{primary}' yet.",
-                "resolved_entities": entities,
-                "tools": [],
-            }
-        # Multi-intent: extract entities per intent, combine
-        all_tools = list(schema.tool_mapping)
-        for additional in intent[1:]:
-            add_schema = registry.get_schema(additional)
-            if add_schema:
-                all_tools.extend(add_schema.tool_mapping)
-
-        return {
-            "ready": True,
-            "missing": [],
-            "reason": "",
-            "resolved_entities": entities,
-            "tools": all_tools,
-        }
-
-    # Single intent
-    schema = registry.get_schema(intent)
-    if not schema:
-        return {
-            "ready": False,
-            "missing": ["intent"],
-            "reason": f"I don't know how to handle '{intent}' yet.",
-            "resolved_entities": entities,
-            "tools": [],
-        }
-
-    # Stage 2: Apply defaults
-    resolved = registry.apply_defaults(intent, entities)
-
-    # Stage 3: Required fields check
-    missing = registry.validate_entities(intent, resolved)
-
-    if missing:
-        return {
-            "ready": False,
-            "missing": missing,
-            "reason": f"I need more information to proceed.",
-            "resolved_entities": resolved,
-            "tools": schema.tool_mapping,
-        }
-
-    # Stage 4: Low confidence check
-    low_conf_threshold = get_settings().agent.adaptive_reflection.confidence_low
-    if ctx.confidence < low_conf_threshold:
-        return {
-            "ready": False,
-            "missing": ["low_confidence"],
-            "reason": f"I'm not entirely sure. Did you mean to use {intent}?",
-            "resolved_entities": resolved,
-            "tools": schema.tool_mapping,
-        }
-
-    # All checks passed
-    return {
-        "ready": True,
-        "missing": [],
-        "reason": "",
-        "resolved_entities": resolved,
-        "tools": schema.tool_mapping,
-    }
-
-
 async def validation_node(state: AgentState) -> dict[str, Any]:
-    """Pure Python validation — runs the pipeline against StructuredContext.
+    """Validate the compiler pipeline output before execution.
+
+    Checks:
+    - ``_logical_workflow`` exists and has nodes.
+    - ``_optimized_graph`` (or ``_execution_graph``) is valid.
+    - Budget/latency within acceptable thresholds.
 
     Returns:
-        - ``_validation_result``: the full validation result dict
-        - ``_ready_to_plan``: True if execution should proceed to planner
-        - ``_needs_clarification``: True if clarification is needed
+        - ``_validation_result``: the full validation result dict.
+        - ``_ready_to_plan``: True if execution should proceed (renamed for routing compat).
+        - ``_needs_clarification``: True if clarification is needed.
     """
-    ctx: StructuredContext | None = state.get("_structured_context")
+    workflow = state.get("_logical_workflow")
+    graph = state.get("_optimized_graph") or state.get("_execution_graph")
+    within_budget = state.get("_within_budget", True)
+    warnings = state.get("_estimate_warnings", [])
 
-    if not ctx or not ctx.intent:
-        return {
-            "_validation_result": {
-                "ready": False,
-                "missing": ["intent"],
-                "reason": "What would you like me to help with?",
-                "resolved_entities": {},
-                "tools": [],
-            },
-            "_ready_to_plan": False,
-            "_needs_clarification": True,
-        }
+    missing: list[str] = []
+    reason = ""
 
-    result = _validate_pipeline(ctx)
+    # Stage 1: Workflow exists
+    if not workflow:
+        missing.append("workflow")
+        reason = "What would you like me to help with?"
+    else:
+        nodes = workflow.get("nodes", []) if isinstance(workflow, dict) else []
+        if not nodes:
+            missing.append("operations")
+            reason = "I need more specific instructions to build a plan."
 
-    needs_clarification = not result["ready"]
+    # Stage 2: Graph exists
+    if not missing and not graph:
+        missing.append("execution_graph")
+        reason = "Could not compile a valid execution plan."
+
+    # Stage 3: Budget check
+    if not missing and not within_budget:
+        warnings_str = "; ".join(warnings[:3])
+        logger.warning("validation_node.budget_exceeded", warnings=warnings_str)
+        missing.append("budget")
+        reason = f"Budget constraints exceeded: {warnings_str}"
+
+    ready = len(missing) == 0
+    needs_clarification = not ready
 
     if needs_clarification:
         logger.info(
             "validation_node.needs_clarification",
-            intent=ctx.intent,
-            missing=result["missing"],
+            missing=missing,
+            reason=reason,
         )
     else:
         logger.info(
             "validation_node.ready",
-            intent=ctx.intent,
-            tools=result["tools"],
+            graph_nodes=len(graph.get("nodes", {})) if isinstance(graph, dict) else 0,
         )
 
     return {
-        "_validation_result": result,
-        "_ready_to_plan": result["ready"],
-        "_needs_clarification": not result["ready"],
+        "_validation_result": {
+            "ready": ready,
+            "missing": missing,
+            "reason": reason,
+        },
+        "_ready_to_plan": ready,
+        "_needs_clarification": needs_clarification,
     }
 
 
 def validation_result_as_string(result: dict[str, Any]) -> str:
     """Convert a validation result into a human-readable clarification question."""
     missing = result.get("missing", [])
-    if not missing:
+    reason = result.get("reason", "")
+    if not missing or not reason:
         return ""
-
-    if "intent" in missing:
-        return result.get("reason", "What would you like me to do?")
-
-    if "low_confidence" in missing:
-        return result.get("reason", "Could you clarify what you're looking for?")
-
-    # Generic: ask for the first missing field
-    field = missing[0].replace("_", " ")
-    return f"What's the {field}?"
+    return reason

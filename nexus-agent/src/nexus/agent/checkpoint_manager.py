@@ -28,7 +28,7 @@ async def find_checkpoint_before(
     Args:
         graph: Compiled LangGraph StateGraph.
         config: Runnable config with ``thread_id``.
-        target_node: Node name to find (e.g. ``"PlannerNode"``, ``"ExecutorNode"``).
+        target_node: Node name to find (e.g. ``"CompilerNode"``, ``"ExecutorNode"``).
 
     Returns:
         The ``StateSnapshot`` at that checkpoint, or None.

@@ -1,38 +1,35 @@
 """
-Production Agent Orchestration Graph — 10-node LangGraph state machine.
+Deterministic Workflow Compiler Graph — 13-node deterministic pipeline.
 
 Nodes
 =====
-1.  **RouterNode** — Query classifier + router.  Routes to extraction or planner.
-2.  **ExtractionNode** — LLM intent + entity extraction from user message.
-3.  **NormalizationNode** — Normalizes entity values (dates, locations, currencies).
-4.  **ContextMergeNode** — Merges normalized extraction into StructuredContext.
-5.  **ValidationNode** — Pure Python validation of extracted entities.
-6.  **ClarificationNode** — Asks for missing information, ends graph.
-7.  **PlannerNode** — Builds DAG execution plan (dependency analysis + waves).
-8.  **ApprovalGateNode** — Checks each tool's risk_level for HITL approval.
-9.  **ExecutorNode** — Wave-based concurrent tool execution with retry + timeout.
-10. **ReflectionNode** — Evaluates results, decides retry or proceed.
-11. **ResponseNode** — Composes final answer from tool results.
+1.  **RouterNode** — Query classifier. Routes conversational → ResponseNode; workflow → SemanticPlannerNode.
+2.  **SemanticPlannerNode** — LLM → ``LogicalWorkflow`` via capability catalog.
+3.  **CompilerNode** — Deterministic codegen: LogicalWorkflow → ExecutionGraph.
+4.  **OptimizerNode** — PassManager fixpoint optimizer on ExecutionGraph.
+5.  **EstimatorNode** — Cost/latency estimation & budget check.
+6.  **ValidationNode** — Schema/constraint validation of the optimized graph.
+7.  **ClarificationNode** — Asks for missing info, ends graph.
+8.  **ApprovalGateNode** — HITL check per tool risk level.
+9.  **ExecutorNode** — Wave-based concurrent tool execution with retry.
+10. **AggregatorNode** — Pure Python ReduceNode execution.
+11. **ReflectionNode** — Graph diffing & patching for failed tasks.
+12. **ResponseNode** — LLM narrative from tool results.
+13. **MemoryHelperNode** — Persist to pgvector long-term memory.
 
 Pipeline
 ========
 RouterNode
-  |-> ExtractionNode -> NormalizationNode -> ContextMergeNode -> ValidationNode
-  |     |-> ClarificationNode -> END (missing info)
-  |     |-> PlannerNode -> ExecutorNode -> ReflectionNode -> ResponseNode -> END
-  |-> PlannerNode (multi-intent, bypasses extraction)
-  |-> ResponseNode (greeting/meta)
-
-Interrupts
-==========
-``interrupt_before=["ExecutorNode"]`` when any planned tool has
-``requires_approval=True`` or ``risk_level="high"``.
+  |-> SemanticPlannerNode -> CompilerNode -> OptimizerNode -> EstimatorNode -> ValidationNode
+  |     |-> ApprovalGateNode -> ExecutorNode -> AggregatorNode -> ReflectionNode
+  |     |     |-> ExecutorNode (retry sub-graph)
+  |     |     |-> ResponseNode -> MemoryHelperNode -> END
+  |     |-> ClarificationNode -> END
+  |-> ResponseNode -> MemoryHelperNode -> END
 """
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from typing import Any
 
@@ -41,16 +38,10 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, StateGraph
 
 from nexus.agent.executors.concurrent_executor import ConcurrentExecutor
-from nexus.agent.memory.context_manager import (
-    compress_history,
-    filter_relevant_tools,
-    truncate_tool_result,
-)
-from nexus.agent.planners.dag_planner import PlannerRunner
-from nexus.agent.registry.intent_registry import populate_from_tools
 from nexus.agent.router import QueryType
 from nexus.agent.state import AgentState
 from nexus.config.settings import get_settings
+from nexus.execution.event_emitter import emit_wave_completed, emit_execution_finished
 from nexus.llm.client import LLMClient
 from nexus.redis_client.pubsub import EventBus
 from nexus.tools.discovery import DynamicToolSelector
@@ -60,12 +51,16 @@ logger = structlog.get_logger("nexus.agent.graph")
 
 
 # ============================================================================
-# Node Wrapper
+# Node Wrapper — binds dependencies to a graph node function
 # ============================================================================
 
 
 def node(fn: Any, *args: Any, **kwargs: Any) -> Callable[[AgentState], Any]:
-    """Wrap a graph node function with pre-bound dependencies."""
+    """Wrap a graph node function with pre-bound dependencies.
+
+    The returned wrapper passes ``(state, *args, **kwargs)`` to ``fn``.
+    Immutability enforcement is applied per-node by the ``@context_node`` decorator.
+    """
 
     async def wrapper(state: AgentState) -> dict[str, Any]:
         return await fn(state, *args, **kwargs)
@@ -74,16 +69,15 @@ def node(fn: Any, *args: Any, **kwargs: Any) -> Callable[[AgentState], Any]:
 
 
 # ============================================================================
-# Routing
+# Routing (4 conditional edges)
 # ============================================================================
 
 
 def route_after_router(state: AgentState) -> str:
-    """Route based on query type and safety result.
+    """Route based on query type.
 
-    - rejected → ResponseNode (error)
-    - NO_TOOL_NEEDED → ResponseNode (direct response)
-    - all tool-requiring types → ExtractionNode (intent extraction)
+    - conversational / NO_TOOL_NEEDED → ResponseNode
+    - workflow / tool-requiring → SemanticPlannerNode
     """
     safety = state.get("_safety_result", {})
     if safety.get("action") == "reject":
@@ -91,91 +85,129 @@ def route_after_router(state: AgentState) -> str:
         return "ResponseNode"
 
     qtype = state.get("_query_type", QueryType.SINGLE_TOOL.value)
-
     if qtype == QueryType.NO_TOOL_NEEDED.value:
         return "ResponseNode"
 
-    # All tool-requiring queries go through SemanticParser for intent parsing.
-    # The SemanticParser checks its cache first; on miss, falls through to ExtractionNode.
-    return "SemanticParserNode"
+    return "SemanticPlannerNode"
 
 
 def route_after_validation(state: AgentState) -> str:
     """Route based on validation result.
 
-    - If validation ready → CapabilityResolverNode (stage 1 resolution)
-    - If clarification needed → ClarificationNode (which ends the graph)
+    - empty workflow (0 nodes) → ResponseNode (conversational follow-up)
+    - valid → ApprovalGateNode (proceed to HITL check)
+    - invalid → ClarificationNode (missing info, ends graph)
     """
-    if state.get("_ready_to_plan"):
-        return "CapabilityResolverNode"
+    workflow = state.get("_logical_workflow", {})
+    nodes = workflow.get("nodes", []) if isinstance(workflow, dict) else []
+    if len(nodes) == 0:
+        logger.info("graph.route_empty_workflow")
+        return "ResponseNode"
 
-    return "ClarificationNode"
-
-
-def route_after_resolution(state: AgentState) -> str:
-    """Route based on capability resolver result.
-
-    - If candidate set was found → DependencyResolverNode (stage 2)
-    - If no candidate set → PlannerNode (LLM fallback)
-    """
-    if state.get("_candidate_set"):
-        return "DependencyResolverNode"
-
-    return "PlannerNode"
-
-
-def route_after_plan_validator(state: AgentState) -> str:
-    """Route based on plan validation result.
-
-    - If validation passed → ApprovalGateNode
-    - If validation failed → ClarificationNode (ends graph, asks user)
-    """
-    if state.get("_routing_decision") == "clarify":
-        logger.info("plan_validator.routing_to_clarification", errors=state.get("errors", [])[-1:])
+    if state.get("_ready_to_plan") is False:
         return "ClarificationNode"
+
+    errors = state.get("errors", [])
+    if errors and _has_validation_errors(errors):
+        return "ClarificationNode"
+
     return "ApprovalGateNode"
 
 
-def route_after_approval_gate(state: AgentState) -> str:
+def route_after_approval(state: AgentState) -> str:
     """Route based on approval gate decision.
 
-    - If approval needed + no decision OR rejected → ResponseNode (ends graph)
-    - If approval granted (exact value "approved") → ExecutorNode (proceed)
+    - approved → ExecutorNode
+    - rejected / not granted → ResponseNode
     """
-    needs = state.get("_needs_approval", False)
+    granted = state.get("_approval_granted", True)
     decision = state.get("_approval_decision")
-    # Only explicit "approved" proceeds to execution — everything else halts
-    if needs and decision != "approved":
-        logger.info("approval_gate.routing_to_response", needs=needs, decision=decision)
+    if decision == "rejected" or granted is False:
         return "ResponseNode"
-    if needs and decision == "approved":
-        logger.info("approval_gate.routing_to_executor", needs=needs, decision=decision)
-        return "ExecutorNode"
     return "ExecutorNode"
-
-
-def route_after_executor(state: AgentState) -> str:
-    """Route based on execution results.
-
-    - All successful → ResponseNode
-    - Partial failures → ReflectionNode
-    """
-    failed = state.get("_executor_failed", [])
-    if not failed:
-        return "ResponseNode"
-    return "ReflectionNode"
 
 
 def route_after_reflection(state: AgentState) -> str:
     """Route based on reflection decision.
 
-    - Retry needed → PlannerNode
-    - Finalize → ResponseNode
+    - retry → ExecutorNode (retry only failed sub-graph)
+    - finalize → ResponseNode
     """
     decision = state.get("_routing_decision", "finalize")
     if decision == "retry":
-        return "PlannerNode"
+        return "ExecutorNode"
     return "ResponseNode"
+
+
+def _has_validation_errors(errors: list) -> bool:
+    """Check if any error is a validation/clarification error vs a runtime error.
+
+    Keywords come from ``settings.agent.validation_error_keywords``.
+    """
+    from nexus.config.settings import get_settings as _g_settings
+    try:
+        keywords = _g_settings().agent.validation_error_keywords
+    except Exception:
+        keywords = ["missing", "required", "invalid", "clarification", "validation"]
+    for err in errors:
+        if isinstance(err, str) and any(kw in err.lower() for kw in keywords):
+            return True
+    return False
+
+
+# ============================================================================
+# MapNode helpers
+# ============================================================================
+
+
+def _expand_map_inputs(inputs: dict, item: Any) -> dict:
+    """Dynamically substitute the iteration item into the tool inputs recursively.
+
+    Recursively walks the entire inputs tree (dicts, lists, strings) and
+    replaces:
+    - ``"${item}"`` → the raw item value
+    - ``"${item.field}"`` → ``item["field"]``
+    - ``"${item.field.sub}"`` → ``item["field"]["sub"]``
+    - Inline like ``"https://example.com/${item.id}"`` → resolved URL
+
+    No structural assumptions about input shape — works at any depth.
+    """
+    return _substitute_item(inputs, item)
+
+
+def _substitute_item(obj: Any, item: Any) -> Any:
+    """Recursively walk and substitute ``${item}`` / ``${item.field}`` placeholders."""
+    import re as _re
+
+    if isinstance(obj, dict):
+        return {k: _substitute_item(v, item) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_substitute_item(elem, item) for elem in obj]
+    if isinstance(obj, str) and "${item" in obj:
+        if obj == "${item}":
+            return item
+        m = _re.match(r"^\$\{item\.(.+)\}$", obj)
+        if m:
+            path = m.group(1).split(".")
+            val: Any = item
+            for p in path:
+                if isinstance(val, dict) and p in val:
+                    val = val[p]
+                else:
+                    return obj
+            return val
+        # Inline replacement: "https://example.com/${item.id}"
+        def _inline_replacer(m: _re.Match) -> str:
+            path = m.group(1).split(".")
+            v: Any = item
+            for p in path:
+                if isinstance(v, dict) and p in v:
+                    v = v[p]
+                else:
+                    return m.group(0)
+            return str(v) if v is not None else m.group(0)
+        return _re.sub(r"\$\{item\.([a-zA-Z0-9_.]+)\}", _inline_replacer, obj)
+    return obj
 
 
 # ============================================================================
@@ -188,80 +220,69 @@ async def router_node(
     llm: LLMClient,
     model: str,
 ) -> dict[str, Any]:
-    """Classify the incoming query and determine the optimal path.
-
-    Sets ``_query_type`` and ``_preferred_tools`` in state.
-    """
+    """Classify the incoming query and determine the optimal path."""
     from nexus.agent.router import node_classify_query
+
     return await node_classify_query(state, llm, model)
 
 
 # ============================================================================
-# Node: Planner
+# Node: Approval Gate
 # ============================================================================
 
 
 async def approval_gate_node(state: AgentState) -> dict[str, Any]:
-    """Check if any planned tool requires human approval.
-
-    Reads the execution plan, checks each tool's risk_level/requires_approval
-    against the tool registry. If approval is needed:
-    - First pass (no decision): asks user, routes to ResponseNode → END
-    - Resume with approval: sets ``_approval_granted``, proceeds to executor
-    - Resume with rejection: adds error, proceeds to executor (will skip)
-
-    Dynamic — driven entirely by tool metadata. No hardcoded tool names.
-    Approval gate at graph level means executor-level ``skip_approval=True``
-    is safe (only already-cleared tools reach the executor).
-    """
-    plan = state.get("_execution_plan", {})
-    tool_names = plan.get("tool_names", [])
+    """Check if any planned tool requires human approval."""
+    graph_data = state.get("_optimized_graph") or state.get("_execution_graph")
     available_tools = state.get("available_tools", [])
-    tasks_data = state.get("dag_tasks", [])
 
-    logger.debug("approval_gate.check", tool_names=tool_names, avail_count=len(available_tools))
+    if not graph_data or not available_tools:
+        return {"_approval_granted": True}
 
-    if not tool_names or not available_tools:
+    # Extract tool names from the compiled graph
+    nodes = graph_data.get("nodes", {}) if isinstance(graph_data, dict) else {}
+    tool_names = list({
+        nd.get("tool_name", "") for nd in nodes.values()
+        if isinstance(nd, dict) and nd.get("tool_name")
+    })
+
+    if not tool_names:
         return {"_approval_granted": True}
 
     from nexus.tools.approval_gate import check_plan_approval, format_approval_message
 
-    # Build task input map: tool_name → inputs (for per-call approval scope)
     task_inputs: dict[str, list[dict[str, Any]]] = {}
-    for t in tasks_data if isinstance(tasks_data, list) else []:
-        tname = t.get("tool_name", "") if isinstance(t, dict) else ""
-        if tname:
-            task_inputs.setdefault(tname, []).append(t.get("inputs", {}))
-
-    # Check risk_level of each tool in available_tools
-    for t in available_tools:
-        if t.get("name") in tool_names:
-            rl = t.get("risk_level", "low")
-            logger.debug("approval_gate.tool_risk", tool=t.get("name"), risk=rl)
+    for nd in nodes.values():
+        if isinstance(nd, dict):
+            tool = nd.get("tool_name", "")
+            if tool:
+                task_inputs.setdefault(tool, []).append(nd.get("inputs", {}))
 
     pending = check_plan_approval(tool_names, available_tools)
-
     if not pending:
-        logger.info("approval_gate.no_pending", tool_names=tool_names)
         return {"_approval_granted": True}
 
-    # Check if approval decision exists (persisted across turns via checkpointer)
     decision = state.get("_approval_decision")
     if decision == "approved":
-        logger.info("approval_gate.approved", tools=tool_names)
-        # Clear decision and needs_approval so routing goes to ExecutorNode
-        return {"_approval_granted": True, "_approval_decision": None, "_needs_approval": False}
+        return {
+            "_approval_granted": True,
+            "_approval_decision": None,
+            "_needs_approval": False,
+        }
     if decision == "rejected":
-        logger.info("approval_gate.rejected", tools=tool_names)
-        return {"_approval_granted": False, "_approval_decision": None, "_needs_approval": False, "errors": ["Tool execution rejected by user"]}
+        return {
+            "_approval_granted": False,
+            "_approval_decision": None,
+            "_needs_approval": False,
+            "errors": ["Tool execution rejected by user"],
+        }
 
-    # Check if a previous approval request has expired
     import time as _time
+
     requested_at = state.get("_approval_requested_at")
     if requested_at is not None:
-        expiry = get_settings().agent.run_lock_ttl_s  # reuse run_lock TTL for approval expiry
+        expiry = get_settings().agent.run_lock_ttl_s
         if _time.time() - requested_at > expiry:
-            logger.info("approval_gate.expired", tool_names=[t["name"] for t in pending])
             return {
                 "_approval_granted": False,
                 "_approval_decision": None,
@@ -269,18 +290,15 @@ async def approval_gate_node(state: AgentState) -> dict[str, Any]:
                 "errors": ["Approval request has expired — please try again"],
             }
 
-    # Build per-call approval payload (tool name + inputs for scoped approval)
     pending_with_inputs: list[dict[str, Any]] = []
     for t in pending:
         entry: dict[str, Any] = {"name": t["name"]}
         t_inputs = task_inputs.get(t["name"], [])
         if t_inputs:
-            entry["inputs"] = t_inputs[0]  # primary task inputs
+            entry["inputs"] = t_inputs[0]
         pending_with_inputs.append(entry)
 
-    # No decision yet — ask for approval
     msg = format_approval_message(pending_with_inputs)
-    logger.info("approval_gate.awaiting", tool_names=[t["name"] for t in pending])
 
     return {
         "final_response": msg,
@@ -288,95 +306,6 @@ async def approval_gate_node(state: AgentState) -> dict[str, Any]:
         "_pending_approval_tools": pending_with_inputs,
         "_approval_requested_at": _time.time(),
         "_routing_decision": "finalize",
-    }
-
-
-async def planner_node(
-    state: AgentState,
-    llm: LLMClient,
-    model: str,
-) -> dict[str, Any]:
-    """Build an execution plan: analyze dependencies, construct DAG.
-
-    Uses the DAG Planner module with:
-    - Implicit dependency injection (geocode → weather)
-    - Explicit I/O schema dependency analysis
-    - Cycle detection
-    - Topological sort into execution waves
-
-    Fast-path: if resuming from an approved plan, reuse existing plan
-    without calling the LLM again (ensures exactly what was approved
-    is what executes).
-    """
-    # Fast-path: approval resume — don't re-plan, use the approved plan
-    if state.get("_approval_decision") == "approved" and state.get("_execution_plan"):
-        logger.info("planner_node.approval_fast_path", plan_exists=True)
-        existing_plan = state["_execution_plan"]
-        existing_tasks = state.get("dag_tasks", [])
-        return {
-            "_execution_plan": existing_plan,
-            "dag_tasks": existing_tasks,
-        }
-
-    tools = state.get("available_tools", [])
-    user_input = _last_user_message(state)
-    intents = _get_intents(state)
-
-    # Query capability registry to enrich planner context
-    capabilities_context = ""
-    try:
-        from nexus.agent.registry.capability_registry import get_capability_registry
-        cap_reg = get_capability_registry()
-        for intent in intents:
-            matches = cap_reg.find_by_description(intent)
-            if matches:
-                cap_name = matches[0][0].name
-                cap_tools = matches[0][0].tool_names
-                capabilities_context += f"Capability '{cap_name}' covers tools: {', '.join(cap_tools)}\n"
-    except Exception:
-        pass
-
-    # Filter tools to relevant ones
-    _agent_settings = get_settings().agent
-    intent_text = " ".join(intents) or user_input
-    relevant_tools = filter_relevant_tools(intent_text, tools, top_k=_agent_settings.max_planning_tools)
-
-    # Build the plan
-    plan = await PlannerRunner.build_plan(
-        intents=intents,
-        tools=relevant_tools,
-        user_input=user_input,
-        llm=llm,
-        model=model,
-        capabilities_context=capabilities_context,
-        state=dict(state),
-    )
-
-    # Store plan in state
-    return {
-        "_execution_plan": {
-            "waves": [
-                {
-                    "wave": w.wave,
-                    "tasks": [
-                        {
-                            "id": t.id,
-                            "tool_name": t.tool_name,
-                            "inputs": t.inputs,
-                            "depends_on": t.depends_on,
-                        }
-                        for t in w.tasks
-                    ],
-                }
-                for w in plan.waves
-            ],
-            "tool_names": plan.tool_names,
-            "dependencies": plan.dependencies,
-        },
-        "dag_tasks": [
-            {"id": t.id, "tool_name": t.tool_name, "inputs": t.inputs, "depends_on": t.depends_on}
-            for w in plan.waves for t in w.tasks
-        ],
     }
 
 
@@ -391,68 +320,112 @@ async def executor_node(
 ) -> dict[str, Any]:
     """Execute the DAG plan using the Concurrent Executor.
 
-    Handles:
-    - Wave-based parallel execution
-    - Fault isolation (one failure doesn't block other tasks)
-    - Retry with exponential backoff
-    - Per-tool and global timeouts
+    Reads ``_optimized_graph`` or ``_execution_graph`` from the state
+    (produced by the deterministic Compiler), converts PhysicalNodes
+    to ExecutionTasks, and runs them via the ConcurrentExecutor.
     """
-    plan_data = state.get("_execution_plan") or {}
-    waves_data = plan_data.get("waves", [])
-    tasks_data = state.get("dag_tasks", [])
+    from nexus.agent.planners.dag_planner import ExecutionTask, ExecutionWave
 
-    if not tasks_data or not waves_data:
-        # No plan was generated — return error so ReflectionNode can route
-        logger.warning("executor_node.no_plan", query_type=state.get("_query_type", "unknown"))
-        return {
-            "_executor_results": {},
-            "_executor_failed": [],
-            "_executor_all_success": False,
-            "errors": ["No execution plan available — planner did not produce tasks"],
-        }
+    graph_data = state.get("_optimized_graph") or state.get("_execution_graph")
+    if graph_data is None or not isinstance(graph_data, dict):
+        return {"_executor_results": {}, "_executor_failed": [], "_executor_all_success": False, "errors": ["No execution graph available"]}
 
-    # Sanitize tasks_data — ensure every item is a dict, not a tuple or other type
-    tasks_data = [
-        t if isinstance(t, dict) else dict(t) for t in tasks_data
+    nodes = graph_data.get("nodes", {})
+    waves = graph_data.get("waves", [])
+    if not nodes or not waves:
+        return {"_executor_results": {}, "_executor_failed": [], "_executor_all_success": False, "errors": ["No execution graph available"]}
+
+    task_map = {}
+    ref_to_id: dict[str, str] = {}
+    collections = state.get("_collections", {})
+    for nid, ndata in nodes.items():
+        kind = ndata.get("kind", "")
+        if kind == "map":
+            body = ndata.get("body", {})
+            symbolic_ref = ndata.get("symbolic_ref", "").replace("_map", "")
+            if symbolic_ref:
+                ref_to_id[symbolic_ref] = nid
+            collection_key = ndata.get("iterate_over", "")
+            items = collections.get(collection_key, [])
+            if items:
+                # Dynamic fan-out: one task per item
+                for i, item in enumerate(items):
+                    task_inputs = _expand_map_inputs(body.get("inputs", {}), item)
+                    task_id = f"{nid}_item_{i}"
+                    task_map[task_id] = ExecutionTask(
+                        id=task_id,
+                        tool_name=body.get("tool_name", body.get("capability", "unknown")),
+                        endpoint_url=body.get("endpoint_url", ""),
+                        http_method=body.get("http_method", "GET"),
+                        inputs=task_inputs,
+                        depends_on=ndata.get("depends_on", []),
+                    )
+                    # Register each item's task_id under its symbolic_ref for placeholder resolution
+                    ref_to_id.get(symbolic_ref)
+                    ref_to_id[f"{nid}_item_{i}"] = task_id
+            else:
+                # Fallback: no collection available — run once with body inputs
+                task_map[nid] = ExecutionTask(
+                    id=nid,
+                    tool_name=body.get("tool_name", body.get("capability", "unknown")),
+                    endpoint_url=body.get("endpoint_url", ""),
+                    http_method=body.get("http_method", "GET"),
+                    inputs=body.get("inputs", {}),
+                    depends_on=ndata.get("depends_on", []),
+                )
+        elif kind == "tool":
+            symbolic_ref = ndata.get("symbolic_ref", "")
+            if symbolic_ref:
+                ref_to_id[symbolic_ref] = nid
+            task_map[nid] = ExecutionTask(
+                id=nid,
+                tool_name=ndata.get("tool_name", ndata.get("capability", "unknown")),
+                endpoint_url=ndata.get("endpoint_url", ""),
+                http_method=ndata.get("http_method", "GET"),
+                inputs=ndata.get("inputs", {}),
+                depends_on=ndata.get("depends_on", []),
+            )
+
+    wave_objects = [
+        ExecutionWave(wave=idx, tasks=[task_map[tid] for tid in w if tid in task_map])
+        for idx, w in enumerate(waves)
     ]
 
-    # Build Task objects for the executor
-    from nexus.agent.planners.dag_planner import ExecutionTask
-
-    task_map = {t["id"]: ExecutionTask(
-        id=t["id"],
-        tool_name=t["tool_name"],
-        inputs=t.get("inputs", {}),
-        depends_on=t.get("depends_on", []),
-    ) for t in tasks_data}
-
-    # Build Wave objects
-    from nexus.agent.planners.dag_planner import ExecutionWave
-
-    waves = [
-        ExecutionWave(
-            wave=w["wave"],
-            tasks=[task_map[t["id"]] for t in w["tasks"] if t["id"] in task_map],
-        )
-        for w in waves_data
-    ]
-
-    # Build tool map from available_tools for the executor
     available_tools = state.get("available_tools", [])
     tool_map = {t["name"]: t for t in available_tools if isinstance(t, dict) and t.get("name")}
 
-    executor = ConcurrentExecutor(tool_executor=tool_executor, tool_map=tool_map)
+    executor = ConcurrentExecutor(
+        tool_executor=tool_executor,
+        tool_map=tool_map,
+        session_id=state.get("session_id", ""),
+    )
+    executor.set_ref_aliases(ref_to_id)
     _settings = get_settings()
 
     results = await executor.execute(
         tasks=list(task_map.values()),
-        waves=waves,
+        waves=wave_objects,
         max_concurrency=_settings.agent.adaptive_reflection.max_concurrent_tasks,
         per_tool_timeout=_settings.tools.execution_timeout_s,
         global_timeout=_settings.agent.global_execution_timeout_s,
     )
 
-    # Update working memory with results
+    # Validate tool results against output contracts from the registry
+    from nexus.execution.contracts import validate_tool_result
+    from nexus.registry.client import RegistryClient
+    from nexus.db.base import async_session as _contract_session
+
+    async with _contract_session() as _cs:
+        _registry = RegistryClient(_cs)
+        for _task_id, _outcome in results.by_task.items():
+            if _outcome.status == "success":
+                _cap = _outcome.tool_name
+                _is_valid, _reason = await validate_tool_result(_cap, _outcome.data, _registry)
+                if not _is_valid:
+                    _outcome.status = "error"
+                    _outcome.error = f"Output contract failed: {_reason}"
+                    logger.warning("executor_node.contract_failed", tool=_cap, reason=_reason)
+
     tool_results = []
     for task_id, outcome in results.by_task.items():
         tool_results.append({
@@ -464,67 +437,36 @@ async def executor_node(
             "duration_ms": outcome.duration_ms,
         })
 
+    # Emit WaveCompleted events
+    session_id = state.get("session_id", "")
+    for i, wave_dict in enumerate(results.by_wave):
+        successes = sum(1 for r in wave_dict.values() if r.status == "success")
+        failures = sum(1 for r in wave_dict.values() if r.status != "success")
+        await emit_wave_completed(
+            session_id=session_id,
+            wave_index=i,
+            tasks_succeeded=successes,
+            tasks_failed=failures,
+        )
+
+    # Emit ExecutionFinished
+    status = "success" if results.all_successful else "partial" if results.failed else "failed"
+    await emit_execution_finished(
+        session_id=session_id,
+        status=status,
+        total_cost=state.get("_cost_estimate", 0.0),
+        total_latency_ms=state.get("_latency_estimate_ms", 0),
+    )
+
     return {
         "tool_results": tool_results,
-        "_executor_results": {k: {"data": v.data, "status": v.status} for k, v in results.by_task.items()},
+        "_executor_results": {
+            k: {"data": v.data, "status": v.status}
+            for k, v in results.by_task.items()
+        },
         "_executor_failed": results.failed + results.timed_out,
         "_executor_all_success": results.all_successful,
         "_tool_executed_in_turn": True,
-    }
-
-
-# ============================================================================
-# Node: Reflection
-# ============================================================================
-
-
-async def reflection_node(state: AgentState) -> dict[str, Any]:
-    """Evaluate execution results and decide next action.
-
-    - If all tasks succeeded → proceed to response
-    - If partial failures and retries remain → retry the failed tasks
-    - If max retries exceeded → proceed with partial results
-    - On unrecoverable failure, stores checkpoint for potential recovery
-    """
-    failed = state.get("_executor_failed", [])
-    retry_counts = state.get("_tool_retry_counts", {})
-
-    if not failed:
-        return {"_routing_decision": "finalize"}
-
-    tasks_to_retry = []
-    tasks_to_skip = []
-
-    max_retries_allowed = get_settings().agent.max_reflection_retries
-    for task_id in failed:
-        retries = retry_counts.get(task_id, 0)
-        if retries < max_retries_allowed:
-            tasks_to_retry.append(task_id)
-        else:
-            tasks_to_skip.append(task_id)
-
-    if tasks_to_retry:
-        new_counts = dict(retry_counts)
-        for tid in tasks_to_retry:
-            new_counts[tid] = new_counts.get(tid, 0) + 1
-
-        logger.info(
-            "reflection_node.retry",
-            retry_count=len(tasks_to_retry),
-            skip_count=len(tasks_to_skip),
-        )
-        return {
-            "_routing_decision": "retry",
-            "_tool_retry_counts": new_counts,
-            "_pending_tasks": tasks_to_retry,
-        }
-
-    # Max retries exceeded — mark checkpoint for potential recovery
-    logger.info("reflection_node.max_retries", tasks=tasks_to_skip)
-    return {
-        "_routing_decision": "finalize",
-        "_recovery_available": True,
-        "_recovery_failed_tasks": tasks_to_skip,
     }
 
 
@@ -538,28 +480,38 @@ async def response_node(
     llm: LLMClient,
     model: str,
 ) -> dict[str, Any]:
-    """Compose the final response from tool results.
-
-    If a direct response was already set (greeting / meta), return it.
-    Otherwise, use the LLM to compose a natural response from results.
-    """
+    """Compose the final response from tool results or conversation history."""
     existing = state.get("final_response")
     if existing and (
-        state.get("response_type") in ("greeting", "meta")
+        state.get("response_type") in ("greeting", "meta", "clarification")
         or state.get("_needs_approval")
     ):
         return {"final_response": existing, "_routing_decision": "finalize"}
 
-    # Compose from tool results
     tool_results = state.get("tool_results", [])
     errors = state.get("errors", [])
 
+    # DYNAMIC NATIVE CHAT: empty workflow + no tools → answer from conversation history
+    workflow = state.get("_logical_workflow", {})
+    nodes = workflow.get("nodes", []) if isinstance(workflow, dict) else []
+    if not tool_results and not errors and len(nodes) == 0:
+        messages = state.get("messages", [])
+        chat_messages = [
+            {"role": m.get("role", "user"), "content": m.get("content", "")}
+            for m in messages if isinstance(m, dict)
+        ]
+        try:
+            response = await llm.complete(
+                model=model, messages=chat_messages,
+                temperature=0.7, max_tokens=500,
+            )
+            return {"final_response": response.content or "", "_routing_decision": "finalize", "response_type": "conversational"}
+        except Exception as exc:
+            logger.error("response_node.native_chat_failed", error=str(exc))
+            return {"final_response": "I'm not sure how to respond.", "_routing_decision": "finalize", "response_type": "error"}
+
     if not tool_results and not errors:
-        return {
-            "final_response": "I processed your request.",
-            "_routing_decision": "finalize",
-            "response_type": "tool",
-        }
+        return {"final_response": "I processed your request.", "_routing_decision": "finalize", "response_type": "tool"}
 
     if errors and not tool_results:
         from nexus.agent.nodes.finalize import finalize as compose_response
@@ -596,36 +548,8 @@ def _last_user_message(state: AgentState) -> str:
     return ""
 
 
-def _get_intents(state: AgentState) -> list[str]:
-    """Extract parsed intents from state.
-
-    Prefers StructuredContext (single source of truth), falls back to
-    flat fields for backward compatibility with multi-intent queries.
-    """
-    # Try StructuredContext first
-    ctx = state.get("_structured_context")
-    if ctx and hasattr(ctx, "intent") and ctx.intent:
-        if isinstance(ctx.intent, list):
-            return ctx.intent
-        return [ctx.intent]
-
-    # Fallback to flat fields
-    intent_analysis = state.get("intent_analysis")
-    if isinstance(intent_analysis, dict):
-        goal = intent_analysis.get("primary_goal", "")
-        implied = intent_analysis.get("implied_actions", [])
-        if goal:
-            return [goal] + implied
-    intent = state.get("intent")
-    if isinstance(intent, dict):
-        text = intent.get("intent", "")
-        if text:
-            return [text]
-    return []
-
-
 # ============================================================================
-# Graph Builder
+# Graph Builder — 13 nodes, 4 routing functions
 # ============================================================================
 
 
@@ -638,12 +562,12 @@ def build_agent_graph(
     session_factory: Callable[[], Any] | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
 ) -> StateGraph:
-    """Build and compile the LangGraph production agent graph.
+    """Build and compile the 13-node deterministic workflow compiler graph.
 
     Args:
-        llm_client: LLM client.  Creates default if None.
-        tool_selector: Dynamic tool discovery.  Required for tool lookup.
-        tool_executor: Tool execution engine.  Required.
+        llm_client: LLM client. Creates default if None.
+        tool_selector: Dynamic tool discovery.
+        tool_executor: Tool execution engine.
         event_bus: Redis event bus for streaming.
         model: Model override (defaults to settings).
         session_factory: DB session factory.
@@ -659,138 +583,95 @@ def build_agent_graph(
 
     graph = StateGraph(AgentState)
 
-    # Lazy imports for new nodes (avoid circular import with memory/nodes)
-    from nexus.agent.nodes.extraction_node import extraction_node as _extraction_node
-    from nexus.agent.nodes.normalization_node import normalization_node as _normalization_node
-    from nexus.agent.nodes.context_merge_node import context_merge_node as _context_merge_node
+    # Lazy imports for new nodes
+    from nexus.agent.nodes.semantic_parser_node import semantic_parser_node as _semantic_parser_node
+    from nexus.agent.nodes.compiler_node import compiler_node as _compiler_node
+    from nexus.agent.nodes.optimizer_node import optimizer_node as _optimizer_node
+    from nexus.agent.nodes.estimator_node import estimator_node as _estimator_node
     from nexus.agent.nodes.validation_node import validation_node as _validation_node
     from nexus.agent.nodes.clarification_node import clarification_node as _clarification_node
-    from nexus.agent.nodes.plan_validator_node import plan_validator_node as _plan_validator_node
-    from nexus.agent.nodes.resolution_node import resolution_node as _resolution_node
-    from nexus.agent.nodes.task_graph_builder_node import task_graph_builder_node as _task_graph_builder_node
-    from nexus.agent.nodes.graph_optimizer_node import graph_optimizer_node as _graph_optimizer_node
-    from nexus.agent.nodes.semantic_parser_node import semantic_parser_node as _semantic_parser_node
-    from nexus.agent.nodes.goal_expander_node import goal_expander_node as _goal_expander_node
-    from nexus.agent.nodes.capability_resolver_node import capability_resolver_node as _capability_resolver_node
-    from nexus.agent.nodes.dependency_resolver_node import dependency_resolver_node as _dependency_resolver_node
+    from nexus.agent.nodes.aggregator_node import aggregator_node as _aggregator_node
+    from nexus.agent.nodes.reflection_node import reflection_node as _reflection_node
+    from nexus.agent.nodes.memory_helper_node import memory_helper_node as _memory_helper_node
 
-    # 19 production nodes — SemanticParser + GoalExpander + CapabilityResolver + DependencyResolver + existing
+    # 13 production nodes
     graph.add_node("RouterNode", node(router_node, _llm, _model))
-    graph.add_node("SemanticParserNode", node(_semantic_parser_node, _llm, _model))
-    graph.add_node("GoalExpanderNode", node(_goal_expander_node))
-    graph.add_node("CapabilityResolverNode", node(_capability_resolver_node))
-    graph.add_node("DependencyResolverNode", node(_dependency_resolver_node))
-    graph.add_node("ExtractionNode", node(_extraction_node, _llm, _model))
-    graph.add_node("NormalizationNode", node(_normalization_node))
-    graph.add_node("ContextMergeNode", node(_context_merge_node))
+    graph.add_node("SemanticPlannerNode", node(_semantic_parser_node, _llm, _model))
+    graph.add_node("CompilerNode", node(_compiler_node))
+    graph.add_node("OptimizerNode", node(_optimizer_node))
+    graph.add_node("EstimatorNode", node(_estimator_node))
     graph.add_node("ValidationNode", node(_validation_node))
     graph.add_node("ClarificationNode", node(_clarification_node))
-    graph.add_node("ResolutionNode", node(_resolution_node))
-    graph.add_node("TaskGraphBuilderNode", node(_task_graph_builder_node))
-    graph.add_node("GraphOptimizerNode", node(_graph_optimizer_node))
-    graph.add_node("PlannerNode", node(planner_node, _llm, _model))
-    graph.add_node("PlanValidatorNode", node(_plan_validator_node))
-    graph.add_node("ExecutorNode", node(executor_node, _executor))
     graph.add_node("ApprovalGateNode", node(approval_gate_node))
-    graph.add_node("ReflectionNode", node(reflection_node))
+    graph.add_node("ExecutorNode", node(executor_node, _executor))
+    graph.add_node("AggregatorNode", node(_aggregator_node))
+    graph.add_node("ReflectionNode", node(_reflection_node))
     graph.add_node("ResponseNode", node(response_node, _llm, _model))
+    graph.add_node("MemoryHelperNode", node(_memory_helper_node))
 
     graph.set_entry_point("RouterNode")
 
-    # Router → SemanticParser (with cache) or Response (greeting/error)
+    # Router → SemanticPlanner (workflow) or Response (conversational/error)
     graph.add_conditional_edges(
         "RouterNode",
         route_after_router,
         {
-            "SemanticParserNode": "SemanticParserNode",
+            "SemanticPlannerNode": "SemanticPlannerNode",
             "ResponseNode": "ResponseNode",
         },
     )
 
-    # SemanticParser → GoalExpander → CapabilityResolver → DependencyResolver → TaskGraphBuilder
-    graph.add_edge("SemanticParserNode", "GoalExpanderNode")
-    graph.add_edge("GoalExpanderNode", "CapabilityResolverNode")
-    graph.add_edge("CapabilityResolverNode", "DependencyResolverNode")
-    graph.add_edge("DependencyResolverNode", "ExtractionNode")
-    graph.add_edge("ExtractionNode", "NormalizationNode")
-    graph.add_edge("NormalizationNode", "ContextMergeNode")
-    graph.add_edge("ContextMergeNode", "ValidationNode")
+    # Linear compilation pipeline: SemanticPlanner → Compiler → Optimizer → Estimator → Validation
+    graph.add_edge("SemanticPlannerNode", "CompilerNode")
+    graph.add_edge("CompilerNode", "OptimizerNode")
+    graph.add_edge("OptimizerNode", "EstimatorNode")
+    graph.add_edge("EstimatorNode", "ValidationNode")
 
-    # Validation → Resolution (stage 1 planner) or Clarification (missing info)
+    # Validation → Response (empty workflow), ApprovalGate (valid), or Clarification (invalid)
     graph.add_conditional_edges(
         "ValidationNode",
         route_after_validation,
         {
-            "CapabilityResolverNode": "CapabilityResolverNode",
-            "ClarificationNode": "ClarificationNode",
-        },
-    )
-
-    # Clarification → END (graph stops; user responds with new message)
-    graph.add_edge("ClarificationNode", END)
-
-    # 2-stage resolution pipeline: CapabilityResolver → DependencyResolver → TaskGraphBuilder
-    # Falls through to PlannerNode (LLM) if resolver finds no candidate set
-    graph.add_conditional_edges(
-        "CapabilityResolverNode",
-        route_after_resolution,
-        {
-            "DependencyResolverNode": "DependencyResolverNode",
-            "PlannerNode": "PlannerNode",
-        },
-    )
-    graph.add_edge("DependencyResolverNode", "TaskGraphBuilderNode")
-    graph.add_edge("TaskGraphBuilderNode", "GraphOptimizerNode")
-    graph.add_edge("GraphOptimizerNode", "PlanValidatorNode")
-
-    # Planner → PlanValidator (conditional) → ApprovalGate or Clarification
-    graph.add_edge("PlannerNode", "PlanValidatorNode")
-    graph.add_conditional_edges(
-        "PlanValidatorNode",
-        route_after_plan_validator,
-        {
+            "ResponseNode": "ResponseNode",
             "ApprovalGateNode": "ApprovalGateNode",
             "ClarificationNode": "ClarificationNode",
         },
     )
+    graph.add_edge("ClarificationNode", END)
+
+    # ApprovalGate → Executor (approved) or Response (rejected/no decision)
     graph.add_conditional_edges(
         "ApprovalGateNode",
-        route_after_approval_gate,
+        route_after_approval,
         {
             "ExecutorNode": "ExecutorNode",
             "ResponseNode": "ResponseNode",
         },
     )
 
-    graph.add_conditional_edges(
-        "ExecutorNode",
-        route_after_executor,
-        {
-            "ResponseNode": "ResponseNode",
-            "ReflectionNode": "ReflectionNode",
-        },
-    )
+    # Execution → Aggregation → Reflection
+    graph.add_edge("ExecutorNode", "AggregatorNode")
+    graph.add_edge("AggregatorNode", "ReflectionNode")
 
+    # Reflection → Executor (retry sub-graph) or Response (finalize)
     graph.add_conditional_edges(
         "ReflectionNode",
         route_after_reflection,
         {
-            "PlannerNode": "PlannerNode",
+            "ExecutorNode": "ExecutorNode",
             "ResponseNode": "ResponseNode",
         },
     )
 
-    graph.add_edge("ResponseNode", END)
+    # Response → Memory (persist) → END
+    graph.add_edge("ResponseNode", "MemoryHelperNode")
+    graph.add_edge("MemoryHelperNode", END)
 
-    # Compile with checkpointer.
-    # The checkpointer should be provided by the caller (initialized at API startup).
-    # If None, fall back to MemorySaver (in-memory, no persistence across restarts).
+    # Compile with checkpointer
     _cp = checkpointer
     if _cp is None:
         from langgraph.checkpoint.memory import MemorySaver
-        _cp = MemorySaver()
-        logger.warning("graph.using_memory_saver", reason="no checkpointer provided to build_agent_graph")
 
-    return graph.compile(
-        checkpointer=_cp,
-    )
+        _cp = MemorySaver()
+
+    return graph.compile(checkpointer=_cp)

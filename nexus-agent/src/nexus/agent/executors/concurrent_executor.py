@@ -26,6 +26,7 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -52,6 +53,7 @@ class ToolExecutionResult:
     data: Any = None
     error: str | None = None
     duration_ms: float = 0.0
+    execution_key: str | None = None
 
 
 @dataclass
@@ -72,14 +74,19 @@ class ExecutionResults:
 # Placeholder Resolution
 # ============================================================================
 
-_PLACEHOLDER_RE = re.compile(r"\$\{(.+?)\.result(?:\.(.+?))?\}")
+_PLACEHOLDER_RE = re.compile(r"\$\{(.+?)\.result(?:\[(\d+)\])?(?:\.(.+?))?\}")
 
 
 def _resolve_placeholders(
     inputs: dict[str, Any],
     results: dict[str, Any],
+    ref_aliases: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Resolve ``${task_id.result.field}`` placeholders with actual values."""
+    """Resolve ``${task_id.result.field}`` placeholders with actual values.
+
+    If a task_id doesn't match a physical node ID, ``ref_aliases`` is
+    checked to map symbolic refs (set by the Compiler) to task IDs.
+    """
     resolved = {}
 
     # Fast-path: if no inputs contain placeholders, return inputs as-is
@@ -92,13 +99,27 @@ def _resolve_placeholders(
             match = _PLACEHOLDER_RE.match(val)
             if match:
                 task_id = match.group(1)
-                field_path = match.group(2)
-                result = results.get(task_id)
-                if result is not None:
-                    if field_path:
-                        val = _deep_get(result, field_path)
+                result_data = results.get(task_id)
+                # Fall back to ref_alias lookup if task_id is a symbolic ref
+                if result_data is None and ref_aliases:
+                    physical_id = ref_aliases.get(task_id)
+                    if physical_id:
+                        result_data = results.get(physical_id)
+                if result_data is not None:
+                    # Build path: optional [index] + optional .field
+                    idx_str = match.group(2)  # e.g. "0" or None
+                    field_path = match.group(3)  # e.g. "longitude" or None
+                    if idx_str is not None:
+                        if field_path:
+                            path = f"[{idx_str}].{field_path}"
+                        else:
+                            path = f"[{idx_str}]"
                     else:
-                        val = result
+                        path = field_path or ""
+                    if path:
+                        val = _deep_get(result_data, path)
+                    else:
+                        val = result_data
         resolved[key] = val
     return resolved
 
@@ -108,7 +129,13 @@ def _parse_path_segment(segment: str) -> tuple[str, int | None]:
 
     Returns (key, None) for plain keys like ``latitude``.
     Returns (key, index) for indexed access like ``results[0]``.
+    Returns ("", index) for pure index access like ``[0]``.
     """
+    # Pure bracket-only index: [0]
+    pure_idx = re.match(r"^\[(\d+)\]$", segment)
+    if pure_idx:
+        return "", int(pure_idx.group(1))
+    # Key with index: results[0]
     match = re.match(r"^([^\[]+)\[(\d+)\]$", segment)
     if match:
         return match.group(1), int(match.group(2))
@@ -128,6 +155,22 @@ def _deep_get(obj: Any, path: str) -> Any:
     current = obj
     for segment in path.split("."):
         key, idx = _parse_path_segment(segment)
+
+        # Pure index access: [N] — navigate into list
+        if not key and idx is not None:
+            if isinstance(current, list) and len(current) > idx:
+                current = current[idx]
+            elif isinstance(current, dict):
+                # Scan dict values for a list
+                for v in current.values():
+                    if isinstance(v, list) and len(v) > idx:
+                        current = v[idx]
+                        break
+                else:
+                    return ""
+            else:
+                return ""
+            continue
 
         if isinstance(current, dict):
             if key in current:
@@ -178,6 +221,13 @@ def _deep_get(obj: Any, path: str) -> Any:
 class ConcurrentExecutor:
     """Wave-based concurrent tool executor with fault isolation and retry.
 
+    Features:
+    - Per-domain adaptive concurrency: independent semaphores per API domain.
+    - execution_key idempotency: tasks with the same (tool, inputs) hash
+      are skipped if already completed in a prior retry iteration.
+    - Ref-based placeholder resolution: placeholders like ${Geo.result.field}
+      are resolved first by physical task ID, then by symbolic ref alias.
+
     Accepts ``ExecutionPlan`` from the DAG Planner and executes all tools
     through the configured ``ToolExecutor``.
     """
@@ -186,10 +236,25 @@ class ConcurrentExecutor:
         self,
         tool_executor: ToolExecutor | None = None,
         tool_map: dict[str, dict[str, Any]] | None = None,
+        session_id: str = "",
     ) -> None:
         self._executor = tool_executor or ToolExecutor()
         self._settings = get_settings()
         self._tool_map: dict[str, dict[str, Any]] = tool_map or {}
+        self._domain_semaphores: dict[str, asyncio.Semaphore] = {}
+        self._completed_keys: set[str] = set()
+        self._session_id = session_id
+        self._ref_aliases: dict[str, str] = {}  # symbolic_ref → task_id
+        from nexus.config.settings import get_settings as _ce_settings
+        self._domain_cap = _ce_settings().tools.max_domain_concurrency
+
+    def set_ref_aliases(self, aliases: dict[str, str]) -> None:
+        """Register symbolic ref → task_id aliases for placeholder resolution.
+
+        Allows placeholders like ${Geo.result.latitude} to resolve even
+        though the physical task ID is a hash.
+        """
+        self._ref_aliases = dict(aliases)
 
     async def execute(
         self,
@@ -267,6 +332,28 @@ class ConcurrentExecutor:
 
         return results
 
+    def _extract_domain(self, tool_name: str) -> str:
+        """Extract the API domain for a tool.
+
+        Reads ``endpoint_url`` from tool_map metadata, extracts hostname.
+        Falls back to ``tool_name`` as the domain key if no URL is available.
+        """
+        tool_data = self._tool_map.get(tool_name, {})
+        if isinstance(tool_data, dict):
+            url = tool_data.get("endpoint_url") or tool_data.get("url", "")
+            if url and isinstance(url, str):
+                import re as _re
+
+                m = _re.search(r"https?://([^/]+)", url)
+                if m:
+                    return m.group(1)
+        return tool_name
+
+    def _compute_execution_key(self, tool_name: str, inputs: dict) -> str:
+        """Deterministic SHA256 hash of (tool_name, inputs) for idempotency."""
+        payload = json.dumps({"tool_name": tool_name, "inputs": inputs}, sort_keys=True)
+        return hashlib.sha256(payload.encode()).hexdigest()
+
     async def _execute_wave(
         self,
         wave: Any,
@@ -275,17 +362,31 @@ class ConcurrentExecutor:
         max_concurrency: int,
         per_tool_timeout: float,
     ) -> list[ToolExecutionResult]:
-        """Execute a single wave — run its tasks in parallel with concurrency cap.
+        """Execute a single wave — run its tasks in parallel with per-domain concurrency cap.
 
-        Fault isolation: each task runs independently; one failure doesn't
-        affect other tasks in the same wave.
+        Each API domain gets its own semaphore (default cap=10) for independent
+        rate limiting. Tasks with matching execution_keys are skipped (idempotency).
+        Fault isolation: each task runs independently.
         """
-        # Use ALL tasks — the Semaphore limits concurrency.
-        # No slicing: tasks beyond max_concurrency are queued by the semaphore.
-        semaphore = asyncio.Semaphore(max_concurrency)
-
         async def _run(task: Any) -> ToolExecutionResult:
-            async with semaphore:
+            domain = self._extract_domain(task.tool_name)
+            if domain not in self._domain_semaphores:
+                self._domain_semaphores[domain] = asyncio.Semaphore(
+                    self._domain_cap,
+                )
+
+            exec_key = self._compute_execution_key(task.tool_name, task.inputs)
+            if exec_key in self._completed_keys:
+                logger.info("concurrent_executor.idempotent_skip", task=task.id, domain=domain)
+                return ToolExecutionResult(
+                    task_id=task.id,
+                    tool_name=task.tool_name,
+                    status="success",
+                    data=accumulated.get(task.id),
+                    execution_key=exec_key,
+                )
+
+            async with self._domain_semaphores[domain]:
                 return await self._execute_single(
                     task=task,
                     task_map=task_map,
@@ -337,22 +438,53 @@ class ConcurrentExecutor:
         """
         import time as _time
 
-        resolved_inputs = _resolve_placeholders(task.inputs, accumulated)
+        resolved_inputs = _resolve_placeholders(task.inputs, accumulated, self._ref_aliases)
         last_error: str | None = None
 
         for attempt in range(task.max_retries + 1):
             try:
                 start = _time.perf_counter()
 
-                # Resolve tool from tool_map or create stub
-                tool_read = self._tool_dict_to_read(task.tool_name)
-                if tool_read is None:
-                    return ToolExecutionResult(
-                        task_id=task.id,
-                        tool_name=task.tool_name,
-                        status="error",
-                        error=f"Tool '{task.tool_name}' not found in tool map",
+                # Resolve tool: prefer Compiler-resolved endpoint_url on the task,
+                # fall back to legacy tool_map lookup for backward compat.
+                from nexus.tools.schemas import ToolRead
+
+                if hasattr(task, "endpoint_url") and task.endpoint_url:
+                    from datetime import datetime, timezone
+                    _now = datetime.now(timezone.utc).isoformat()
+                    tool_read = ToolRead(
+                        id="00000000-0000-0000-0000-000000000000",
+                        name=task.tool_name,
+                        description="",
+                        purpose="",
+                        tool_type="http_api",
+                        endpoint_url=task.endpoint_url,
+                        http_method=getattr(task, "http_method", "GET"),
+                        auth_type="none",
+                        auth_ref="",
+                        input_schema={},
+                        output_schema={},
+                        validation_rules={},
+                        examples=[],
+                        tags=[],
+                        category="general",
+                        requires_approval=False,
+                        risk_level="low",
+                        enabled=True,
+                        version=1,
+                        created_at=_now,
+                        updated_at=_now,
                     )
+                else:
+                    # Legacy fallback: look up in available_tools map
+                    tool_read = self._tool_dict_to_read(task.tool_name)
+                    if tool_read is None:
+                        return ToolExecutionResult(
+                            task_id=task.id,
+                            tool_name=task.tool_name,
+                            status="error",
+                            error=f"Tool '{task.tool_name}' not found in tool map",
+                        )
 
                 # Use the app's async_session factory for DB persistence
                 from nexus.db import async_session as db_session_factory
@@ -361,7 +493,7 @@ class ConcurrentExecutor:
                         self._executor.execute(
                             tool=tool_read,
                             inputs=resolved_inputs,
-                            context=ExecutionContext(session_id="", agent_run_id=""),
+                            context=ExecutionContext(session_id=self._session_id or "", agent_run_id=""),
                             session=db_session,
                             skip_approval=True,
                         ),
@@ -371,12 +503,15 @@ class ConcurrentExecutor:
                 duration = (_time.perf_counter() - start) * 1000
 
                 if result.status == "success":
+                    exec_key = self._compute_execution_key(task.tool_name, resolved_inputs)
+                    self._completed_keys.add(exec_key)
                     return ToolExecutionResult(
                         task_id=task.id,
                         tool_name=task.tool_name,
                         status="success",
                         data=result.data,
                         duration_ms=duration,
+                        execution_key=exec_key,
                     )
 
                 # Error — retry if transient
@@ -435,7 +570,8 @@ class ConcurrentExecutor:
 
         # Fallback stub — will cause an execution error downstream
         uuid_val = "00000000-0000-0000-0000-000000000000"
-        now_str = "2026-01-01T00:00:00Z"
+        from datetime import datetime, timezone
+        now_str = datetime.now(timezone.utc).isoformat()
         return ToolRead(
             id=uuid_val,
             name=tool_name,

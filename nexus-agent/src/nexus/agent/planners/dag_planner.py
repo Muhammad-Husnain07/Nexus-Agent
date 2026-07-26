@@ -1,31 +1,29 @@
 """
-Dynamic DAG Planner — constructs a Directed Acyclic Graph of tool tasks
-based on dependency analysis between tool I/O schemas.
+Dynamic DAG Planner — constructs a Directed Acyclic Graph of tool tasks.
 
-Flow:
-1. LLM proposes initial tool set + arguments (via agent prompt)
-2. Implicit dependency injection (user said "Lahore" but weather needs lat/lon → insert get_geocoding)
-3. Explicit dependency analysis (Tool A's outputs → Tool B's required inputs)
-4. Cycle detection → raises PlanningError if cycles found
-5. Topological sort into Execution Waves → parallel-friendly plan
+This is now a thin shim. The heavy lifting has moved to:
+- ``compiler/codegen.py`` — deterministic Compiler that resolves logical
+  operations to physical endpoints and builds the ExecutionGraph.
+- The LLM is called to produce a ``LogicalWorkflow``, which the Compiler
+  then translates into an ``ExecutionGraph``.
 
-Usage:
-    planner = DAGPlanner()
-    plan = await planner.build_plan(intents, tools, user_input, llm, model)
-    for wave in plan.waves:
-        print(f"Wave {wave.wave}: {[t.tool_name for t in wave.tasks]}")
+Backward-compat data classes ``ExecutionTask``, ``ExecutionWave``, and
+``ExecutionPlan`` are preserved for the ExecutorNode.
+
+No hardcoded tool names. No deterministic planning heuristics.
 """
 
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass, field
 from typing import Any
 
 import structlog
 
 from nexus.agent.planners.dependency_analysis import analyze_dependencies as _analyze_dependencies
+from nexus.compiler.codegen import Compiler
+from nexus.compiler.ir_models import LogicalNode, LogicalWorkflow, ToolNode, MapNode
 from nexus.config.settings import get_settings
 
 logger = structlog.get_logger("nexus.agent.planners.dag_planner")
@@ -35,15 +33,16 @@ logger = structlog.get_logger("nexus.agent.planners.dag_planner")
 # Exceptions
 # ============================================================================
 
+
 class PlanningError(Exception):
-    """Raised when the DAG planner encounters an unrecoverable error
-    (e.g. circular dependencies, unknown tool references)."""
+    """Raised when the DAG planner encounters an unrecoverable error."""
     pass
 
 
 # ============================================================================
-# Data Classes
+# Data Classes (preserved for ExecutorNode backward compat)
 # ============================================================================
+
 
 @dataclass
 class ExecutionTask:
@@ -55,14 +54,13 @@ class ExecutionTask:
     depends_on: list[str] = field(default_factory=list)
     max_retries: int = 2
     timeout_s: float = 15.0
+    endpoint_url: str = ""  # Resolved by Compiler — executor reads this directly
+    http_method: str = "GET"  # Resolved by Compiler — executor reads this directly
 
 
 @dataclass
 class ExecutionWave:
-    """A set of tasks that can execute in parallel (no dependencies between them).
-
-    All tasks in wave N must complete before wave N+1 starts.
-    """
+    """A set of tasks that can execute in parallel (no dependencies between them)."""
     wave: int
     tasks: list[ExecutionTask]
 
@@ -78,302 +76,12 @@ class ExecutionPlan:
 
 
 # ============================================================================
-# LLM Prompt Template — registered via prompt_manager
-# ============================================================================
-
-from nexus.agent.prompts import prompt_manager
-
-# Force registration of the planner prompt (import triggers the side-effect
-# registration via prompt_manager.register() at module level)
-from nexus.agent.prompts.planner import (  # noqa: F401 — trigger registration
-    PLANNER_PROMPT_V1,
-)
-
-
-def _get_planner_prompt() -> str:
-    """Return the registered planner prompt template string."""
-    return prompt_manager.get("planner").template
-
-
-# ============================================================================
-# Dependency Analyzer
-# ============================================================================
-
-
-def _inject_prerequisite_tools(
-    tools: list[dict[str, Any]],
-    user_input: str,
-) -> list[dict[str, Any]]:
-    """Insert prerequisite tools when a tool's required inputs aren't available.
-
-    Scans all tool schemas: if Tool B requires a field that no other tool
-    produces, search for a tool whose output schema provides that field.
-    If found, inject it as a prerequisite. Pure I/O schema matching —
-    no hardcoded tool names.
-    """
-    modified = list(tools)
-
-    # Build I/O signature map: tool_name -> (required_inputs, output_fields)
-    signatures: dict[str, tuple[set[str], set[str]]] = {}
-    for t in tools:
-        name = t.get("name", "")
-        inp = t.get("input_schema", {})
-        out = t.get("output_schema", {})
-        required = set(inp.get("required", [])) if isinstance(inp, dict) else set()
-        outputs = set(out.get("properties", {}).keys()) if isinstance(out, dict) else set()
-        signatures[name] = (required, outputs)
-
-    # Collect all available output fields across all tools
-    all_outputs: set[str] = set()
-    for _, outs in signatures.values():
-        all_outputs |= outs
-
-    # For each tool, find unmet required inputs
-    for t in tools:
-        name = t.get("name", "")
-        reqs, _ = signatures.get(name, (set(), set()))
-        unmet = reqs - all_outputs
-        if not unmet:
-            continue
-
-        # Search for a tool whose output satisfies the unmet inputs
-        for other in tools:
-            other_name = other.get("name", "")
-            if other_name == name:
-                continue
-            _, other_outs = signatures.get(other_name, (set(), set()))
-            overlap = unmet & other_outs
-            if overlap:
-                # Only inject if not already in the list
-                if other_name not in {m.get("name") for m in modified}:
-                    modified.append(other)
-                    logger.info(
-                        "dag_planner.injected_prerequisite",
-                        prerequisite=other_name,
-                        for_tool=name,
-                        fields=sorted(overlap),
-                    )
-
-    if len(modified) > len(tools):
-        logger.info(
-            "dag_planner.injected_tools",
-            injected_count=len(modified) - len(tools),
-            injected=[m["name"] for m in modified if m not in tools],
-        )
-
-    return modified
-
-
-# ============================================================================
-# DAG Construction
-# ============================================================================
-
-
-def _build_dag(
-    tasks: list[ExecutionTask],
-    dependencies: list[tuple[str, str]],
-) -> dict[str, set[str]]:
-    """Build an adjacency-list DAG from tasks and dependencies.
-
-    Returns ``{node_id: set(child_ids)}``.
-
-    Raises ``PlanningError`` if a cycle is detected via DFS.
-    """
-    # Map tool_name → list of task IDs (for dependency resolution)
-    tool_to_tasks: dict[str, list[str]] = {}
-    for t in tasks:
-        tool_to_tasks.setdefault(t.tool_name, []).append(t.id)
-
-    # Build adjacency list
-    dag: dict[str, set[str]] = {t.id: set() for t in tasks}
-    for t in tasks:
-        for dep_tool, target_tool in dependencies:
-            if t.tool_name == target_tool:
-                # Find all predecessor task IDs with dep_tool
-                for pred_id in tool_to_tasks.get(dep_tool, []):
-                    if pred_id != t.id:
-                        dag[pred_id].add(t.id)
-                        t.depends_on.append(pred_id)
-
-        # Also add explicit depends_on from the task itself
-        for dep_id in list(t.depends_on):
-            if dep_id not in dag:
-                dag[dep_id] = set()
-            dag[dep_id].add(t.id)
-
-    # Cycle detection via DFS
-    _detect_cycles(dag)
-
-    return dag
-
-
-def _detect_cycles(dag: dict[str, set[str]]) -> None:
-    """DFS-based cycle detection.  Raises ``PlanningError`` if a cycle found."""
-    WHITE, GRAY, BLACK = 0, 1, 2
-    color: dict[str, int] = {n: WHITE for n in dag}
-
-    def dfs(node: str) -> None:
-        color[node] = GRAY
-        for child in dag.get(node, set()):
-            if color.get(child) == GRAY:
-                raise PlanningError(
-                    f"Circular dependency detected: {node} → {child}"
-                )
-            if color.get(child) == WHITE:
-                dfs(child)
-        color[node] = BLACK
-
-    for node in dag:
-        if color[node] == WHITE:
-            dfs(node)
-
-
-# ============================================================================
-# Topological Sort → Execution Waves
-# ============================================================================
-
-
-def _topological_sort(dag: dict[str, set[str]], tasks: list[ExecutionTask]) -> list[ExecutionWave]:
-    """Kahn's algorithm — group nodes into waves where wave N has no
-    dependencies on any other node in the same wave.
-
-    Returns chronological ``[ExecutionWave, ...]``.
-    """
-    task_map: dict[str, ExecutionTask] = {t.id: t for t in tasks}
-
-    # Compute in-degree for each node
-    in_degree: dict[str, int] = {n: 0 for n in dag}
-    for node, children in dag.items():
-        for child in children:
-            in_degree[child] = in_degree.get(child, 0) + 1
-
-    # Start with root nodes (in-degree == 0)
-    queue = [n for n, deg in in_degree.items() if deg == 0]
-    waves: list[ExecutionWave] = []
-    wave_idx = 0
-
-    while queue:
-        wave_tasks = [task_map[q] for q in queue if q in task_map]
-        wave_tasks.sort(key=lambda t: t.id)
-        waves.append(ExecutionWave(wave=wave_idx, tasks=wave_tasks))
-
-        next_queue = []
-        for node in queue:
-            for child in dag.get(node, set()):
-                in_degree[child] -= 1
-                if in_degree[child] == 0:
-                    next_queue.append(child)
-
-        queue = next_queue
-        wave_idx += 1
-
-    # If some nodes remain, there's a cycle (shouldn't happen — caught earlier)
-    remaining = [n for n, deg in in_degree.items() if deg > 0]
-    if remaining:
-        raise PlanningError(f"Tasks left after topological sort: {remaining}")
-
-    return waves
-
-
-# ============================================================================
-# LLM Integration
-# ============================================================================
-
-
-def _format_tool_descriptions(tools: list[dict[str, Any]]) -> str:
-    """Compact tool descriptions for the LLM prompt."""
-    lines = []
-    for t in tools:
-        name = t.get("name", "?")
-        desc = t.get("description", "")
-        purpose = t.get("purpose", "")
-
-        # Input schema summary
-        inp = t.get("input_schema", {})
-        required = inp.get("required", [])
-        props = inp.get("properties", {})
-        input_desc = []
-        for pname, pinfo in props.items():
-            ptype = pinfo.get("type", "any")
-            pdesc = pinfo.get("description", "")
-            marker = " (req)" if pname in required else ""
-            if pdesc:
-                input_desc.append(f"    {pname}: {ptype}{marker} — {pdesc}")
-            else:
-                input_desc.append(f"    {pname}: {ptype}{marker}")
-
-        # Output schema summary
-        out = t.get("output_schema", {})
-        out_props = out.get("properties", {})
-        output_desc = [f"    {k}: {v.get('type', 'any')}" for k, v in out_props.items()]
-
-        lines.append(f"- {name}")
-        lines.append(f"  Purpose: {purpose or desc}")
-        if input_desc:
-            lines.append("  Inputs:")
-            lines.extend(input_desc)
-        if output_desc:
-            lines.append("  Outputs:")
-            lines.extend(output_desc)
-        lines.append("")
-    return "\n".join(lines)
-
-
-async def _llm_propose_tasks(
-    query: str,
-    tools: list[dict[str, Any]],
-    llm: Any,
-    model: str,
-    capabilities_context: str = "",
-) -> list[dict[str, Any]]:
-    """Call the LLM to propose the initial set of tools and arguments."""
-    _agent = get_settings().agent
-    tool_descriptions = _format_tool_descriptions(tools)
-    prompt_template = _get_planner_prompt()
-    # Inject capabilities context if available (prepended to query)
-    max_query_chars = 1000
-    enriched_query = query[:max_query_chars]
-    if capabilities_context:
-        enriched_query = f"{capabilities_context}\nUser Request: {enriched_query}"
-    prompt = prompt_template.format(
-        tool_descriptions=tool_descriptions,
-        query=enriched_query,
-    )
-
-    response = await llm.complete(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0,
-        max_tokens=_agent.planner_max_tokens,
-        response_format={"type": "json_object"},
-    )
-
-    content = response.content or ""
-    content = re.sub(r"^```[a-zA-Z]*\n?", "", content)
-    content = re.sub(r"\n```$", "", content)
-    parsed = json.loads(content)
-
-    return parsed.get("tasks", [])
-
-
-# ============================================================================
 # Public API
 # ============================================================================
 
 
 class PlannerRunner:
-    """Convenience class wrapping the DAG planner functions.
-
-    Usage::
-
-        plan = await PlannerRunner.build_plan(
-            intents=["get weather"],
-            tools=available_tools,
-            user_input="weather in Lahore",
-            llm=llm_client,
-            model="gpt-4",
-        )
-    """
+    """Backward-compat shim wrapping the updated build_plan function."""
 
     @staticmethod
     async def build_plan(
@@ -385,7 +93,6 @@ class PlannerRunner:
         capabilities_context: str = "",
         state: dict[str, Any] | None = None,
     ) -> ExecutionPlan:
-        """Build a complete execution plan (delegates to ``build_plan``)."""
         return await build_plan(
             intents=intents,
             tools=tools,
@@ -397,83 +104,6 @@ class PlannerRunner:
         )
 
 
-def _deterministic_plan(
-    intents: list[str],
-    tools: list[dict[str, Any]],
-    user_input: str,
-    state: dict[str, Any] | None = None,
-) -> list[dict[str, Any]] | None:
-    """Attempt to build a plan deterministically without calling the LLM.
-
-    Returns a list of task dicts if a pattern is matched, or None if the
-    query is complex enough to warrant an LLM call.
-
-    Patterns matched:
-    - Single-tool: exactly one intent maps to one tool → single task
-    - Compare items: intent suggests comparison and 2+ entities found → parallel tasks
-    - Known tool name in query: user mentioned tool name directly
-
-    When available, populates task inputs from StructuredContext entities.
-    """
-    if not intents or not tools:
-        return None
-
-    # Extract entities from StructuredContext if available
-    entities: dict[str, Any] = {}
-    if state:
-        ctx = state.get("_structured_context")
-        if ctx and hasattr(ctx, "entities") and hasattr(ctx.entities, "data"):
-            entities = dict(ctx.entities.data)
-
-    # Build tool name → tool data map
-    tool_map = {t.get("name", "").lower(): t for t in tools if t.get("name")}
-    input_schemas = {t.get("name", "").lower(): t.get("input_schema", {}) for t in tools if t.get("name")}
-
-    def _build_task(tname: str, idx: int = 0) -> dict[str, Any]:
-        """Build a task with inputs inferred from entities."""
-        tdata = tool_map.get(tname.lower())
-        tname_original = tdata["name"] if tdata else tname
-        desc = tdata.get("description", tname) if tdata else tname
-
-        # Populate inputs from entities that match the tool's input schema
-        inputs: dict[str, Any] = {}
-        schema = input_schemas.get(tname.lower(), {})
-        props = schema.get("properties", {}) if isinstance(schema, dict) else {}
-        for field_name in props:
-            if field_name in entities:
-                inputs[field_name] = entities[field_name]
-
-        return {
-            "id": f"task_{idx + 1}",
-            "tool_name": tname_original,
-            "inputs": inputs,
-            "description": desc,
-            "depends_on": [],
-        }
-
-    # Pattern 1: Single intent → single tool
-    if len(intents) == 1:
-        intent = intents[0].lower()
-        if intent in tool_map:
-            return [_build_task(intent, 0)]
-        for tname in tool_map:
-            if intent.replace("_", " ") in tname.replace("_", " ") or tname.replace("_", " ") in intent:
-                return [_build_task(tname, 0)]
-
-    # Pattern 2: Known tool name in user query
-    q_lower = user_input.lower()
-    matched = []
-    for tname in tool_map:
-        keywords = tname.replace("_", " ").lower()
-        if keywords in q_lower:
-            matched.append(tname)
-
-    if matched:
-        return [_build_task(t, i) for i, t in enumerate(matched)]
-
-    return None  # Fall through to LLM
-
-
 async def build_plan(
     intents: list[str] | None = None,
     tools: list[dict[str, Any]] | None = None,
@@ -482,81 +112,199 @@ async def build_plan(
     model: str | None = None,
     capabilities_context: str = "",
     state: dict[str, Any] | None = None,
+    db_session: Any = None,
 ) -> ExecutionPlan:
-    """Build a complete execution plan from user intent + available tools.
+    """Build an execution plan from user input + available tools.
 
-    Two-stage planner:
-    1. Deterministic pattern matching (no LLM, ~0ms)
-    2. LLM fallback for complex/ambiguous DAGs (~13s)
+    Calls the LLM to produce a ``LogicalWorkflow``, then feeds it to the
+    deterministic ``Compiler`` to produce an ``ExecutionGraph``, which is
+    then converted to the backward-compatible ``ExecutionPlan`` format.
 
     Args:
-        intents: Parsed intent from the router (list of goal strings).
+        intents: Parsed intents from the router (informational only).
         tools: Available tool metadata (state["available_tools"]).
-        user_input: Raw user message (for implicit dep detection).
-        llm: LLM client for task proposal.
+        user_input: Raw user message.
+        llm: LLM client for workflow generation.
         model: Model name.
-        capabilities_context: Optional capability registry context for planner.
+        capabilities_context: Optional capability registry context.
+        state: Current AgentState.
+        db_session: Async DB session for the Compiler.
 
     Returns:
-        An ``ExecutionPlan`` with ``waves``, ``dependencies``, and metadata.
+        An ``ExecutionPlan`` with waves, dependencies, and metadata.
 
     Raises:
-        PlanningError: If dependencies form a cycle.
+        PlanningError: If the Compiler detects cycles.
     """
     tools = tools or []
     user_input = user_input or ""
 
-    # 1. Inject prerequisite tools for unmet inputs
-    tools = _inject_prerequisite_tools(tools, user_input)
+    # Call LLM to produce a LogicalWorkflow
+    logical_workflow = await _call_llm_for_workflow(
+        user_input=user_input,
+        tools=tools,
+        llm=llm,
+        model=model,
+        capabilities_context=capabilities_context,
+    )
 
-    # 2. Try deterministic planning first (no LLM call)
-    raw_tasks: list[dict[str, Any]] = []
-    if intents:
-        raw_tasks = _deterministic_plan(intents, tools, user_input, state=state) or []
+    # Feed to the deterministic Compiler
+    if db_session is None:
+        from nexus.db.base import async_session as _session_factory
+        async with _session_factory() as session:
+            compiler = Compiler(session)
+            graph = await compiler.compile(logical_workflow)
+    else:
+        compiler = Compiler(db_session)
+        graph = await compiler.compile(logical_workflow)
 
-    # 3. Fallback to LLM for complex/ambiguous DAGs
-    if not raw_tasks and llm is not None and model is not None and user_input:
-        raw_tasks = await _llm_propose_tasks(user_input, tools, llm, model, capabilities_context)
+    # Convert ExecutionGraph → ExecutionPlan (backward compat)
+    return _graph_to_plan(graph)
 
-    # 4. Ultimate fallback: one task per tool
-    if not raw_tasks:
-        fallback_limit = get_settings().agent.fallback_max_tools
-        raw_tasks = [
-            {"id": f"task_{i+1}", "tool_name": t["name"], "inputs": {}, "description": t.get("description", "")}
-            for i, t in enumerate(tools[:fallback_limit])
-        ]
 
-    # 5. Build ExecutionTask objects
-    tasks = []
-    for i, t in enumerate(raw_tasks):
-        task = ExecutionTask(
-            id=t.get("id", f"task_{i+1}"),
-            tool_name=t.get("tool_name", ""),
-            description=t.get("description", ""),
-            inputs=t.get("inputs", {}),
-            depends_on=t.get("depends_on", []),
+async def _call_llm_for_workflow(
+    user_input: str,
+    tools: list[dict[str, Any]],
+    llm: Any,
+    model: str | None,
+    capabilities_context: str = "",
+) -> LogicalWorkflow:
+    """Call the LLM to produce a LogicalWorkflow from the user's request.
+
+    Falls back to a single-node LogicalWorkflow if the LLM is unavailable
+    or the workflow can't be parsed.
+    """
+    from nexus.agent.prompts import prompt_manager
+
+    capabilities = [t.get("name", "?") for t in tools[:30]]
+    query = user_input[:1000]
+    if capabilities_context:
+        query = f"{capabilities_context}\n\nUser: {query}"
+
+    try:
+        prompt = prompt_manager.render(
+            "logical_planner", "1.0",
+            capabilities=", ".join(capabilities) if capabilities else "(none available)",
         )
-        tasks.append(task)
+    except Exception:
+        prompt = f"User request: {query}"
+
+    if llm is None or model is None:
+        return LogicalWorkflow(
+            nodes=[LogicalNode(op="unknown", ref="Fallback", inputs={})],
+        )
+
+    try:
+        response = await llm.complete(
+            model=model,
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": query},
+            ],
+            temperature=0,
+            max_tokens=get_settings().agent.planner_max_tokens,
+            response_format={"type": "json_object"},
+        )
+        content = response.content or "{}"
+        parsed = json.loads(content)
+
+        nodes_data = parsed.get("nodes", parsed.get("tasks", []))
+        if not nodes_data:
+            return LogicalWorkflow(
+                nodes=[LogicalNode(op="unknown", ref="Fallback", inputs={})],
+            )
+
+        nodes = []
+        for i, nd in enumerate(nodes_data):
+            if isinstance(nd, dict):
+                nodes.append(LogicalNode(
+                    op=nd.get("op", nd.get("tool_name", f"tool_{i}")),
+                    ref=nd.get("ref", nd.get("description", f"ref_{i}")),
+                    inputs=nd.get("inputs", {}),
+                    depends_on=nd.get("depends_on", []),
+                    condition=nd.get("condition"),
+                    iterate_over=nd.get("iterate_over"),
+                ))
+        return LogicalWorkflow(nodes=nodes)
+    except Exception:
+        return LogicalWorkflow(
+            nodes=[LogicalNode(op="unknown", ref="Fallback", inputs={})],
+        )
+
+
+def _graph_to_plan(graph: Any) -> ExecutionPlan:
+    """Convert an ExecutionGraph to the backward-compatible ExecutionPlan format.
+
+    Maps PhysicalNodes (ToolNode, MapNode) to ExecutionTasks, builds waves,
+    and computes root/leaf nodes.
+    """
+    tasks: list[ExecutionTask] = []
+    all_deps: list[tuple[str, str]] = []
+
+    for nid, node in graph.nodes.items():
+        if isinstance(node, ToolNode):
+            task = ExecutionTask(
+                id=nid,
+                tool_name=node.tool_name,
+                description=node.symbolic_ref,
+                inputs=dict(node.inputs),
+                depends_on=list(node.depends_on),
+            )
+            tasks.append(task)
+            for dep in node.depends_on:
+                all_deps.append((dep, nid))
+        elif isinstance(node, MapNode):
+            task = ExecutionTask(
+                id=nid,
+                tool_name=node.body.tool_name if node.body else "map",
+                description=f"map over {node.iterate_over}",
+                inputs=dict(node.body.inputs) if node.body else {},
+                depends_on=list(node.depends_on),
+            )
+            tasks.append(task)
+            for dep in node.depends_on:
+                all_deps.append((dep, nid))
+
+    # Build waves from ExecutionGraph's pre-computed waves
+    waves: list[ExecutionWave] = []
+    task_map = {t.id: t for t in tasks}
+    for i, wave_ids in enumerate(graph.waves or []):
+        wave_tasks = [task_map[w] for w in wave_ids if w in task_map]
+        wave_tasks.sort(key=lambda t: t.id)
+        waves.append(ExecutionWave(wave=i, tasks=wave_tasks))
+
+    # If no pre-computed waves, build from dependencies
+    if not waves:
+        dag: dict[str, set[str]] = {t.id: set() for t in tasks}
+        for dep, child in all_deps:
+            dag.setdefault(dep, set()).add(child)
+        in_degree = {n: 0 for n in dag}
+        for node, children in dag.items():
+            for child in children:
+                in_degree[child] = in_degree.get(child, 0) + 1
+        queue = [n for n, d in in_degree.items() if d == 0]
+        wave_idx = 0
+        while queue:
+            wave_tasks = [task_map[q] for q in queue if q in task_map]
+            wave_tasks.sort(key=lambda t: t.id)
+            waves.append(ExecutionWave(wave=wave_idx, tasks=wave_tasks))
+            next_queue = []
+            for node in queue:
+                for child in dag.get(node, set()):
+                    in_degree[child] -= 1
+                    if in_degree[child] == 0:
+                        next_queue.append(child)
+            queue = next_queue
+            wave_idx += 1
 
     tool_names = list({t.tool_name for t in tasks})
-
-    # 4. Analyze dependencies
-    dependencies = _analyze_dependencies(tools)
-
-    # 5. Build DAG
-    dag = _build_dag(tasks, dependencies)
-
-    # 6. Topological sort → waves
-    waves = _topological_sort(dag, tasks)
-
-    # 7. Identify root and leaf nodes
     root_nodes = [t.id for t in tasks if not t.depends_on]
     leaf_nodes = [t.id for t in tasks if t.id not in dag or not dag[t.id]]
 
     return ExecutionPlan(
         waves=waves,
         tool_names=tool_names,
-        dependencies=dependencies,
+        dependencies=all_deps,
         root_nodes=root_nodes,
         leaf_nodes=leaf_nodes,
     )
