@@ -1,27 +1,44 @@
-# Temp / log files
+# ============================================================
+# Nexus Agent Platform — .gitignore
+# ============================================================
+
+# ---- Temp / log files ----
 *.log
 out.txt
 .coverage
-fe.log
+htmlcov/
+proxy_*.txt
+*.pid
 
-# Build outputs
+# ---- Build outputs ----
 dist/
+dist-embed/
+build/
 .vite/
+*.tsbuildinfo
 
-# Python
+# ---- Node (frontend) ----
+node_modules/
+frontend/node_modules/
+
+# ---- Python ----
 __pycache__/
-*.pyc
+*.py[cod]
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
 .venv/
+*.egg-info/
+.eggs/
 
-# Test scripts (not part of the project)
-test_*.py
-check_*.py
+# ---- Test / CI runtime artifacts ----
 tmp/
+playwright-report/
+test-results/
+nexus-agent/artifacts/
+nexus-agent/tests/stability_history.json
 
-# IDE
+# ---- IDE / OS ----
 .idea/
 .vscode/
 *.swp
@@ -30,17 +47,14 @@ tmp/
 .DS_Store
 Thumbs.db
 
-# Environment
+# ---- Environment (secrets stay local; .env.example IS tracked) ----
 .env
 .env.local
 .env.*.local
+.env.*.local.*
 
-# Secrets
+# ---- Secrets ----
 token.txt
 *.token
 *.jwt
 tokens/
-
-# OS
-Thumbs.db
-"Agent Runs.txt"  
