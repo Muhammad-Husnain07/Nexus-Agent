@@ -171,8 +171,8 @@ nexus-agent/
 │   ├── web_search_server.py # Mock bookmark/echo API proxy (port 8081)
 │   └── seed.sql             # Initial tool seed data
 ├── src/nexus/
-│   ├── agent/               # LangGraph 13-node graph + @context_node
-│   │   ├── nodes/           # 9 production nodes + 3 prompt files
+│   ├── agent/               # LangGraph 19-node graph (intent-first) + @context_node
+│   │   ├── nodes/           # 19 production nodes + prompt files
 │   │   ├── planners/        # Thin DAG planner shim → Compiler
 │   │   ├── executors/       # ConcurrentExecutor with per-domain concurrency
 │   │   ├── node_wrapper.py  # @context_node decorator
@@ -256,7 +256,7 @@ uv run pytest
 
 - **[AGENTS.md](AGENTS.md)** — Full 10-phase compiler architecture, coding standards, conventions
 - **[docs/architecture.md](docs/architecture.md)** — Detailed architecture, data flows, ADRs, deployment guide
-- **[src/nexus/agent/AGENTS.md](src/nexus/agent/AGENTS.md)** — 13-node graph details, routing functions, state schema
+- **[src/nexus/agent/AGENTS.md](src/nexus/agent/AGENTS.md)** — 19-node graph details, routing functions, state schema, P4 validation
 
 ---
 

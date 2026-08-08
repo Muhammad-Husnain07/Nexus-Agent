@@ -275,13 +275,24 @@ uv run uvicorn scripts.web_search_server:app --host 0.0.0.0 --port 8081 --log-le
 
 ## Module Responsibilities
 
-### `src/nexus/agent/` — LangGraph Orchestration (13 nodes)
-- Defines 13-node StateGraph with 4 conditional routing functions
-- `AgentRunner` — wires LLM, compiler, optimizer, executor, event bus, Redis distributed lock
+### `src/nexus/agent/` — LangGraph Orchestration (19 nodes, intent-first)
+- Defines the 19-node StateGraph (Router → Planner → PlanValidator → Compiler →
+  Optimizer → Estimator → Validation → Approval → Executor → Aggregator →
+  Validator → Recovery → Reflection/Replan → Response → Memory) with
+  conditional routing
+- `AgentRunner` — wires LLM, compiler, optimizer, executor, event bus, Redis
+  distributed lock, the per-invocation **ReasoningBudget**, and the
+  `_invocation_status` terminal states
 - `@context_node` decorator — enforces `Context(v) → Context(v+1)` immutability
-- `state_schema.py` — 3-tier TypedDict with compiler pipeline fields, 33 `_EPHEMERAL_FIELDS`
-- `planners/dag_planner.py` — Thin shim: calls LLM → Compiler → ExecutionPlan
-- `executors/concurrent_executor.py` — Wave-based executor with per-domain semaphores, `execution_key` idempotency
+- `state_schema.py` — 3-tier TypedDict with compiler pipeline fields,
+  `_EPHEMERAL_FIELDS` (drift-tested)
+- `planners/intent_detector.py` — deterministic Tier-1 intent decomposition
+- `planners/intent_decomposer_llm.py` — rare Tier-2 LLM decomposer
+- `budget.py` — the ReasoningBudget contract (unified replan counter)
+- `architecture.py` — the version manifest (ADR 0008)
+- `executors/concurrent_executor.py` — Wave-based executor with per-domain
+  semaphores, `execution_key` idempotency, idempotency-key stamping,
+  authorization, cancellation, and tool-budget reservation
 
 ### `src/nexus/compiler/` — Compiler Pipeline
 - `ir_models.py` — Logical/Physical IR (LogicalNode → ToolNode/MapNode/ReduceNode/ConditionalNode) with `extra="forbid"`

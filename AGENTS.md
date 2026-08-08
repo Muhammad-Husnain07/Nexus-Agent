@@ -4,20 +4,47 @@ Monorepo containing:
 - **`nexus-agent/`** — Python backend (FastAPI + LangGraph + PostgreSQL)
 - **`frontend/`** — React management console (TypeScript + Tailwind CSS v4 + shadcn/ui + Vite)
 
+## BINDING ENGINEERING PRINCIPLES
+
+> **Read [`nexus-agent/docs/engineering-principles.md`](nexus-agent/docs/engineering-principles.md)
+> before ANY code.** It is the binding rulebook: treat the agent as a
+> distributed workflow engine with LLM-assisted decision-making (LLM
+> proposes plans, deterministic layers enforce). Key rules: no hardcoded
+> capability/domain logic; validate every plan before execution (coverage +
+> traceability); never execute an invalid plan; typed errors; versioned
+> cache keys via the architecture manifest (ADR 0008); never store failed
+> responses; deterministic fallbacks; metrics before optimization.
+
 ## Architecture
 
-The agent uses a **13-node deterministic workflow compiler**:
+The agent uses a **19-node deterministic workflow compiler** (intent-first):
+
 ```
-RouterNode → SemanticPlannerNode → CompilerNode → OptimizerNode → EstimatorNode → ValidationNode
-    │                                                                                     │
-    │                          ┌──────────────────────────────────────────────────────────┘
-    │                          ▼
-    │                   ClarificationNode (0 nodes → ResponseNode)
-    │                          │
-    │                   ApprovalGateNode → ExecutorNode → AggregatorNode → ReflectionNode → ResponseNode → MemoryHelperNode → END
+RouterNode
+  → ResponseNode (conversational) | InteractiveWorkflowNode (workflow)
+  → RequirementCollectorNode (needs requirements) | SemanticPlannerNode (action)
+SemanticPlannerNode (intent-unit planning) → PlanValidatorNode
+PlanValidatorNode (coverage + alignment + provenance + traceability + budget)
+  → CompilerNode (RESOLVE(...) producer-chain synthesis) → OptimizerNode → EstimatorNode
+  → ValidationNode → ApprovalGateNode (semantic-bound approvals) → ExecutorNode
+  → AggregatorNode (reduce on SUCCESS too) → ValidatorNode → RecoveryManagerNode
+  → ReflectionNode (retry) | ReplanNode (shared-budget replan) | ResponseNode
+  → MemoryHelperNode (provenance-stamped, gated) → END
 ```
 
-The pipeline: Router classifies → SemanticPlanner emits `LogicalWorkflow` → Compiler resolves tools → Optimizer runs fixpoint passes → Estimator checks budget → Validation routes to approval/clarification. Tools execute in parallel waves with per-domain adaptive concurrency. Failed tasks are structurally graph-diffed and retried via `ReflectionNode`. High-risk tools require HITL approval via `ApprovalGateNode`.
+The pipeline: Router classifies → SemanticPlanner emits `LogicalWorkflow` (one node per
+detected intent unit) → **PlanValidator** verifies semantic completeness (intent coverage,
+capability alignment, parameter provenance, traceability) and the invocation
+**ReasoningBudget** → Compiler resolves tools (deterministic `RESOLVE(...)` chain
+synthesis) → Optimizer/Estimator → Validation → Approval (bound to the exact
+operation hash) → Executor (authorized, idempotent-keyed, cancellable, sandboxed with
+SSRF hardening) → Recovery (every failure enters the typed recovery state machine) →
+Response (data-incorporation + per-artifact coverage guards; deterministic renderer
+fallback) → Memory (never stores failed responses; provenance + freshness).
+
+Every capability, alias, keyword, and policy comes from the registry metadata — no
+hardcoded domain logic anywhere. The architecture is versioned (ADR 0008:
+`src/nexus/agent/architecture.py` — the single cache-key fingerprint).
 
 ## Backend Rules
 
