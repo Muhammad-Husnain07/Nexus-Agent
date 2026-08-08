@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nexus-agent
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: latest
+      - name: Sync dependencies
+        run: uv sync --frozen
+      - name: Lint (ruff)
+        run: uv run ruff check src
+      - name: Type check (mypy strict)
+        run: uv run mypy src/nexus
+      - name: Security scan (bandit)
+        run: uv run bandit -r src/nexus -x tests,alembic,.venv -s B101,B311 -q
+      - name: Unit tests (pytest)
+        run: uv run pytest -q --no-cov
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Type check
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Unit tests
+        run: npm test
+      - name: Build
+        run: npm run build
