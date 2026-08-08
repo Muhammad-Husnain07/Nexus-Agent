@@ -113,6 +113,7 @@ addopts = "-ra --strict-markers --cov=nexus --cov-report=term-missing"
 filterwarnings = ["ignore::pytest_cov.plugin.CovReportWarning"]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "live: marks live backend integration tests (require the running server)",
     "integration: marks tests that require real infrastructure (Docker containers)",
     "security: marks security enforcement tests (no Docker, runs fast)",
     "e2e: marks end-to-end workflow tests (requires Docker)",
