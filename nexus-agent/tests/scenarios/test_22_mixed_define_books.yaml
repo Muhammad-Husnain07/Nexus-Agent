@@ -1,0 +1,14 @@
+tier: full
+test_id: 22
+name: "Confusing Mixed Intent — Define + Search Books"
+user_query: "Define the word analytics and search books about analytics"
+expected:
+  router:
+    _query_type: "action"
+  planner:
+    tool_names: ["define_word", "search_books"]
+    parallel_waves: 1
+  executor:
+    tool_call_count_gt: 1
+  guards:
+    avoid_tools: ["search_authors"]

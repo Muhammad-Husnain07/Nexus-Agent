@@ -1,0 +1,7 @@
+test_id: 51
+tier: fast
+name: "Error Handling — Malformed Query"
+user_query: "zzz qqq xxx yyy"
+expected:
+  response:
+    type: "error"

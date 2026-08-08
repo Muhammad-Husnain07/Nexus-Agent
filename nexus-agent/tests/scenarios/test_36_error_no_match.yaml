@@ -1,0 +1,10 @@
+test_id: 36
+tier: fast
+name: "Error Handling — No Match"
+user_query: "Search for the anime zzqxqwnz"
+expected:
+  router:
+    _query_type: "action"
+  executor:
+    tool_call_count_gt: 0
+    _executor_failed: []

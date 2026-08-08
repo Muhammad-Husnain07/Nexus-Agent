@@ -1,0 +1,14 @@
+test_id: 44
+tier: fast
+name: "Renderer — Country Info"
+user_query: "Tell me about Pakistan"
+expected:
+  router:
+    _query_type: "action"
+  planner:
+    tool_names: ["get_country_info"]
+  executor:
+    tool_call_count_gt: 0
+    _executor_failed: []
+  response:
+    must_contain: ["Pakistan"]

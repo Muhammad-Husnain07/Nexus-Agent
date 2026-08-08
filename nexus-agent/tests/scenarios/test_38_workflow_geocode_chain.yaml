@@ -1,0 +1,10 @@
+test_id: 38
+tier: fast
+name: "Workflow — Geocode Chain"
+user_query: "Find the coordinates of Lahore, then tell me the address there"
+expected:
+  router:
+    _query_type: "action"
+  executor:
+    tool_call_count_gt: 1
+    _executor_failed: []

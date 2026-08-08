@@ -1,0 +1,7 @@
+test_id: 39
+tier: fast
+name: "Memory — Recall Last Query"
+user_query: "What was the first thing I asked you?"
+expected:
+  response:
+    type: "conversational"

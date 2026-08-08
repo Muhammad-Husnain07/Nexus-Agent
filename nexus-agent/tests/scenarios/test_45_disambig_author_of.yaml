@@ -1,0 +1,10 @@
+test_id: 45
+tier: fast
+name: "Disambiguation — Author Search"
+user_query: "Find books written by the author of Dune"
+expected:
+  router:
+    _query_type: "action"
+  executor:
+    tool_call_count_gt: 0
+    _executor_failed: []

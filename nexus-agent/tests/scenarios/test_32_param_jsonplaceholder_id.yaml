@@ -1,0 +1,12 @@
+test_id: 32
+tier: fast
+name: "Parameter Extraction — Record Id"
+user_query: "Fetch post 7 from jsonplaceholder"
+expected:
+  router:
+    _query_type: "action"
+  planner:
+    tool_names: ["jsonplaceholder_request"]
+  executor:
+    tool_call_count_gt: 0
+    _executor_failed: []

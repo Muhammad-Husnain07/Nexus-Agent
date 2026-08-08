@@ -1,0 +1,7 @@
+test_id: 41
+tier: fast
+name: "Long Context — Accumulated Conversation"
+user_query: "Hi, how are you doing today?"
+expected:
+  response:
+    type: "conversational"

@@ -1,0 +1,8 @@
+test_id: 46
+tier: fast
+name: "Alias — Post Reference"
+user_query: "Get the todo with id 3 from jsonplaceholder"
+expected:
+  executor:
+    tool_call_count_gt: 0
+    _executor_failed: []

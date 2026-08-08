@@ -1,0 +1,12 @@
+test_id: 35
+tier: fast
+name: "Renderer — Exchange Rates"
+user_query: "What are the current exchange rates for the US dollar?"
+expected:
+  router:
+    _query_type: "action"
+  planner:
+    tool_names: ["get_exchange_rates"]
+  executor:
+    tool_call_count_gt: 0
+    _executor_failed: []

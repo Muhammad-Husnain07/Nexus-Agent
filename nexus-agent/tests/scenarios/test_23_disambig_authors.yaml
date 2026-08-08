@@ -1,0 +1,14 @@
+tier: full
+test_id: 23
+name: "Near-Duplicate Disambiguation — Books by Author"
+user_query: "Find books by Jane Austen"
+expected:
+  router:
+    _query_type: "action"
+  planner:
+    tool_names: ["search_authors"]
+    parallel_waves: 1
+  executor:
+    tool_call_count_gt: 0
+  guards:
+    avoid_tools: ["search_books", "search_web_search"]

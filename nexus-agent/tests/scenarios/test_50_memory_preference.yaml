@@ -1,0 +1,7 @@
+test_id: 50
+tier: fast
+name: "Memory — Preference Recall"
+user_query: "What did I ask you about most recently?"
+expected:
+  response:
+    type: "conversational"

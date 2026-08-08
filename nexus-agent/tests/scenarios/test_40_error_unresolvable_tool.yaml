@@ -1,0 +1,9 @@
+test_id: 40
+tier: fast
+name: "Error Handling — Unresolvable Tool"
+user_query: "Please deploy the quantum flux capacitor to mars"
+expected:
+  router:
+    _query_type: "action"
+  response:
+    type: "error"

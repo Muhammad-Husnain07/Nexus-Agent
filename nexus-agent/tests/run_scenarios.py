@@ -4,12 +4,24 @@ Reads YAML scenario files from tests/scenarios/, runs each against the
 live agent, and asserts against expected graph state (router, extraction,
 planner, executor) rather than just final text output.
 
+Tiers (ADR-0008 governance): each scenario declares ``tier: fast|medium|full``
+(default ``full``). The FAST tier (one representative per critical category)
+runs on every PR CI gate; MEDIUM nightly; FULL before releases.
+
 Usage:
     uv run pytest tests/run_scenarios.py -v
     uv run python tests/run_scenarios.py --scenario tests/scenarios/test_03_pikachu.yaml
+    uv run python tests/run_scenarios.py --tier fast
 """
 
-import asyncio, json, os, sys, uuid, yaml
+import argparse
+import asyncio
+import json
+import os
+import sys
+import uuid
+
+import yaml
 from pathlib import Path
 
 import httpx
@@ -126,7 +138,7 @@ async def run_scenario(path: str) -> dict:
     tid = scenario["test_id"]
     name = scenario["name"]
     query = scenario["user_query"]
-    exp = scenario["expected"]
+    exp = scenario.get("expected") or {}
 
     print(f"\n  Test {tid}: {name}")
     print(f"    Q: {query[:80]}...")
@@ -176,8 +188,10 @@ async def run_scenario(path: str) -> dict:
             if e.get("type") == "plan_created":
                 steps = e.get("payload", {}).get("steps", {})
                 if isinstance(steps, dict):
-                    for t in steps.get("tool_names", []):
-                        actual_tools.add(t)
+                    # Current shape: {"<task_id>": "<tool_name>"} — also
+                    # tolerate a legacy "tool_names" key inside the dict.
+                    for t in steps.values():
+                        actual_tools.add(str(t))
                 elif isinstance(steps, list):
                     for t in steps:
                         if isinstance(t, dict):
@@ -257,17 +271,60 @@ async def run_scenario(path: str) -> dict:
         FAIL += 1
     RESULTS.append((tid, name, f"{passed}/{total}", f"{elapsed:.1f}s", status))
 
-    return {"status": status, "checks": checks, "errors": errors}
+    return {"status": status, "checks": checks, "errors": errors,
+            "metrics": _session_metrics(sid)}
 
 
-async def main(scenario_path=None):
+def _session_metrics(sid: str) -> dict:
+    """The scenario's eval headline metrics from the session state:
+    intent_coverage (validator), capability alignment (groundedness
+    signal), and response_coverage (the per-artifact citation ratio)."""
+    metrics: dict = {}
+    try:
+        import json as _json
+        import urllib.request
+
+        with urllib.request.urlopen(
+            f"{BASE}/sessions/{sid}/state", timeout=20
+        ) as r:
+            payload = _json.loads(r.read().decode())
+        state = payload.get("state") or payload
+        report = state.get("_plan_validator_report") or {}
+        if isinstance(report, dict):
+            metrics.update(report.get("metrics") or {})
+        coverage = state.get("_response_coverage")
+        if coverage is not None:
+            metrics["response_coverage"] = coverage
+    except Exception:
+        pass
+    return metrics
+
+
+async def main(scenario_path=None, tier=None):
     global PASS, FAIL, RESULTS
 
     if scenario_path:
         paths = [scenario_path]
     else:
         scenarios_dir = Path(__file__).parent / "scenarios"
-        paths = sorted([str(p) for p in scenarios_dir.glob("*.yaml")])
+        all_paths = sorted([str(p) for p in scenarios_dir.glob("*.yaml")])
+        if tier:
+            selected = []
+            for p in all_paths:
+                try:
+                    with open(p) as f:
+                        meta = yaml.safe_load(f) or {}
+                except Exception:
+                    meta = {}
+                if str(meta.get("tier", "full")) == tier:
+                    selected.append(p)
+            paths = selected
+            print(f"\n[tier:{tier}] {len(selected)}/{len(all_paths)} scenarios selected")
+            if not selected:
+                print(f"ERROR: no scenarios declared tier '{tier}' — refusing a vacuous pass")
+                sys.exit(1)
+        else:
+            paths = all_paths
 
     print(f"\n{'='*60}")
     print(f"SCENARIO TEST RUNNER — {len(paths)} scenarios")
@@ -290,5 +347,9 @@ async def main(scenario_path=None):
 
 
 if __name__ == "__main__":
-    path = sys.argv[1] if len(sys.argv) > 1 else None
-    asyncio.run(main(path))
+    _parser = argparse.ArgumentParser(description="Run YAML scenarios")
+    _parser.add_argument("--scenario", default=None, help="Single scenario path")
+    _parser.add_argument("--tier", default=None, choices=["fast", "medium", "full"],
+                         help="Filter scenarios by declared tier")
+    _args = _parser.parse_args()
+    asyncio.run(main(_args.scenario, _args.tier))

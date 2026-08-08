@@ -1,0 +1,12 @@
+test_id: 37
+tier: fast
+name: "Parallel — Independent Queries"
+user_query: "List Studio Ghibli films and list Valorant agents"
+expected:
+  router:
+    _query_type: "action"
+  planner:
+    tool_names: ["get_ghibli_films", "get_valorant_agents"]
+  executor:
+    tool_call_count_gt: 1
+    _executor_failed: []

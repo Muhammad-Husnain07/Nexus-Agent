@@ -1,0 +1,12 @@
+tier: fast
+test_id: 20
+name: "Dependent Chain — Geocode → Reverse Geocode"
+user_query: "Find the coordinates of Lahore, then tell me the address at those coordinates"
+expected:
+  router:
+    _query_type: "action"
+  executor:
+    tool_call_count_gt: 1
+    _executor_failed: []
+  guards:
+    avoid_tools: ["search_web_search"]

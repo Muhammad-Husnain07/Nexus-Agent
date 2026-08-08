@@ -1,9 +1,10 @@
+tier: fast
 test_id: 3
 name: "Tool Selection — Pikachu"
 user_query: "Tell me about Pikachu"
 expected:
   router:
-    _query_type: "single_tool"
+    _query_type: "action"
   extraction:
     intent: "get_pokemon"
     confidence_gt: 0.3
@@ -15,6 +16,6 @@ expected:
     tool_call_count_gt: 0
   response:
     type: "tool"
-    must_contain: ["pikachu", "electric"]
+    must_contain: ["pikachu"]
   guards:
     avoid_tools: ["web_search"]

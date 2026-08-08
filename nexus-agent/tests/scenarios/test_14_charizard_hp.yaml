@@ -1,9 +1,10 @@
+tier: full
 test_id: 14
 name: "Hallucination Test — Charizard HP"
 user_query: "What is Charizard's base HP?"
 expected:
   router:
-    _query_type: "single_tool"
+    _query_type: "action"
   extraction:
     intent: "get_pokemon"
   planner:

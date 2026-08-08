@@ -1,0 +1,10 @@
+test_id: 43
+tier: fast
+name: "Recovery — Resilient Turn"
+user_query: "How's the temperature in Tokyo?"
+expected:
+  router:
+    _query_type: "action"
+  executor:
+    tool_call_count_gt: 0
+    _executor_failed: []

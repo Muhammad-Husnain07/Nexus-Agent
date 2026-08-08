@@ -1,0 +1,10 @@
+test_id: 31
+tier: fast
+name: "Parameter Extraction — Weather City"
+user_query: "What's the temperature in Tokyo?"
+expected:
+  router:
+    _query_type: "action"
+  executor:
+    tool_call_count_gt: 0
+    _executor_failed: []

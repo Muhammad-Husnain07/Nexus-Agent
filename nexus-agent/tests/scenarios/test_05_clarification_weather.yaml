@@ -1,3 +1,4 @@
+tier: fast
 test_id: 5
 name: "Clarification — Weather without city"
 user_query: "What's the weather?"

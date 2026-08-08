@@ -1,0 +1,9 @@
+test_id: 48
+tier: fast
+name: "Clarification — Missing Inputs"
+user_query: "What's the weather like?"
+expected:
+  router:
+    _query_type: "action"
+  response:
+    type: "clarification"

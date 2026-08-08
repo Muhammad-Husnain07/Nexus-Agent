@@ -1,0 +1,10 @@
+test_id: 47
+tier: fast
+name: "Multi-Op — Define and Search"
+user_query: "define climate and search for books about climate"
+expected:
+  router:
+    _query_type: "action"
+  executor:
+    tool_call_count_gt: 1
+    _executor_failed: []

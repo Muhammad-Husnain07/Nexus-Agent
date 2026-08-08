@@ -1,0 +1,10 @@
+test_id: 42
+tier: fast
+name: "Parameter Extraction — Books Query"
+user_query: "Search for books by Frank Herbert"
+expected:
+  router:
+    _query_type: "action"
+  executor:
+    tool_call_count_gt: 0
+    _executor_failed: []

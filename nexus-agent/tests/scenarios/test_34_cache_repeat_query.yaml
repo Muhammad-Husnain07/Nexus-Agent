@@ -1,0 +1,12 @@
+test_id: 34
+tier: fast
+name: "Cache — Repeated Query"
+user_query: "Fetch post 1 from jsonplaceholder"
+expected:
+  router:
+    _query_type: "action"
+  planner:
+    tool_names: ["jsonplaceholder_request"]
+  executor:
+    tool_call_count_gt: 0
+    _executor_failed: []
