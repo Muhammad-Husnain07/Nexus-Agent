@@ -43,7 +43,9 @@ class ToolCreate(BaseModel):
     )
     http_method: str = Field(default="GET", description="HTTP method")
     auth_type: str = Field(default="none", description="Authentication type")
-    auth_ref: str = Field(default="", description="Reference to stored auth config")
+    auth_ref: str | None = Field(
+        default=None, description="Reference to stored auth config"
+    )
     input_schema: dict[str, Any] = Field(default_factory=dict, description="JSON Schema for input")
     output_schema: dict[str, Any] = Field(
         default_factory=dict, description="JSON Schema for output"
@@ -58,8 +60,11 @@ class ToolCreate(BaseModel):
     requires_approval: bool = Field(
         default=False, description="If True, tool execution requires explicit human approval"
     )
+    compensating_operation: str | None = Field(
+        default=None,
+        description="Tool name that UNDOES this tool's side effects (saga compensation)",
+    )
     enabled: bool = Field(default=True, description="Whether the tool is active")
-    tenant_public: bool = Field(default=False, description="Visible to all when true")
     idempotent: bool = Field(
         default=False, description="Whether the tool supports idempotent execution (safe to retry)"
     )
@@ -71,6 +76,21 @@ class ToolCreate(BaseModel):
     )
     aliases: list[str] | None = Field(
         default=None, description="Alternative names/phrases users may say"
+    )
+    capabilities: list[str] | None = Field(
+        default=None, description="Explicit semantic capabilities (e.g. retrieve, pokemon, game_data)"
+    )
+    produces: list[str] | None = Field(
+        default=None, description="Artifacts this tool produces (downstream planning)"
+    )
+    consumes: list[str] | None = Field(
+        default=None, description="Artifacts this tool consumes (upstream wiring)"
+    )
+    related: list[str] | None = Field(
+        default=None, description="Adjacent tool names for retrieval suggestions"
+    )
+    cacheable: bool = Field(
+        default=True, description="Quality hint: result cacheable (true) or must be fresh (false)"
     )
     @model_validator(mode="after")
     def _validate_tool_type(self) -> "ToolCreate":
@@ -109,6 +129,13 @@ class ToolUpdate(BaseModel):
     requires_approval: bool | None = Field(
         default=None, description="If True, tool execution requires explicit human approval"
     )
+    compensating_operation: str | None = Field(
+        default=None,
+        description="Tool name that UNDOES this tool's side effects (saga compensation)",
+    )
+    idempotent: bool | None = Field(
+        default=None, description="Whether the tool supports idempotent execution (safe to retry)"
+    )
     enabled: bool | None = Field(default=None, description="Whether the tool is active")
     rate_limit_per_minute: int | None = Field(
         default=None, description="Max requests per minute (null = unlimited)"
@@ -118,6 +145,21 @@ class ToolUpdate(BaseModel):
     )
     aliases: list[str] | None = Field(
         default=None, description="Alternative names/phrases users may say"
+    )
+    capabilities: list[str] | None = Field(
+        default=None, description="Explicit semantic capabilities"
+    )
+    produces: list[str] | None = Field(
+        default=None, description="Artifacts this tool produces (downstream planning)"
+    )
+    consumes: list[str] | None = Field(
+        default=None, description="Artifacts this tool consumes (upstream wiring)"
+    )
+    related: list[str] | None = Field(
+        default=None, description="Adjacent tool names for retrieval suggestions"
+    )
+    cacheable: bool | None = Field(
+        default=None, description="Quality hint: result cacheable (true) or must be fresh (false)"
     )
     @model_validator(mode="after")
     def _validate_tool_type(self) -> "ToolUpdate":
@@ -143,8 +185,8 @@ class ToolRead(BaseModel):
         default="http_api", description="Type of tool: http_api or mcp"
     )
     endpoint_url: str = Field(description="API endpoint URL (required for http_api)")
-    mcp_server_url: str = Field(
-        default="", description="MCP server URL (required for mcp)"
+    mcp_server_url: str | None = Field(
+        default=None, description="MCP server URL (required for mcp)"
     )
     http_method: str = Field(description="HTTP method")
     auth_type: str = Field(description="Authentication type")
@@ -159,6 +201,10 @@ class ToolRead(BaseModel):
     requires_approval: bool = Field(
         default=False, description="If True, tool execution requires explicit human approval"
     )
+    compensating_operation: str | None = Field(
+        default=None,
+        description="Tool name that UNDOES this tool's side effects (saga compensation)",
+    )
     enabled: bool = Field(description="Whether the tool is active")
     tenant_public: bool = Field(default=False, description="Visible to all")
     idempotent: bool = Field(default=False, description="Supports idempotent execution")
@@ -170,6 +216,21 @@ class ToolRead(BaseModel):
     )
     aliases: list[str] | None = Field(
         default=None, description="Alternative names/phrases users may say"
+    )
+    capabilities: list[str] | None = Field(
+        default=None, description="Explicit semantic capabilities"
+    )
+    produces: list[str] | None = Field(
+        default=None, description="Artifacts this tool produces (downstream planning)"
+    )
+    consumes: list[str] | None = Field(
+        default=None, description="Artifacts this tool consumes (upstream wiring)"
+    )
+    related: list[str] | None = Field(
+        default=None, description="Adjacent tool names for retrieval suggestions"
+    )
+    cacheable: bool = Field(
+        default=True, description="Quality hint: result cacheable (true) or must be fresh (false)"
     )
     version: int = Field(description="Tool definition version")
     created_at: datetime = Field(description="Creation timestamp")
@@ -202,3 +263,15 @@ class ToolVersionDiff(BaseModel):
     old_version: int = Field(description="Previous version number")
     new_version: int = Field(description="Current version number")
     changed_fields: list[str] = Field(description="Field names that changed")
+
+
+class TestToolRequest(BaseModel):
+    """Request body for the tool test endpoint.
+
+    ``input`` holds the sample input values (path params, query params, or
+    body fields) used to exercise the tool.
+    """
+
+    input: dict[str, Any] | None = Field(
+        default=None, description="Sample input values for the test call"
+    )

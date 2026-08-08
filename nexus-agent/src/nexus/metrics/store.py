@@ -67,16 +67,24 @@ async def update_provider_reliability(
     Returns:
         The new reliability score, or None if provider not found.
     """
+    # Resolve the provider dynamically: exact name match first, then the
+    # conventional ``{name}_provider`` suffix used by the seed registry.
     async with _async_session() as sess:
         result = await sess.execute(
-            select(ProviderModel).where(ProviderModel.name == provider_name)
+            select(ProviderModel).where(
+                ProviderModel.name.in_([provider_name, f"{provider_name}_provider"])
+            )
         )
-        provider = result.scalar_one_or_none()
+        provider = result.scalars().first()
         if provider is None:
             logger.warning("metrics.provider_not_found", provider=provider_name)
             return None
 
-        new_score = ewma_update(provider.reliability_score, success, alpha)
+        # NULL reliability (never scored) → start at a neutral 0.5 baseline
+        current = provider.reliability_score
+        if current is None:
+            current = 0.5
+        new_score = ewma_update(current, success, alpha)
         await sess.execute(
             update(ProviderModel)
             .where(ProviderModel.name == provider_name)
@@ -86,7 +94,7 @@ async def update_provider_reliability(
         logger.info(
             "metrics.provider_reliability_updated",
             provider=provider_name,
-            old=round(provider.reliability_score, 4),
+            old=round(current, 4),
             new=round(new_score, 4),
             alpha=alpha,
         )

@@ -18,6 +18,13 @@ class Session(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     title: Mapped[str] = mapped_column(String(512), default="New Session", comment="Session title")
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("project.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+        comment="Optional parent project ID",
+    )
     status: Mapped[str] = mapped_column(
         String(50),
         default="active",
@@ -44,6 +51,7 @@ class Message(Base):
         UUID(as_uuid=True),
         ForeignKey("session.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
     )
     role: Mapped[str] = mapped_column(
         String(50),

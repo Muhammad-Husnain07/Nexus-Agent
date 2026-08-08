@@ -19,6 +19,10 @@ from nexus.compiler.ir_models import (
     ToolNode,
 )
 
+# Eliminates unreferenced pure nodes — runs after dedup so duplicates are
+# merged before elimination decides what is "dead".
+PRIORITY = 50
+
 
 def run(graph: ExecutionGraph) -> ExecutionGraph:
     """Remove unreferenced pure nodes from the graph.
@@ -29,22 +33,27 @@ def run(graph: ExecutionGraph) -> ExecutionGraph:
     Returns:
         ``ExecutionGraph`` with dead pure nodes removed.
     """
-    # Build set of node IDs that are referenced as dependencies
+    # Build set of node IDs that are referenced as dependencies OR as
+    # conditional branches (branch_true/branch_false are edges, not deps).
     referenced_ids: set[str] = set()
     for node in graph.nodes.values():
         for dep in node.depends_on:
             referenced_ids.add(dep)
+        if isinstance(node, ConditionalNode):
+            referenced_ids.update(node.branch_true)
+            referenced_ids.update(node.branch_false)
 
     kept_nodes: dict = {}
     removed_count = 0
 
     for nid, node in graph.nodes.items():
-        # NEVER delete ToolNode or MapNode — side-effectful API calls
-        if isinstance(node, (ToolNode, MapNode)):
+        # NEVER delete ToolNode, MapNode, or ConditionalNode — side-effectful
+        # API calls and control-flow gates are always kept.
+        if isinstance(node, (ToolNode, MapNode, ConditionalNode)):
             kept_nodes[nid] = node
             continue
 
-        # Pure nodes (Reduce, Conditional, unknown) kept only if referenced
+        # Pure nodes (Reduce, unknown) kept only if referenced
         if nid in referenced_ids:
             kept_nodes[nid] = node
         else:
@@ -53,10 +62,16 @@ def run(graph: ExecutionGraph) -> ExecutionGraph:
     if removed_count == 0:
         return graph
 
-    new_graph = graph.model_copy(deep=True)
-    new_graph.nodes = kept_nodes
-    new_graph.waves = _rebuild_waves(kept_nodes)
-    return new_graph
+    # Immutable graph contract: rebuild a NEW graph (attribute assignment on
+    # a frozen model raises).
+    data = graph.model_dump()
+    data.pop("nodes", None)
+    data.pop("waves", None)
+    return ExecutionGraph(
+        **data,
+        nodes=kept_nodes,
+        waves=_rebuild_waves(kept_nodes),
+    )
 
 
 def _rebuild_waves(nodes: dict) -> list[list[str]]:

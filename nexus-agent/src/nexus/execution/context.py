@@ -8,94 +8,49 @@ No node ever mutates state in place.
 This enables time-travel (replay from any version), branching (fork from any version),
 and full event sourcing (every mutation is a recorded event).
 
-No hardcoded field names. The context snapshot is a generic dict, versioned by integer.
+No hardcoded field names. The context is versioned by integer.
 ``from_state()`` and ``to_state_update()`` dynamically bridge between LangGraph's
 AgentState and this immutable ExecutionContext.
 
-Note: ``ir_stack`` was previously a typed ``IRStack`` (4-layer IR). Since the
-refactoring to Logical/Physical IR, it is now a generic dict for backward
-compatibility with persisted state.
+**State Slimming**: ``from_state()`` strips static/redundant fields (e.g. ``available_tools``)
+from the snapshot to prevent log bloat.  ExecutionContext fields that reference tools,
+registry, or static schemas are prohibited — those live in ``GlobalContext`` and
+``SessionContext`` respectively.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field
+
+# ============================================================================
+# Fields that must NOT appear in ExecutionContext or StatePatch
+# (they belong in GlobalContext or SessionContext instead)
+# ============================================================================
+_GLOBAL_CONTEXT_KEYS: frozenset[str] = frozenset({
+    "compiled_graph", "ontology", "static_schemas", "registry_checksum",
+})
+_SESSION_CONTEXT_KEYS: frozenset[str] = frozenset({
+    "user_context", "user_id", "policies", "memory_ids", "registry_version_checksum",
+})
+
+# Fields that are static/redundant and should be stripped from the lean snapshot
+_STATIC_STRIP_FIELDS: frozenset[str] = frozenset({
+    "available_tools",  # 12-tool array duplicated in every snapshot — lives in GlobalContext
+    "tool_results",     # raw JSON payloads — bloat; ResponseNode reads ArtifactGraph instead
+    "_executor_results",  # redundant hash-keyed dict — eliminated in favor of tool_results
+})
+
+
+def _is_global_or_session_key(key: str) -> bool:
+    """Return True if a key belongs to GlobalContext or SessionContext."""
+    return key in _GLOBAL_CONTEXT_KEYS or key in _SESSION_CONTEXT_KEYS
 
 
 # ============================================================================
-# State Stores — replace flat _executor_results dict
+# StatePatch & ExecutionContext
 # ============================================================================
-
-
-class ToolResult(BaseModel):
-    """Result of a single tool execution stored in ResultStore."""
-    model_config = ConfigDict(extra="forbid")
-
-    task_id: str = Field(description="Task identifier")
-    status: str = Field(description="'success', 'error', or 'skipped'")
-    data: Any = Field(default=None, description="Result data")
-    error: str | None = Field(default=None, description="Error message if failed")
-
-
-class ResultStore(BaseModel):
-    """Transient data: tool outputs and aggregates.
-
-    Replaces the flat ``_executor_results`` dict with structured storage.
-    """
-    model_config = ConfigDict(extra="forbid")
-
-    _by_task: dict[str, ToolResult] = PrivateAttr(default_factory=dict)
-    _by_entity: dict[str, dict[str, Any]] = PrivateAttr(default_factory=dict)
-    _aggregates: dict[str, Any] = PrivateAttr(default_factory=dict)
-
-    def store_task(self, task_id: str, entity_key: str | None, result: ToolResult) -> None:
-        """Store a tool result and optionally index by entity key."""
-        self._by_task[task_id] = result
-        if entity_key and result.status == "success":
-            self._by_entity.setdefault(entity_key, {}).update(result.data or {})
-
-    def get_task(self, task_id: str) -> ToolResult | None:
-        """Retrieve a stored task result."""
-        return self._by_task.get(task_id)
-
-    def store_aggregate(self, agg_id: str, data: Any) -> None:
-        """Store an aggregate result."""
-        self._aggregates[agg_id] = data
-
-    def get_aggregate(self, agg_id: str) -> Any:
-        """Retrieve an aggregate result."""
-        return self._aggregates.get(agg_id)
-
-
-class ArtifactStore(BaseModel):
-    """Permanent side-effects: bookmarks, reports, files."""
-    model_config = ConfigDict(extra="forbid")
-
-    _artifacts: list[dict[str, Any]] = PrivateAttr(default_factory=list)
-
-    def create(self, artifact_type: str, payload: dict[str, Any]) -> None:
-        """Record a new artifact."""
-        artifact = {"type": artifact_type, "payload": payload}
-        self._artifacts.append(artifact)
-
-    def list_by_type(self, artifact_type: str) -> list[dict[str, Any]]:
-        """List artifacts by type."""
-        return [a for a in self._artifacts if a["type"] == artifact_type]
-
-
-class ExecutionSession(BaseModel):
-    """A scoped execution session with results and artifacts."""
-    model_config = ConfigDict(extra="forbid")
-
-    session_id: str = Field(description="Session identifier")
-    active_collections: dict[str, list[Any]] = Field(
-        default_factory=dict,
-        description="Named data collections for iteration",
-    )
-    results: ResultStore = Field(default_factory=ResultStore, description="Task results store")
-    artifacts: ArtifactStore = Field(default_factory=ArtifactStore, description="Artifacts store")
 
 
 class StatePatch(BaseModel):
@@ -124,14 +79,27 @@ class StatePatch(BaseModel):
     )
 
 
+_LEAN_SNAPSHOT_FIELDS: frozenset[str] = frozenset({
+    "_query_type", "_routing_decision", "_executor_all_success",
+    "_context_version", "iteration_count", "final_response",
+    "response_type", "errors", "session_id",
+    "_critique_rounds", "_requires_refinement", "_needs_clarification",
+    "_approval_granted", "_ready_to_plan", "_tool_executed_in_turn",
+    "_total_retry_count", "reflection_feedback", "gathered_requirements",
+})
+
+
 class ExecutionContext(BaseModel):
-    """Immutable versioned context — the only state shape nodes interact with.
+    """Immutable versioned context — lean, fast-moving state only.
 
     Attributes:
         version: Monotonic version counter.
         parent_version: The version this context was derived from.
-        snapshot: The full state dict at this version.
+        snapshot: Lean state dict (strips static/redundant fields).
         ir_stack: Generic dict for backward-compatible IR stack data.
+        artifact_ids: List of artifact UUIDs produced in this context.
+        execution_ids: List of execution event UUIDs.
+        routing_decision: Current routing decision string.
         created_at: ISO timestamp of context creation.
     """
     model_config = ConfigDict(extra="forbid")
@@ -140,17 +108,66 @@ class ExecutionContext(BaseModel):
     parent_version: int = Field(default=0, description="Parent version (0 = root)")
     snapshot: dict[str, Any] = Field(
         default_factory=dict,
-        description="Full state snapshot at this version",
+        description="Lean state snapshot (static fields excluded)",
     )
     ir_stack: dict[str, Any] = Field(
         default_factory=dict,
         description="IR stack data (backward-compatible dict)",
     )
+    artifact_ids: list[str] = Field(
+        default_factory=list,
+        description="Artifact UUIDs produced in this context",
+    )
+    execution_ids: list[str] = Field(
+        default_factory=list,
+        description="Execution event UUIDs",
+    )
+    routing_decision: str = Field(
+        default="continue",
+        description="Current routing decision",
+    )
+    node_timeline: list[str] = Field(
+        default_factory=list,
+        description="Ordered list of node names executed in this context version",
+    )
+    # --- Phase 9 enrichment (typed; derived from snapshot via apply()) ---
+    budget: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Typed budget view (cost/latency caps + estimates)",
+    )
+    strategy: str = Field(
+        default="", description="Selected execution strategy (Phase 4)"
+    )
+    checkpoints: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Named checkpoints (approval/plan-validator decisions)",
+    )
+    artifacts: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Artifact view: type → latest artifact ids (in-session)",
+    )
+    idempotency_key: str | None = Field(
+        default=None,
+        description="Provider-facing idempotency key — STABLE across retries "
+        "and recovery attempts for the same logical operation (P0). The "
+        "executor stamps it on the request when the tool declares an "
+        "idempotency header.",
+    )
+    user_roles: list[str] = Field(
+        default_factory=list,
+        description="Roles of the invoking user (P0 authorization gate). "
+        "The executor denies a capability whose metadata declares "
+        "``allowed_roles`` that do not intersect the caller's roles.",
+    )
     created_at: str = Field(default="", description="ISO timestamp")
 
     @classmethod
     def from_state(cls, state: dict[str, Any]) -> ExecutionContext:
-        """Rebuild an ExecutionContext from any AgentState-shaped dict."""
+        """Rebuild an ExecutionContext from any AgentState-shaped dict.
+
+        Strips static/redundant fields (``available_tools``) from the snapshot
+        to keep context size small (< 5KB).
+        """
         import time
 
         raw_ir = state.get("_ir_stack", {})
@@ -161,11 +178,30 @@ class ExecutionContext(BaseModel):
         else:
             ir_stack = {}
 
+        # Build lean snapshot — only fields that actually change between nodes
+        full_snapshot = dict(state)
+        lean = {}
+        for k, v in full_snapshot.items():
+            if k in _STATIC_STRIP_FIELDS:
+                continue  # skip bloat
+            if k == "_context_snapshot":
+                continue  # NEVER copy the old snapshot into the new one
+            if k in _LEAN_SNAPSHOT_FIELDS or k.startswith("_") or k in (
+                "messages", "tool_results", "dag_tasks",
+                "_logical_workflow", "_execution_graph",
+                "_extraction_result", "_validation_result",
+                "_cost_estimate", "_preferred_tools",
+                "intent", "intent_analysis",
+            ):
+                lean[k] = v
+
         return cls(
             version=state.get("_context_version", 1),
             parent_version=max(0, state.get("_context_version", 1) - 1),
-            snapshot=dict(state),
+            snapshot=lean,
             ir_stack=ir_stack,
+            routing_decision=state.get("_routing_decision", "continue"),
+            node_timeline=list(state.get("_node_timeline", [])),
             created_at=str(time.time()),
         )
 
@@ -175,6 +211,8 @@ class ExecutionContext(BaseModel):
             "_ir_stack": self.ir_stack,
             "_context_version": self.version,
             "_context_snapshot": self.snapshot,
+            "_routing_decision": self.routing_decision,
+            "_node_timeline": self.node_timeline,
         }
 
     def apply(self, patch: StatePatch) -> ExecutionContext:
@@ -191,13 +229,37 @@ class ExecutionContext(BaseModel):
         if patch.ir_stack_update:
             new_ir.update(patch.ir_stack_update)
 
+        # Typed derived views (Phase 9): budget/strategy/checkpoints/artifacts
+        # are read FROM the snapshot — the context stays the single source.
+        budget = {
+            "cost_estimate_usd": float(new_snapshot.get("_cost_estimate", 0.0) or 0.0),
+            "latency_estimate_ms": int(new_snapshot.get("_latency_estimate_ms", 0) or 0),
+            "within_budget": bool(new_snapshot.get("_within_budget", True)),
+        }
+        checkpoints: dict[str, Any] = {}
+        if new_snapshot.get("_plan_validator_action"):
+            checkpoints["plan_validator"] = new_snapshot.get("_plan_validator_action", "")
+        if new_snapshot.get("_approval_pending"):
+            checkpoints["approval"] = "pending"
+
         return ExecutionContext(
             version=patch.version,
             parent_version=self.version,
             snapshot=new_snapshot,
             ir_stack=new_ir,
+            artifact_ids=list(self.artifact_ids),
+            execution_ids=list(self.execution_ids),
+            routing_decision=self.routing_decision,
+            node_timeline=list(self.node_timeline),
+            budget=budget,
+            strategy=str(new_snapshot.get("_execution_strategy", "") or ""),
+            checkpoints=checkpoints,
             created_at=self.created_at,
         )
+
+    def record_node(self, node_name: str) -> None:
+        """Append a node name to the timeline (used by @context_node or graph wrapper)."""
+        self.node_timeline.append(node_name)
 
     @classmethod
     def replay(cls, patches: list[StatePatch], initial: ExecutionContext | None = None) -> ExecutionContext:
@@ -216,5 +278,13 @@ class ExecutionContext(BaseModel):
             parent_version=self.version,
             snapshot=dict(self.snapshot),
             ir_stack=dict(self.ir_stack),
+            artifact_ids=list(self.artifact_ids),
+            execution_ids=list(self.execution_ids),
+            routing_decision=self.routing_decision,
+            node_timeline=list(self.node_timeline),
+            budget=dict(self.budget),
+            strategy=self.strategy,
+            checkpoints=dict(self.checkpoints),
+            artifacts=dict(self.artifacts),
             created_at=self.created_at,
         )

@@ -14,6 +14,11 @@ from collections import Counter
 
 from nexus.compiler.ir_models import ExecutionGraph, PhysicalNode, ToolNode
 
+# Reorders waves only — runs BEFORE passes that mutate the node set
+# (dedup/fusion/elimination) so their wave rebuilds start from a
+# well-ordered base.
+PRIORITY = 30
+
 
 def run(graph: ExecutionGraph) -> ExecutionGraph:
     """Re-order waves so nodes sharing the same tool execute consecutively.
@@ -46,7 +51,9 @@ def run(graph: ExecutionGraph) -> ExecutionGraph:
     if optimized_waves == graph.waves:
         return graph
 
-    return graph.model_copy(update={"waves": optimized_waves})
+    data = graph.model_dump()
+    data.pop("waves", None)
+    return ExecutionGraph(**data, waves=optimized_waves)
 
 
 def _tool_group_key(node: PhysicalNode) -> str:

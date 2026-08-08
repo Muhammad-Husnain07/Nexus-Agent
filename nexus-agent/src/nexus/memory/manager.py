@@ -11,6 +11,17 @@ from typing import Any
 import structlog
 from sqlalchemy import text
 
+
+def _memory_ttl() -> int | None:
+    """Settings-driven memory lifetime (0 = no expiry → None)."""
+    try:
+        from nexus.config.settings import get_settings
+
+        ttl = get_settings().agent.memory_default_ttl_s
+        return ttl if ttl and ttl > 0 else None
+    except Exception:
+        return None
+
 from nexus.config.settings import get_settings
 from nexus.db.base import async_session
 from nexus.db.models.memory import Memory
@@ -116,6 +127,10 @@ class MemoryManager:
             temperature=0.2,
         )
 
+        if response.failed:
+            logger.warning("memory.extract_llm_failed", error=response.error)
+            return []
+
         try:
             data = json.loads(response.content or "[]")
             if isinstance(data, dict):
@@ -159,6 +174,7 @@ class MemoryManager:
                     embedding=embedding,
                     metadata={"session_id": session_id},
                     importance=importance,
+                    ttl_s=_memory_ttl(),
                 )
                 return str(existing_id)
 
@@ -170,6 +186,7 @@ class MemoryManager:
             embedding=embedding,
             metadata={"session_id": session_id},
             importance=importance,
+            ttl_s=_memory_ttl(),
         )
         return str(mid)
 
@@ -369,6 +386,10 @@ class MemoryManager:
 
         if plan:
             parts.append(f"Steps: {len(plan)}")
+
+        artifact_facts = agent_state.get("_artifact_facts")
+        if artifact_facts:
+            parts.append(f"Tool Results Data:\n{artifact_facts}")
 
         if tool_results:
             last = tool_results[-1]

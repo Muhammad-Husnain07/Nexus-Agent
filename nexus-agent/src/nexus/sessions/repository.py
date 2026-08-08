@@ -230,6 +230,24 @@ class MessageRepository(GenericRepository[MessageModel]):
         await self._session.flush()
         return instances
 
+    async def update_parents(
+        self, repairs: list[tuple[uuid.UUID, uuid.UUID | None]]
+    ) -> None:
+        """Repair ``parent_message_id`` references after bulk creation.
+
+        Args:
+            repairs: List of ``(message_id, new_parent_id)`` pairs.
+        """
+        if not repairs:
+            return
+        for message_id, parent_id in repairs:
+            await self._session.execute(
+                update(MessageModel)
+                .where(MessageModel.id == message_id)
+                .values(parent_message_id=parent_id)
+            )
+        await self._session.flush()
+
     async def update_message_feedback(self, message_id: uuid.UUID, feedback: dict[str, Any]) -> MessageModel | None:
         """Update feedback on a message."""
         result = await self._session.execute(

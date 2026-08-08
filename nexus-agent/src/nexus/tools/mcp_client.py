@@ -30,9 +30,14 @@ from nexus.tools.result import ToolResult
 
 logger = structlog.get_logger("nexus.tools.mcp_client")
 
-_MAX_ATTEMPTS: int = 3
-_BACKOFF_BASE_S: float = 1.0
-_BACKOFF_MAX_S: float = 30.0
+
+def _get_mcp_retry_settings() -> tuple[int, float, float]:
+    """Return (max_attempts, backoff_base_s, backoff_max_s) from settings or fallback."""
+    try:
+        s = get_settings().tools
+        return s.mcp_retry_max_attempts, s.mcp_retry_backoff_base_s, s.mcp_retry_backoff_max_s
+    except Exception:
+        return 3, 1.0, 30.0
 
 
 class _McpRetryPredicate:
@@ -43,9 +48,10 @@ class _McpRetryPredicate:
 
 
 def _mcp_retry_policy() -> AsyncRetrying:
+    attempts, base_s, max_s = _get_mcp_retry_settings()
     return AsyncRetrying(
-        stop=stop_after_attempt(_MAX_ATTEMPTS),
-        wait=wait_exponential(multiplier=1, min=_BACKOFF_BASE_S, max=_BACKOFF_MAX_S)
+        stop=stop_after_attempt(attempts),
+        wait=wait_exponential(multiplier=1, min=base_s, max=max_s)
         + wait_random(0, 1),
         retry=retry_if_exception(_McpRetryPredicate()),
         before_sleep=before_sleep_log(logger, logging.WARNING),

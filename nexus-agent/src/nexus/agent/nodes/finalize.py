@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from collections.abc import Callable
 from typing import Any
@@ -54,29 +53,22 @@ async def finalize(
     all_results: list[dict[str, Any]] = state.get("tool_results", [])
     errors: list[str] = state.get("errors", [])
 
-    # Use tool results from current turn only. If no tool was executed
-    # this turn, discard stale results from previous turns.
     tool_executed = state.get("_tool_executed_in_turn", False)
     if tool_executed and all_results:
-        # Keep only results whose tool_name matches current dag_tasks
-        current_task_names = {
-            t.get("tool_name") for t in (state.get("dag_tasks") or [])
-            if t.get("tool_name")
-        }
-        if current_task_names:
-            results = [r for r in all_results if r.get("tool_name") in current_task_names]
-        else:
-            results = all_results
-
-
+        # tool_results are per-turn (ephemeral) — no stale cross-turn
+        # filtering needed (legacy ``dag_tasks`` filter removed — the field
+        # was never populated).
+        results = all_results
     else:
         results = []
 
     # If a final_response was already composed by a prior node (e.g.
-    # respond_without_tool), use it directly — skip recomposition.
-    # Don't return messages — prior node already appended them via reducer.
+    # respond_without_tool, or the background-execution handoff), use it
+    # directly — skip recomposition. "background" carries the enqueued
+    # task message; the worker owns the actual response.
     existing_final: str | None = state.get("final_response")
-    if existing_final and (state.get("response_type") in ("greeting", "meta") or not tool_executed):
+    _passthrough_types = ("greeting", "meta", "background", "cancellation", "clarification")
+    if existing_final and (state.get("response_type") in _passthrough_types or not tool_executed):
         return {
             "messages": [],
             "final_response": existing_final,
@@ -182,19 +174,26 @@ async def finalize(
             temperature=_finalize_settings.finalize_temperature,
             max_tokens=_finalize_settings.finalize_max_tokens,
         )
+        if response.failed:
+            logger.error("finalize.llm_failed", error=response.error)
+            _err = f"LLM call failed: {response.error}"
+            _apology = (
+                "I'm sorry, I encountered an issue while composing the response. "
+                "Please try again."
+            )
+            return {
+                "final_response": _apology,
+                "_routing_decision": "finalize",
+                "response_type": "error",
+                "errors": state.get("errors", []) + [_err],
+            }
         final = response.content or "Task completed."
     else:
         final = "No results were produced."
 
     # Only milestone actual answers — skip for clarification/failure messages
     _milestone_min = get_settings().agent.milestone_min_length
-    try:
-        _low_conf_prefixes = get_settings().agent.low_confidence_prefixes
-    except Exception:
-        _low_conf_prefixes = []
-    _is_clarification = not final or len(final) < _milestone_min or any(
-        final.lower().startswith(p) for p in _low_conf_prefixes
-    )
+    _is_clarification = not final or len(final) < _milestone_min
     final_msg = _openai_message("assistant", final, _milestone=not _is_clarification)
 
     # Persist to working memory + long-term memory

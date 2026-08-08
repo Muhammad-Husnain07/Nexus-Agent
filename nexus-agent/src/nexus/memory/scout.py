@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 import structlog
+from pydantic import BaseModel, ConfigDict, Field
 
 from nexus.config.settings import get_settings
 from nexus.llm.client import LLMClient
@@ -18,6 +19,35 @@ from nexus.memory.store import MemoryStore
 logger = structlog.get_logger("nexus.memory.scout")
 
 TRIGGER_FINALIZE = "finalize"
+TRIGGER_PLANNING = "planning"
+
+
+class MemoryRetrievalResult(BaseModel):
+    """Typed memory retrieval for planning (bounded, session-scoped).
+
+    Frozen contract consumed by the planner prompt builder — never a raw
+    list of dicts crossing the memory → planner boundary.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    snippets: tuple[str, ...] = Field(
+        default_factory=tuple,
+        description="Bounded, formatted memory snippets (token-capped)",
+    )
+    count: int = Field(default=0, description="Number of memories injected")
+    elapsed_ms: float = Field(default=0.0, description="Retrieval wall time")
+    truncated: bool = Field(
+        default=False,
+        description="True when the token budget cut the injection short",
+    )
+
+    @property
+    def as_text(self) -> str:
+        """Bounded text block for the planner prompt (never parsed by logic)."""
+        if not self.snippets:
+            return ""
+        return "<planning_memories>\n" + "\n".join(self.snippets) + "\n</planning_memories>"
 
 
 class MemoryScout:
@@ -60,6 +90,39 @@ class MemoryScout:
 
         return self._format(memories)
 
+    async def scout_for_planning(
+        self,
+        query: str,
+        session_id: str | None = None,
+    ) -> MemoryRetrievalResult:
+        """Typed memory retrieval at PLANNING time (Phase 5).
+
+        Retrieves preferences / prior tasks / recurring goals so the planner
+        is context-aware. Bounded by the same token budget as finalize.
+        """
+        import time as _t
+
+        started = _t.perf_counter()
+        empty = MemoryRetrievalResult()
+        if not self._settings.scout_enabled or not self._settings.enabled:
+            return empty
+        if not query or not query.strip():
+            return empty
+
+        memories = await self._retrieve_mmr(query.strip(), session_id=session_id)
+        if not memories:
+            return empty
+
+        formatted = self._format(memories)
+        if not formatted:
+            return empty
+        return MemoryRetrievalResult(
+            snippets=(formatted,),
+            count=len(memories),
+            elapsed_ms=round((_t.perf_counter() - started) * 1000, 2),
+            truncated=len(memories) > self._settings.retrieval_top_k,
+        )
+
     def _build_query(self, trigger: str, context: dict[str, Any]) -> str:
         """Build an implicit search query from the trigger context."""
         if trigger == TRIGGER_FINALIZE:
@@ -70,6 +133,8 @@ class MemoryScout:
                 tool = last.get("tool_name", "") if isinstance(last, dict) else ""
                 return f"{intent} {tool}".strip()
             return intent
+        if trigger == TRIGGER_PLANNING:
+            return str(context.get("query", "")).strip()
 
         return ""
 
@@ -99,6 +164,21 @@ class MemoryScout:
             top_k=k * 4,  # larger pool for MMR selection
             metadata_filter=meta_filter,
         )
+        if not candidates:
+            return []
+        # FRESHNESS (P1): memories that declare an expiry (metadata
+        # ``expires_at``, epoch seconds) and have outlived it are excluded —
+        # the planner must never treat stale data as current truth.
+        try:
+            import time as _time
+
+            _now = _time.time()
+            candidates = [
+                c for c in candidates
+                if _fresh(c, _now)
+            ]
+        except Exception:
+            pass
         if not candidates:
             return []
         if len(candidates) <= k:
@@ -168,3 +248,16 @@ class MemoryScout:
     def _cosine_sim_approx(a: dict[str, Any], b: dict[str, Any]) -> float:
         """Approximate similarity using the precomputed query similarity as proxy."""
         return min(a.get("similarity", 0), b.get("similarity", 0)) * 0.5
+
+
+def _fresh(row: dict[str, Any], now: float) -> bool:
+    """True when the memory row is not expired (metadata ``expires_at`` in
+    epoch seconds). Rows without an expiry are always fresh."""
+    try:
+        meta = row.get("metadata") or row.get("metadata_") or {}
+        expires = meta.get("expires_at")
+        if expires is None:
+            return True
+        return float(expires) > now
+    except Exception:
+        return True

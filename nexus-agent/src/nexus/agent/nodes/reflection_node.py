@@ -19,18 +19,11 @@ from typing import Any
 import structlog
 
 from nexus.agent.node_wrapper import context_node
-from nexus.compiler.ir_models import ExecutionGraph
+from nexus.compiler.ir_models import ExecutionGraph, ToolNode
 from nexus.execution.context import ExecutionContext, StatePatch
-from nexus.execution.event_emitter import emit_graph_patched
+from nexus.execution.events import emit_graph_patched
 
 logger = structlog.get_logger("nexus.agent.nodes.reflection")
-
-
-class QuorumFailureError(Exception):
-    """Raised when more than 50% of tasks fail."""
-
-
-_QUORUM_THRESHOLD: float = 0.5
 
 
 @context_node
@@ -103,7 +96,22 @@ async def reflection_node(ctx: ExecutionContext) -> StatePatch:
             failed=len(failed),
             total=total_tasks,
         )
-        raise QuorumFailureError(f"More than {quorum*100:.0f}% of tasks failed.")
+        # COMPENSATION: roll back already-succeeded side-effectful tools
+        # (best-effort, audit-logged) before surfacing the failure.
+        await _compensate_succeeded(snapshot, graph, failed)
+        # GRACEFUL FAIL (stabilization): quorum failure is a decision, not an
+        # exception — the graph routes to ResponseNode, which renders any
+        # surviving artifacts. A successful execution must never abort the
+        # whole run (a raised QuorumFailureError bypassed recovery entirely).
+        return StatePatch(
+            version=ctx.version + 1,
+            updates={
+                "_routing_decision": "finalize",
+                "_recovery_available": True,
+                "_recovery_failed_tasks": list(failed),
+                "errors": list(failed),
+            },
+        )
 
     new_counts = dict(retry_counts)
     for tid in tasks_to_retry:
@@ -174,3 +182,42 @@ def _build_graph_patch(
         nodes=patched_nodes,
         waves=[],
     )
+
+
+async def _compensate_succeeded(
+    snapshot: dict[str, Any],
+    graph: ExecutionGraph,
+    failed_ids: list[str],
+) -> None:
+    """Best-effort rollback of succeeded side-effectful tools after quorum failure.
+
+    Uses tool results recorded in the execution to build the compensation
+    input payload, and delegates to ``CompensationService`` (audit-logged in
+    ``compensation_log``). Failures here never raise — compensation is
+    best-effort by design.
+    """
+    try:
+        failed_set = set(failed_ids)
+        succeeded: list[dict[str, Any]] = []
+        for nid, node in graph.nodes.items():
+            if nid in failed_set:
+                continue
+            if not isinstance(node, ToolNode):
+                continue
+            succeeded.append({
+                "tool_name": node.tool_name,
+                "tool_id": None,
+                "inputs": dict(node.inputs or {}),
+            })
+        if not succeeded:
+            return
+
+        from nexus.sagas.compensation import CompensationService
+
+        service = CompensationService()
+        await service.compensate(
+            session_id=str(snapshot.get("session_id", "") or None),
+            succeeded_tools=succeeded,
+        )
+    except Exception as exc:
+        logger.warning("reflection_node.compensation_failed", error=str(exc)[:300])

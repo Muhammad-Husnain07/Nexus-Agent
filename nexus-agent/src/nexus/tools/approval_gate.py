@@ -16,10 +16,11 @@ logger = structlog.get_logger("nexus.tools.approval_gate")
 def requires_approval(tool_data: dict[str, Any]) -> bool:
     """Check if a tool requires human approval before execution.
 
-    Dynamic — reads from tool metadata. No hardcoded tool names.
+    Dynamic — reads from tool metadata + settings. No hardcoded tool names.
 
     A tool requires approval if:
-    - Its ``risk_level`` is ``"high"``, OR
+    - Its ``risk_level`` ranks at or above ``settings.tools.approval_min_risk``
+      (compared via ``settings.agent.risk_order``), OR
     - Its ``requires_approval`` field is ``True``
 
     Args:
@@ -30,7 +31,16 @@ def requires_approval(tool_data: dict[str, Any]) -> bool:
     """
     risk_level = tool_data.get("risk_level", "low")
     explicit = tool_data.get("requires_approval", False)
-    return risk_level == "high" or explicit is True
+    if explicit is True:
+        return True
+    try:
+        from nexus.config.settings import get_settings as _ag_settings
+        settings = _ag_settings()
+        risk_order = settings.agent.risk_order
+        min_risk = settings.tools.approval_min_risk
+        return risk_order.get(risk_level, 0) >= risk_order.get(min_risk, 10_000)
+    except Exception:
+        return False
 
 
 def check_plan_approval(

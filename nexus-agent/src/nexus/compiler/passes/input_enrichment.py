@@ -28,6 +28,9 @@ from nexus.registry.client import RegistryClient
 
 logger = structlog.get_logger("nexus.compiler.passes.input_enrichment")
 
+# Runs FIRST — enriches inputs before any structural pass examines them.
+PRIORITY = 10
+
 
 async def run(
     graph: ExecutionGraph,
@@ -57,7 +60,9 @@ async def run(
     if enriched_nodes == graph.nodes:
         return graph
 
-    return graph.model_copy(update={"nodes": enriched_nodes})
+    data = graph.model_dump()
+    data.pop("nodes", None)
+    return ExecutionGraph(**data, nodes=enriched_nodes)
 
 
 async def _enrich_tool_node(

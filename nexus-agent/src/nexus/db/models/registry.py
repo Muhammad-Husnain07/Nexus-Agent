@@ -16,7 +16,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -93,6 +93,14 @@ class CapabilityModel(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
+    parent_capability_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("capability.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+        comment="Parent capability for ontology hierarchy (self-referential FK)",
+    )
+
     providers = relationship("ProviderModel", back_populates="capability", passive_deletes=True)
 
 
@@ -114,7 +122,8 @@ class ProviderModel(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     capability_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("capability.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("capability.id", ondelete="CASCADE"), nullable=False,
+        index=True,
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False, comment="Provider name")
     description: Mapped[str] = mapped_column(Text, default="", comment="Provider description")
@@ -158,7 +167,8 @@ class EndpointModel(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     provider_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("provider.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("provider.id", ondelete="CASCADE"), nullable=False,
+        index=True,
     )
     url: Mapped[str] = mapped_column(String(2048), nullable=False, comment="Endpoint URL")
     http_method: Mapped[str] = mapped_column(String(10), default="GET", comment="HTTP method")
@@ -174,6 +184,18 @@ class EndpointModel(Base):
     supports_batch: Mapped[bool] = mapped_column(
         Boolean, default=False, comment="Whether this endpoint supports batch requests"
     )
+    required_permissions: Mapped[list[str]] = mapped_column(
+        JSONB, default=list, comment="Permissions required to use this endpoint"
+    )
+    api_version: Mapped[str | None] = mapped_column(
+        String(50), nullable=True, default=None, comment="API version identifier"
+    )
+    deprecated: Mapped[bool] = mapped_column(
+        Boolean, default=False, comment="Whether this endpoint is deprecated"
+    )
+    min_tier: Mapped[str | None] = mapped_column(
+        String(50), nullable=True, default=None, comment="Minimum user tier required"
+    )
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, comment="Whether the endpoint is active")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -188,6 +210,9 @@ class RegistryVersionModel(Base):
     """
 
     __tablename__ = "registry_version"
+    __table_args__ = (
+        UniqueConstraint("version", name="uq_registry_version_version"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     version: Mapped[int] = mapped_column(Integer, nullable=False, comment="Monotonic version number")

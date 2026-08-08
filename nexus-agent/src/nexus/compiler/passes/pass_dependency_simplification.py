@@ -9,6 +9,10 @@ Pass is pure: no I/O, no datetime, no random.
 
 from nexus.compiler.ir_models import ExecutionGraph, PhysicalNode, ToolNode
 
+# Simplifies dependencies — runs after dedup/elimination have settled the
+# node set (removing nodes first would orphan dependency edges).
+PRIORITY = 60
+
 
 def run(graph: ExecutionGraph) -> ExecutionGraph:
     """Simplify the dependency graph by inlining pass-through nodes.

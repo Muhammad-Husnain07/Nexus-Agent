@@ -29,8 +29,9 @@ logger = structlog.get_logger("nexus.compiler.pass_manager")
 def _discover_passes() -> list[str]:
     """Discover all pass modules in the ``passes`` package.
 
-    Returns module names sorted alphabetically for deterministic execution order.
-    No hardcoded pass list — full dynamic discovery.
+    Returns module names ordered by optional module-level ``PRIORITY``
+    (lower runs first), falling back to alphabetical order for passes that
+    declare none. No hardcoded pass list — full dynamic discovery.
     """
     import nexus.compiler.passes as passes_pkg
 
@@ -38,7 +39,16 @@ def _discover_passes() -> list[str]:
     for _importer, modname, ispkg in pkgutil.iter_modules(passes_pkg.__path__):
         if not ispkg:
             modules.append(modname)
-    return sorted(modules)
+
+    def _sort_key(modname: str) -> tuple[int, str]:
+        try:
+            mod = importlib.import_module(f"nexus.compiler.passes.{modname}")
+            priority = getattr(mod, "PRIORITY", 100)
+        except Exception:
+            priority = 100
+        return (int(priority) if priority is not None else 100, modname)
+
+    return sorted(modules, key=_sort_key)
 
 
 def _load_pass(modname: str) -> Any | None:

@@ -56,6 +56,13 @@ class ExecutionTask:
     timeout_s: float = 15.0
     endpoint_url: str = ""  # Resolved by Compiler — executor reads this directly
     http_method: str = "GET"  # Resolved by Compiler — executor reads this directly
+    candidate_endpoints: list[dict[str, Any]] = field(default_factory=list)
+    # Conditional gate metadata (kind == "conditional"): the executor evaluates
+    # ``condition`` against accumulated results and enables exactly one branch.
+    kind: str = "tool"  # tool | map | conditional
+    condition: str = ""
+    branch_true: list[str] = field(default_factory=list)
+    branch_false: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -148,14 +155,17 @@ async def build_plan(
         capabilities_context=capabilities_context,
     )
 
-    # Feed to the deterministic Compiler
+    # Feed to the deterministic Compiler (Compiler expects a resolver, not a
+    # raw session — wrap the session in the production resolver)
+    from nexus.capabilities.resolver import DynamicCapabilityResolver
+
     if db_session is None:
         from nexus.db.base import async_session as _session_factory
         async with _session_factory() as session:
-            compiler = Compiler(session)
+            compiler = Compiler(DynamicCapabilityResolver(session))
             graph = await compiler.compile(logical_workflow)
     else:
-        compiler = Compiler(db_session)
+        compiler = Compiler(DynamicCapabilityResolver(db_session))
         graph = await compiler.compile(logical_workflow)
 
     # Convert ExecutionGraph → ExecutionPlan (backward compat)

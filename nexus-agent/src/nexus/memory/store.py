@@ -34,6 +34,7 @@ class MemoryStore:
         embedding: list[float] | None = None,
         metadata: dict[str, Any] | None = None,
         importance: float = 0.5,
+        ttl_s: int | None = None,
     ) -> uuid.UUID:
         """Store a memory entry."""
         mid = memory_id or uuid.uuid4()
@@ -41,7 +42,23 @@ class MemoryStore:
         # Sanitize content before persisting — strip LLM artifacts
         content = re.sub(r"###\s*$", "", content.strip())
         content = re.sub(r"<\|im_end\|>\s*$", "", content.strip())
-        content = re.sub(r"<\|endoftext\|>\s*$", "", content.strip())
+        content = re.sub(r"<|endoftext|>\s*$", "", content.strip())
+
+        # PROVENANCE (P1): every memory entry carries its observed time,
+        # source, scope, and confidence — the freshness contract the
+        # ContextCompiler and the planner rely on. Attached here (the store
+        # boundary) so no caller can forget them.
+        now = datetime.now(UTC)
+        metadata = dict(metadata or {})
+        metadata.setdefault("observed_at", now.isoformat())
+        metadata.setdefault("source", "agent")
+        metadata.setdefault("scope", session_id or "global")
+        metadata.setdefault("confidence", round(importance, 2))
+        # FRESHNESS (P1): an optional bounded lifetime writes ``expires_at``
+        # (epoch seconds) — the scout's expiry filter enforces it; stale
+        # memories are never retrieved as current truth.
+        if ttl_s and ttl_s > 0:
+            metadata["expires_at"] = now.timestamp() + ttl_s
 
         async with async_session() as session:
             repo = GenericRepository(session, Memory)
@@ -49,19 +66,24 @@ class MemoryStore:
             if existing is not None:
                 existing.content = content
                 existing.importance = importance
-                existing.metadata_ = metadata or {}
-                existing.last_accessed_at = datetime.now(UTC)
+                # MERGE metadata instead of overwriting — overwriting destroys
+                # the original attribution (tool_name, original session) and
+                # breaks per-session isolation in recall.
+                merged_meta = dict(existing.metadata_ or {})
+                if metadata:
+                    merged_meta.update(metadata)
+                existing.metadata_ = merged_meta
+                existing.last_accessed_at = now
                 if embedding is not None:
                     existing.embedding = embedding
             else:
-                now = datetime.now(UTC)
                 await repo.create(
                     id=mid,
                     session_id=uuid.UUID(session_id) if session_id else None,
                     kind=kind,
                     content=content,
                     embedding=embedding,
-                    metadata_=metadata or {},
+                    metadata_=metadata,
                     importance=importance,
                     status="active",
                     access_count=0,
@@ -84,6 +106,52 @@ class MemoryStore:
             mem.last_accessed_at = datetime.now(UTC)
             await session.commit()
             return self._row_to_dict(mem)
+
+    async def find_by_metadata(
+        self,
+        metadata_filter: dict[str, Any],
+        kind: str | None = None,
+        top_k: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Deterministic metadata lookup — no embedding required.
+
+        Used by the executor's cacheable artifact reads (Phase 5): find a
+        previously stored artifact by its execution key without paying for a
+        vector query.
+        """
+        if not metadata_filter:
+            return []
+        sql = (
+            "SELECT id, session_id, kind, content, metadata_, importance, "
+            "created_at, last_accessed_at, status, access_count, "
+            "base_importance, current_importance "
+            "FROM memory WHERE 1=1 "
+        )
+        params: dict[str, Any] = {}
+
+        if kind:
+            sql += "AND kind = :kind "
+            params["kind"] = kind
+
+        import re
+        _VALID_KEY = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+        for idx, (k, v) in enumerate(metadata_filter.items()):
+            if not _VALID_KEY.fullmatch(str(k)):
+                raise ValueError(f"Invalid metadata key: {k}")
+            kp = f"mfk_{idx}"
+            vp = f"mfv_{idx}"
+            sql += f"AND metadata_ ->> :{kp} = :{vp} "
+            params[kp] = k
+            params[vp] = str(v)
+
+        sql += "ORDER BY created_at DESC LIMIT :top_k"
+        params["top_k"] = top_k
+
+        async with async_session() as session:
+            result = await session.execute(text(sql), params)
+            rows = result.all()
+
+        return [self._row_to_dict(row) for row in rows]
 
     async def search(
         self,

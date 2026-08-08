@@ -1,7 +1,6 @@
 """Tool registry, discovery, executor, MCP, and API."""
 
 from nexus.tools.api import router as tools_router
-from nexus.tools.discovery import DynamicToolSelector
 from nexus.tools.error_recovery import SemanticErrorClassifier, SemanticRetryHandler
 from nexus.tools.executor import ExecutionContext, ToolExecutor
 from nexus.tools.mcp_server import setup_mcp
@@ -24,7 +23,6 @@ __all__ = [
     "PerformanceTracker",
     "SemanticErrorClassifier",
     "SemanticRetryHandler",
-    "DynamicToolSelector",
     "EMBEDDING_MODEL",
     "ExecutionContext",
     "performance_tracker",

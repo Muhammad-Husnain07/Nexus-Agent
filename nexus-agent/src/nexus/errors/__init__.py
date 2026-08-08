@@ -1,8 +1,19 @@
 """Custom exception hierarchy, error handler, retry policies, circuit breaker, idempotency, graceful degradation, and dead letter queue."""
 
-from nexus.errors.base import (
+from nexus.errors.queue import (
+    DeadLetterExecution,
+    DeadLetterQueue,
+    DegradationManager,
+    IdempotencyMiddleware,
+    cache_idempotent_response,
+    get_idempotent_response,
+)
+from nexus.errors.resilience import (
     AgentError,
+    CircuitBreaker,
+    CircuitBreakerRegistry,
     CircuitOpenError,
+    CircuitState,
     ContextWindowExceededError,
     DeadLetterError,
     ErrorCode,
@@ -15,16 +26,6 @@ from nexus.errors.base import (
     RateLimitError,
     ToolExecutionError,
     UnauthorizedError,
-)
-from nexus.errors.circuit_breaker import CircuitBreaker, CircuitBreakerRegistry, CircuitState
-from nexus.errors.dead_letter import DeadLetterExecution, DeadLetterQueue
-from nexus.errors.graceful_degradation import DegradationManager
-from nexus.errors.idempotency import (
-    IdempotencyMiddleware,
-    cache_idempotent_response,
-    get_idempotent_response,
-)
-from nexus.errors.retry import (
     db_retry_policy,
     llm_retry_policy,
     redis_retry_policy,

@@ -4,7 +4,7 @@ After the ExecutorNode finishes tool calls, this node processes any
 ``ReduceNode`` nodes in the graph: sorts, groups, averages, filters,
 top-k selections, and summary aggregations.
 
-Operates on the ``_executor_results`` and ``_optimized_graph`` from state.
+Operates on the ``_executor_results`` from state.
 """
 
 from __future__ import annotations
@@ -25,8 +25,9 @@ logger = structlog.get_logger("nexus.agent.nodes.aggregator")
 async def aggregator_node(ctx: ExecutionContext) -> StatePatch:
     """Execute all ReduceNode operations in the graph."""
     snapshot = ctx.snapshot
-    graph_data = snapshot.get("_optimized_graph") or snapshot.get("_execution_graph")
-    executor_results = snapshot.get("_executor_results", {})
+    graph_data = snapshot.get("_execution_graph")
+    tool_results_data = snapshot.get("tool_results", [])
+    executor_results = {r.get("task_id", ""): r for r in tool_results_data if isinstance(r, dict)}
     collections = snapshot.get("_collections", {})
 
     if graph_data is None:

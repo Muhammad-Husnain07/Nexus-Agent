@@ -1,76 +1,123 @@
-# `src/nexus/agent/` — LangGraph Orchestration (13 Nodes)
+# `src/nexus/agent/` — LangGraph Orchestration (19 Nodes)
 
-This module owns the LangGraph StateGraph that implements a **13-node deterministic workflow compiler**. The agent contains **zero business logic** — it translates natural language to LogicalWorkflow via LLM, compiles to ExecutionGraph via the deterministic Compiler, optimizes via the PassManager, executes tools in parallel via DAG waves, reflects via structural graph diffing, and composes responses via LLM.
+> **Runtime Contract** (binding): see
+> [`docs/runtime-contract.md`](../../../docs/runtime-contract.md) and the
+> binding rulebook [`docs/engineering-principles.md`](../../../docs/engineering-principles.md).
+> Highlights: the planner defines *what* (nodes + dependencies), never *how*;
+> the executor never replans; validation precedes compilation; every subsystem
+> boundary is a typed model; no tool-name logic; the architecture is versioned
+> (ADR 0008 — `nexus/agent/architecture.py`, the single cache-key fingerprint).
+
+This module owns the LangGraph StateGraph implementing a **19-node deterministic
+workflow compiler** (intent-first). The agent contains **zero business logic** —
+it translates natural language into intent units, plans a `LogicalWorkflow` via
+LLM, validates it semantically (coverage/alignment/provenance/traceability),
+compiles it deterministically, executes under a per-invocation **ReasoningBudget**
+with authorized/idempotent/cancellable/sandboxed tool calls, recovers every
+failure through the typed recovery state machine, and composes responses that
+only claim what artifacts prove.
 
 ---
 
 ## Key Responsibilities
 
-- Define `StateGraph` topology with **13 production nodes** and 4 conditional routing functions.
-- `@context_node` decorator — enforces `Context(v) → Context(v+1)` immutability via type-annotation detection.
-- `AgentRunner` that wires LLM, compiler, optimizer, executor, event bus, checkpointer, and Redis distributed session lock.
-- **3-prompt architecture**: Router (classifier) → LogicalPlanner (LogicalWorkflow) → Finalize (response narrative).
-- **Deterministic compilation pipeline**: `SemanticPlannerNode` (LLM → LogicalWorkflow) → `CompilerNode` (codegen → ExecutionGraph) → `OptimizerNode` (PassManager fixpoint) → `EstimatorNode` (cost/latency) → `ValidationNode` (schema).
-- **Structural graph diffing** in `ReflectionNode` — builds sub-graph patches for retry, no LLM re-entry.
-- **Per-domain adaptive concurrency** in `ConcurrentExecutor` — independent semaphores per API domain.
-- **execution_key idempotency** — SHA256-based task dedup in the executor.
-- **State stores**: `ResultStore` (transient tool outputs), `ArtifactStore` (permanent side-effects), `ExecutionSession` (scoped session).
-- Wave-based concurrent tool execution via `ConcurrentExecutor` with `_resolve_placeholders()` for dependency chaining.
+- `StateGraph` topology with **19 production nodes** + conditional routing.
+- `@context_node` decorator — enforces `Context(v) → Context(v+1)` immutability.
+- `AgentRunner` — wires LLM, compiler, executor, event bus, checkpointer, Redis
+  lock, the per-invocation **ReasoningBudget** (wall-time, graph steps, replans,
+  recovery, LLM/tool calls, cost — the runner enforces wall-time + steps), and
+  the `_invocation_status` terminal states (RUNNING → COMPLETED / CANCELLED /
+  TIMED_OUT / INTERRUPTED).
+- **3-prompt architecture**: Router (classifier) → LogicalPlanner (v2.4,
+  intent-unit rule) → Finalize (v4.1, untrusted-data boundary).
+- **Intent-first planning (P4)**: `IntentDetector` (deterministic Tier-1) +
+  the rare Tier-2 LLM decomposer; the PlanValidator checks intent coverage,
+  capability alignment, parameter provenance, and traceability.
+- **Deterministic compiler**: `Compiler.compile()` includes `RESOLVE(...)`
+  producer-chain synthesis (metadata-driven; the frozen IR is rebuilt, never
+  mutated).
+- **ReasoningBudget (P0)**: one shared replan counter consumed by the validator,
+  compiler, and recovery replan loops; the executor reserves tool calls; the
+  planner/response reserve LLM calls.
+- **Execution gates (P0)**: authorization (capability `allowed_roles`), SSRF
+  hardening for dynamic endpoints, idempotency keys (stable across retries),
+  and the `uncertain` outcome for mid-call cancellation (never retried).
 
 ---
 
-## Graph Architecture — 13 Nodes
+## Graph Architecture — 19 Nodes
 
 ```mermaid
 graph TD
     START --> RouterNode
     RouterNode -->|conversational| ResponseNode
-    RouterNode -->|workflow| SemanticPlannerNode
-    SemanticPlannerNode --> CompilerNode
+    RouterNode -->|workflow| InteractiveWorkflowNode
+    RouterNode -->|needs_requirements| RequirementCollectorNode
+    RouterNode -->|action| SemanticPlannerNode
+    RequirementCollectorNode -->|ready| SemanticPlannerNode
+    SemanticPlannerNode --> PlanValidatorNode
+    PlanValidatorNode -->|valid| CompilerNode
+    PlanValidatorNode -->|refine| SemanticPlannerNode
+    PlanValidatorNode -->|require_more_info| RequirementCollectorNode
     CompilerNode --> OptimizerNode
     OptimizerNode --> EstimatorNode
     EstimatorNode --> ValidationNode
     ValidationNode -->|valid| ApprovalGateNode
-    ValidationNode -->|invalid| ClarificationNode
-    ClarificationNode --> END
+    ValidationNode -->|empty workflow| ResponseNode
     ApprovalGateNode -->|approved| ExecutorNode
     ApprovalGateNode -->|rejected| ResponseNode
-    ExecutorNode --> AggregatorNode
-    AggregatorNode --> ReflectionNode
+    ApprovalCheckpointResumeNode --> ApprovalGateNode
+    ExecutorNode -->|ReduceNodes present| AggregatorNode
+    ExecutorNode -->|all success| ResponseNode
+    AggregatorNode --> ValidatorNode
+    ValidatorNode --> RecoveryManagerNode
+    RecoveryManagerNode -->|retry| ReflectionNode
+    RecoveryManagerNode -->|replan| ReplanNode
+    RecoveryManagerNode -->|fail| ResponseNode
     ReflectionNode -->|retry| ExecutorNode
     ReflectionNode -->|finalize| ResponseNode
+    ReplanNode --> SemanticPlannerNode
     ResponseNode --> MemoryHelperNode
     MemoryHelperNode --> END
 ```
 
-### Routing Functions (4)
+### Routing Functions
 
 | Function | Source | Branches |
 |----------|--------|----------|
-| `route_after_router` | RouterNode | conversational → ResponseNode; workflow → SemanticPlannerNode |
-| `route_after_validation` | ValidationNode | valid → ApprovalGateNode; invalid → ClarificationNode |
-| `route_after_approval` | ApprovalGateNode | approved → ExecutorNode; rejected/unapproved → ResponseNode |
+| `route_after_router` | RouterNode | conversational → ResponseNode; workflow → InteractiveWorkflowNode; needs requirements → RequirementCollectorNode; action → SemanticPlannerNode |
+| `route_after_requirement_collector` | RequirementCollectorNode | ready → SemanticPlannerNode; need reply → END |
+| `route_after_plan_validator` | PlanValidatorNode | proceed → CompilerNode; refine → SemanticPlannerNode; require_more_info → RequirementCollectorNode; abort → ResponseNode |
+| `route_after_compiler` | CompilerNode | compile failure → SemanticPlannerNode (bounded by the shared budget) then ResponseNode |
+| `route_after_executor` | ExecutorNode | ReduceNodes present → AggregatorNode (reduces on SUCCESS too); workflow resume → InteractiveWorkflowNode; all success → ResponseNode; partial failure → AggregatorNode |
+| `route_after_recovery` | RecoveryManagerNode | retry → ReflectionNode; replan → ReplanNode; fail → ResponseNode |
 | `route_after_reflection` | ReflectionNode | retry → ExecutorNode (sub-graph); finalize → ResponseNode |
 
 ---
 
 ## Node Details
 
-| Node | Dependencies | Behaviour |
-|------|-------------|-----------|
-| `RouterNode` | `llm`, `model` | Two-stage query classifier (heuristic + LLM fallback). Sets `_query_type`, `_preferred_tools` |
-| `SemanticPlannerNode` | `llm`, `model` | Cache-first LLM call → `LogicalWorkflow` JSON. Uses `@context_node` |
-| `CompilerNode` | `db_session` | Deterministic codegen: `Compiler.compile()` maps LogicalWorkflow → ExecutionGraph. Uses `@context_node` |
-| `OptimizerNode` | none | PassManager fixpoint optimizer — runs all discovered passes on ExecutionGraph. Uses `@context_node` |
-| `EstimatorNode` | none | Cost/latency estimation from ToolNode metadata. Budget check. Uses `@context_node` |
-| `ValidationNode` | none | Schema/constraint validation of the optimized graph |
-| `ClarificationNode` | none | Asks for missing info, ends graph |
-| `ApprovalGateNode` | none | HITL check per tool risk level. Per-call scope with inputs, approval expiry |
-| `ExecutorNode` | `tool_executor` | Wave-based concurrent execution with per-domain adaptive concurrency + execution_key idempotency |
-| `AggregatorNode` | none | Pure Python ReduceNode execution (sort, group, average, top-k, filter, summary). Uses `@context_node` |
-| `ReflectionNode` | none | Structural graph diffing — builds sub-graph patch for failed tasks, quorum check. Uses `@context_node` |
-| `ResponseNode` | `llm`, `model` | Composes final response from tool results via LLM |
-| `MemoryHelperNode` | none | Persists session artifacts to pgvector long-term memory. Uses `@context_node` |
+| Node | Behaviour |
+|------|-----------|
+| `RouterNode` | Two-stage classifier (heuristic + LLM fallback) via the GlobalContext O(1) keyword map. Sets `_query_type`, `_goals`, `_preferred_tools`. |
+| `RequirementCollectorNode` | Clarifying questions; routes to the planner when ready. |
+| `InteractiveWorkflowNode` | Template-driven workflow engine; `_resolve_step_artifacts` chains producers (metadata-driven) for consumed artifacts. |
+| `SemanticPlannerNode` | Cache-first LLM → `LogicalWorkflow` (one node per detected intent unit); Tier-2 LLM decomposer on low Tier-1 confidence or intent-class repair failure; replans BYPASS the plan cache. |
+| `PlanValidatorNode` | Deterministic semantic validation: undefined ops, cycles (incl. implicit placeholder edges), missing inputs, type/provenance violations, intent coverage, capability alignment, traceability (extraneous ops), missing producer/consumer, budget, policy. Emits typed metrics (`intent_coverage`, `dropped_intents`, `extraneous_operation_rate`, `capability_alignment`). |
+| `CompilerNode` | Deterministic codegen + `RESOLVE(...)` producer-chain synthesis; bounded compile-failure replan via the shared budget. |
+| `OptimizerNode` | PassManager fixpoint (discovered passes). |
+| `EstimatorNode` | Cost/latency + budget check. |
+| `ValidationNode` | Structure/constraint validation; empty workflow → response. |
+| `ApprovalGateNode` | Conversational approval bound to the **operation hash** (P1): a modified/replanned step is never auto-authorized. |
+| `ApprovalCheckpointResumeNode` | approve/reject/cancel/modify/clarify; records the binding hash. |
+| `ExecutorNode` | Wave-based concurrent execution; per-domain concurrency; execution-key idempotency; candidate-endpoint fallback; **ReasoningBudget tool-call reservation**; UNCERTAIN outcome on mid-call cancellation; executor ledger flows back. |
+| `AggregatorNode` | Pure-Python reduce (runs on success paths too). |
+| `ValidatorNode` | Post-execution validation. |
+| `RecoveryManagerNode` | Typed-status failure classification; consumes `_validation_failed`; every failure enters the state machine (retry/replan/partial/fail). |
+| `ReflectionNode` | Structural graph diffing; sub-graph retry; quorum failure → graceful FAIL (never raises). |
+| `ReplanNode` | Consumes the shared replan budget counter (unified with the validator + compiler loops). |
+| `ResponseNode` | ContextIR → prompt pipeline → synthesis; untrusted-data boundary (finalize v4.1); data-incorporation + per-artifact coverage guards; deterministic renderer fallback; `_response_coverage` metric; LLM-call budget reservation. |
+| `MemoryHelperNode` | pgvector persistence (provenance + freshness attached at the store boundary); never stores failed/degenerate responses. |
 
 ---
 
@@ -78,96 +125,57 @@ graph TD
 
 | File | Responsibility |
 |------|---------------|
-| `graph.py` | `build_agent_graph()` — 13-node graph with 4 conditional routing functions |
-| `node_wrapper.py` | `@context_node` decorator — dynamic old/new pattern detection via type annotation |
-| `runner.py` | `AgentRunner` — module-level graph cache, `invoke()` async generator, Redis distributed lock. SSE event translation |
-| `state_schema.py` | `AgentState` TypedDict (70+ fields). 33 `_EPHEMERAL_FIELDS` |
-| `compiler_router.py` | Incremental compilation: `needs_recompilation()` with structural graph diffing |
-| `planners/dag_planner.py` | Lightweight shim — calls LLM → Compiler → ExecutionPlan |
-| `executors/concurrent_executor.py` | Wave-based executor with per-domain semaphores, execution_key idempotency |
-| `router.py` | Two-stage query classifier (heuristic + LLM fallback). `QueryType` enum |
-| `checkpoint_manager.py` | Named checkpoint lookup |
-| `metrics.py` | Post-execution metrics extraction |
-| `nodes/semantic_parser_node.py` | Cache-first LLM → `LogicalWorkflow` via capability catalog |
-| `nodes/compiler_node.py` | Calls `Compiler.compile()` with DB session |
-| `nodes/optimizer_node.py` | Calls PassManager fixpoint optimizer |
-| `nodes/estimator_node.py` | Cost/latency estimation and budget check |
-| `nodes/aggregator_node.py` | Pure Python ReduceNode execution (6 aggregate kinds) |
-| `nodes/reflection_node.py` | Structural graph diffing, sub-graph patching, quorum check |
-| `nodes/memory_helper_node.py` | pgvector persistence + `persist_after_response()` utility |
-| `prompts/logical_planner.py` | LogicalWorkflow JSON prompt (replaces old extraction + planner prompts) |
+| `architecture.py` | The version manifest (ADR 0008) — `ArchitectureVersion.current()/cache_fingerprint()/to_json()`, the only architecture version in cache keys. |
+| `budget.py` | The `ReasoningBudget` invocation contract (reserve-before-execute, unified replan counter). |
+| `graph.py` | `build_agent_graph()` — the 19-node graph + routing. |
+| `runner.py` | `AgentRunner` — budget init + wall-time/graph-step enforcement + `_invocation_status` terminal states + SSE translation + outcome persistence (with reproducibility + planner metrics). |
+| `state_schema.py` | `AgentState` TypedDict + `_EPHEMERAL_FIELDS` (drift-tested). |
+| `contracts.py` | The node-contract registry (inputs/writes/produces per node; drift-tested; the `_invocation_budget`/`_response_coverage` shared channels). |
+| `planners/intent_detector.py` | Deterministic Tier-1 intent decomposition (closed grammatical connectors; unit→capability via the registry keyword/alias/name bridge). |
+| `planners/intent_decomposer_llm.py` | Rare Tier-2 LLM decomposer (cached, graceful-fail). |
+| `nodes/plan_validator_node.py` | The semantic validation core + P4 metrics. |
+| `nodes/semantic_parser_node.py` | The planner (intent-unit framing; replan cache-bypass; LLM-budget). |
+| `nodes/response.py` | The response lowering (coverage guards + renderer fallback). |
+| `executors/concurrent_executor.py` | Wave executor (idempotency keys, authorization, cancellation, tool-budget, artifact registration). |
+| `nodes/multi_approval_gate_node.py` / `approval_checkpoint_resume_node.py` | Semantic-bound approvals. |
 
 ---
 
-## LLM Call Counts Per Query Type
+## Invariant Chain (the non-negotiable contract)
 
-| Query Type | LLM Calls | Path |
-|------------|-----------|------|
-| Greeting / Meta ("Hi", "What tools?") | 0 | RouterNode → ResponseNode |
-| Single-tool ("Get weather in Tokyo") | 2 | SemanticPlanner + ResponseNode |
-| Multi-tool ("Compare stocks") | 2 | SemanticPlanner + ResponseNode |
-| Retry (on partial failure) | 0 | ReflectionNode → ExecutorNode (sub-graph retry, no LLM) |
-| Clarification | 0 | ValidationNode → ClarificationNode → END |
-
----
-
-## Events Emitted
-
-| Event | Payload | Emitted By |
-|-------|---------|------------|
-| `node_completed` | `{node, duration_ms, has_output}` | Every node |
-| `tool_selected` | `{intent, parameters}` | RouterNode |
-| `plan_created` | `{logical_workflow, execution_graph}` | SemanticPlannerNode / CompilerNode |
-| `optimization_finished` | `{snapshots: [{pass_name, nodes_before, nodes_after}]}` | OptimizerNode |
-| `tool_call_completed` | `{tool_name, status, data, error, task_id}` | ExecutorNode per tool |
-| `final_response` | `{text}` | ResponseNode / ClarificationNode |
-| `approval_required` | `{pending_tools, message}` | ApprovalGateNode |
-| `reflection_result` | `{decision, patched_nodes}` | ReflectionNode |
-| `graph_patched` | `{failed_nodes}` | ReflectionNode (on retry) |
-| `error` | `{message}` | Any node |
-
----
-
-## State Schema
-
-| Tier | Fields | Checkpointed |
-|------|--------|-------------|
-| `persistent` | `session_id`, `user_context`, `approved_tools`, `config_overrides` | Always |
-| `working` | `messages` (reducer), `current_plan`, `tool_results_buffer` (reducer), `gathered_requirements` | Per-turn |
-| `cost` | `total_cost_usd`, `total_tokens`, `per_node` | Per-turn |
-| Compiler IR | `_logical_workflow` (dict), `_execution_graph` (dict), `_context_version` (int) | **Not** ephemeral |
-| Ephemeral | 33 `_`-prefixed fields (routing, execution, extraction) | Cleared between turns |
-
----
-
-## Reducers
-
-| Field | Reducer | Behaviour |
-|-------|---------|-----------|
-| `messages` | `messages_reducer` | Rolling window (last 10 + milestones), dedup by ID |
-| `tool_results_buffer` | `tool_results_reducer` | Append-only, hard bound at 20 entries |
-
----
+```
+LLM proposes.  Registry resolves.  Validator verifies (coverage + alignment +
+provenance + traceability + budget).  Compiler decides structure (RESOLVE(...)
+synthesis).  Executor performs (authorized, idempotent, cancellable,
+sandboxed+SSRF-hardened).  Artifacts prove results.  Recovery handles failure
+(typed, never silent, unified budget).  Response only claims what artifacts
+prove (per-artifact coverage).  Memory remembers with provenance — never
+overrides current intent, never stores failures.
+```
 
 ## Test Coverage
 
 | Test | Type | File |
 |------|------|------|
-| Ephemeral Fields Drift | Unit | `tests/test_ephemeral_fields.py` |
-| Compiler E2E (23 tests) | Unit | `tests/test_compiler_e2e.py` |
-| YAML Scenario Runner | Integration | `tests/run_scenarios.py` |
-
----
+| Handoff invariant gate | Unit | `tests/test_handoff_invariant.py` |
+| Architecture version drift | Unit | `tests/test_architecture_versions.py` |
+| Plan validator (incl. P4 coverage/alignment/provenance/traceability) | Unit | `tests/test_plan_validator.py` |
+| Intent detector | Unit | `tests/test_intent_detector.py` |
+| ReasoningBudget | Unit | `tests/test_reasoning_budget.py` |
+| Codegen RESOLVE synthesis | Unit | `tests/test_codegen_resolve.py` |
+| Adversarial/safety suite | Unit | `tests/test_adversarial.py` |
+| Sandbox SSRF | Unit | `tests/test_sandbox_ssrf.py` |
+| Contract drift / ephemeral drift | Unit | `tests/test_node_contracts.py`, `tests/test_ephemeral_fields.py` |
+| YAML scenario tiers | Integration | `tests/run_scenarios.py` (+ `--tier fast\|medium\|full`) |
+| Scenario stability | Integration | `scripts/stability_score.py` (health = ≥3 clean runs) |
+| Live scenario matrix | Live | `tests/test_scenario_matrix.py` |
 
 ## Dependencies
 
-- `nexus/compiler/` — IR models, codegen, pass manager, cache, registry compiler
-- `nexus/execution/` — ExecutionContext, StatePatch, EventStore, ResultStore, ArtifactStore
-- `nexus/graph/` — KnowledgeGraph (8 graphs)
-- `nexus/metrics/` — EWMA reliability store
-- `nexus/llm/` — LLMClient for all model calls
-- `nexus/tools/` — ToolRegistry, ToolExecutor, DynamicToolSelector, approval_gate
-- `nexus/sessions/` — SessionService, ContextWindowManager
-- `nexus/memory/` — MemoryManager, AsyncPostgresSaver checkpointer, MemoryStore
-- `nexus/redis_client/` — EventBus, distributed lock
-- `nexus/db/` — async session factory
+- `nexus/compiler/` — IR, codegen, pass manager, versioned caches
+- `nexus/artifacts/` — ArtifactBase (frozen, content-hashed), normalizer (state-marked), graph, renderer plugins
+- `nexus/memory/` — MemoryManager, MemoryStore (provenance + ttl), scout (expiry-filtered), checkpointer
+- `nexus/tools/` — ToolRegistry, ToolExecutor (authorization/idempotency/SSRF gates), sandbox
+- `nexus/execution/` — ExecutionContext (idempotency_key, user_roles), StatePatch
+- `nexus/context/` — GlobalContext (O(1) keyword/alias/capability indexes)
+- `nexus/observability/` — InvocationOutcome (architecture fingerprint + planner metrics + reproducibility)

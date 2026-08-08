@@ -18,6 +18,23 @@ logger = structlog.get_logger("nexus.scheduler")
 
 _CONSOLIDATION_INTERVAL_S: int = 1800  # 30 min
 _DECAY_INTERVAL_S: int = 3600  # 60 min
+_OUTBOX_INTERVAL_S: int = 30  # 30 s — drains the transactional outbox
+
+
+async def _outbox_relay_loop() -> None:
+    """Periodically relay pending outbox rows to Redis pub/sub."""
+    while True:
+        await asyncio.sleep(_OUTBOX_INTERVAL_S)
+        try:
+            from nexus.events.service import process_outbox  # noqa: PLC0415
+
+            published = await process_outbox(limit=50)
+            if published:
+                logger.info("scheduler.outbox.relayed", published=published)
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            logger.warning("scheduler.outbox.failed", error=str(exc)[:200])
 
 
 async def _memory_maintenance_loop() -> None:
@@ -65,6 +82,7 @@ async def _memory_maintenance_loop() -> None:
 
 
 _task: asyncio.Task[Any] | None = None
+_outbox_task: asyncio.Task[Any] | None = None
 
 
 async def start_scheduler() -> None:
@@ -76,12 +94,23 @@ async def start_scheduler() -> None:
     logger.info("scheduler.started")
 
 
+async def start_outbox_relay() -> None:
+    """Start the outbox relay background task (idempotent)."""
+    global _outbox_task  # noqa: PLW0603
+    if _outbox_task is not None:
+        return
+    _outbox_task = asyncio.create_task(_outbox_relay_loop())
+    logger.info("scheduler.outbox_relay.started")
+
+
 async def stop_scheduler() -> None:
     """Cancel and await the background scheduler task."""
-    global _task  # noqa: PLW0603
-    if _task is not None:
-        _task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await _task
-        _task = None
-        logger.info("scheduler.stopped")
+    global _task, _outbox_task  # noqa: PLW0603
+    for task in (_task, _outbox_task):
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+    _task = None
+    _outbox_task = None
+    logger.info("scheduler.stopped")

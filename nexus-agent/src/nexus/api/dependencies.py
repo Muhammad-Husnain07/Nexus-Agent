@@ -20,7 +20,6 @@ from nexus.sessions.context_window import ContextWindowManager
 from nexus.sessions.repository import MessageRepository, SessionRepository
 from nexus.sessions.service import SessionService
 from nexus.sessions.system_prompt import SystemPromptBuilder
-from nexus.tools.discovery import DynamicToolSelector
 from nexus.tools.executor import ToolExecutor
 from nexus.tools.registry import ToolRegistry
 
@@ -73,10 +72,6 @@ async def get_agent_runner(request: Request) -> Any:
     event_bus = EventBus(redis_client) if redis_client else None
     http_client = getattr(request.app.state, "http_client", None)
     tool_executor = ToolExecutor(event_bus=event_bus, http_client=http_client)
-    tool_selector = DynamicToolSelector(
-        registry=tool_registry,
-        llm_client=llm,
-    )
     # Resolve checkpointer from settings
     from nexus.config.settings import get_settings  # noqa: PLC0415
     from nexus.db.base import async_session  # noqa: PLC0415
@@ -93,7 +88,6 @@ async def get_agent_runner(request: Request) -> Any:
 
     return AgentRunner(
         llm_client=llm,
-        tool_selector=tool_selector,
         tool_executor=tool_executor,
         event_bus=event_bus,
         session_factory=async_session,

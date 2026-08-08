@@ -2,7 +2,7 @@
 
 Validates that:
 1. A ``_logical_workflow`` exists and has at least one node.
-2. The optimized graph (``_optimized_graph`` or ``_execution_graph``) is structurally sound.
+2. The optimized graph (``_execution_graph``) is structurally sound.
 3. The budget estimate (``_within_budget``) allows execution.
 
 No LLM calls. Fast (~0ms).
@@ -33,7 +33,7 @@ async def validation_node(state: AgentState) -> dict[str, Any]:
         - ``_needs_clarification``: True if clarification is needed.
     """
     workflow = state.get("_logical_workflow")
-    graph = state.get("_optimized_graph") or state.get("_execution_graph")
+    graph = state.get("_execution_graph")
     within_budget = state.get("_within_budget", True)
     warnings = state.get("_estimate_warnings", [])
 

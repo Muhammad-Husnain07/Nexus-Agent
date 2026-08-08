@@ -29,7 +29,12 @@ import inspect
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
-from nexus.execution.context import ExecutionContext, StatePatch
+from nexus.execution.context import (
+    ExecutionContext,
+    StatePatch,
+    _is_global_or_session_key,
+    _STATIC_STRIP_FIELDS,
+)
 
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 
@@ -85,6 +90,7 @@ def context_node(func: F) -> F:
 
         # New pattern: build Context, call node, apply patch
         ctx = ExecutionContext.from_state(state)
+        ctx.record_node(func.__name__)  # Append node name to timeline BEFORE execution
         result = await func(ctx, *args, **kwargs)
 
         if isinstance(result, StatePatch):
@@ -97,11 +103,38 @@ def context_node(func: F) -> F:
                 f"@{func.__name__} must return StatePatch or dict, got {type(result).__name__}",
             )
 
+        # Guard: reject StatePatch keys that belong to GlobalContext or SessionContext
+        for key in list(patch.updates.keys()) + patch.removes:
+            if _is_global_or_session_key(key):
+                raise ValueError(
+                    f"@{func.__name__} attempted to set GlobalContext/SessionContext "
+                    f"key '{key}' via StatePatch — forbidden",
+                )
+
         new_ctx = ctx.apply(patch)
 
         # Merge: canonical context update + flat routing keys from the patch
         merged = new_ctx.to_state_update()
-        merged.update(patch.updates)
+
+        # Strip banned fields from patch.updates BEFORE merging (prevents
+        # tool_results/_executor_results from re-entering the snapshot)
+        stripped_updates = {
+            k: v for k, v in patch.updates.items()
+            if k not in _STATIC_STRIP_FIELDS
+        }
+        merged.update(stripped_updates)
+
+        # Surface _context_snapshot fields to the top level so downstream
+        # nodes can read them via state.get(key, default) even when they
+        # were set by a previous @context_node via StatePatch.updates.
+        # Without this, fields like _critique_rounds, _requires_refinement
+        # get buried inside _context_snapshot and reset to defaults on
+        # the next node invocation, breaking state-carrying loops.
+        cs = merged.get("_context_snapshot")
+        if isinstance(cs, dict):
+            for k, v in cs.items():
+                if k not in merged:
+                    merged[k] = v
         return merged
 
     return wrapper  # type: ignore[return-value]

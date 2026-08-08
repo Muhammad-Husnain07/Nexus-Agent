@@ -29,17 +29,123 @@ from nexus.tools.schemas import (
     ToolUpdate,
 )
 
-_PYTHON_CODE_KEYWORDS: frozenset[str] = frozenset(
-    {
-        "code", "script", "python", "exec", "eval", "compile",
-        "subprocess", "__import__", "importlib", "run_python",
-        "exec_python", "sandbox_code",
-    }
-)
-
 logger = structlog.get_logger("nexus.tools.registry")
 
 EMBEDDING_MODEL: str = get_settings().llm.embedding_model
+
+# Policy defaults for the contract block — resolved from settings once, so
+# the execution_policy block is self-contained per capability.
+_TOOL_DEFAULT_TIMEOUT_S: float = float(
+    getattr(get_settings().tools, "execution_timeout_s", 20.0) or 20.0
+)
+_TOOL_DEFAULT_RETRIES: int = int(
+    getattr(get_settings().tools, "max_retries", 0) or 0
+)
+
+# Mutation marker for the plan cache fingerprint — bumped whenever a tool is
+# registered/updated/deregistered so cached plans never go stale (the
+# compiled graph's checksum doesn't change on API tool changes). Persisted in
+# Redis so the marker survives restarts: an in-memory-only marker resets on
+# boot and stale plans cached by a previous process stay valid.
+_TOOL_REGISTRY_MARKER: str = ""
+_MARKER_REDIS_KEY: str = "nexus:tool_registry_marker"
+
+
+def get_tool_registry_marker() -> str:
+    """Return the current tool-registry mutation marker (restart-safe).
+
+    On a cold start the in-memory marker is empty; the last-known value is
+    restored from Redis so the cache fingerprint remains stable across
+    restarts and never re-validates plans from an older tool set.
+    """
+    global _TOOL_REGISTRY_MARKER  # noqa: PLW0603
+    if _TOOL_REGISTRY_MARKER:
+        return _TOOL_REGISTRY_MARKER
+    try:
+        from nexus.config.settings import get_settings
+
+        import redis as _blocking_redis
+
+        settings = get_settings()
+        client = _blocking_redis.Redis.from_url(
+            settings.redis.url,
+            db=settings.redis.db,
+            socket_timeout=0.5,
+            decode_responses=True,
+        )
+        try:
+            persisted = client.get(_MARKER_REDIS_KEY)
+        finally:
+            client.close()
+        if persisted:
+            _TOOL_REGISTRY_MARKER = str(persisted)
+    except Exception:
+        pass
+    return _TOOL_REGISTRY_MARKER
+
+
+def _bump_tool_registry_marker() -> None:
+    """Bump the marker (idempotent per change window) and persist it.
+
+    The Redis write is a best-effort blocking SET — tool mutations are rare
+    and the short socket timeout bounds any impact.
+    """
+    global _TOOL_REGISTRY_MARKER  # noqa: PLW0603
+    import time as _t
+
+    _TOOL_REGISTRY_MARKER = f"tools:{_t.time():.0f}"
+    try:
+        from nexus.config.settings import get_settings
+
+        import redis as _blocking_redis
+
+        settings = get_settings()
+        client = _blocking_redis.Redis.from_url(
+            settings.redis.url,
+            db=settings.redis.db,
+            socket_timeout=0.5,
+            decode_responses=True,
+        )
+        try:
+            client.set(_MARKER_REDIS_KEY, _TOOL_REGISTRY_MARKER)
+        finally:
+            client.close()
+    except Exception:
+        pass
+
+
+async def _refresh_resolution_indexes() -> None:
+    """Rebuild GlobalContext + retriever indexes after registry changes.
+
+    Tool registration/update/deregister changes the alias/domain/keyword
+    maps that retrieval and resolution read — the in-memory indexes must
+    stay in sync or newly registered tools are invisible to the runtime.
+    Best-effort: failures only warn (the next startup rebuilds cleanly).
+    """
+    try:
+        from nexus.compiler.compiled_graph import load_compiled_graph_async
+        from nexus.context.global_context import GlobalContext, get_global_context, set_global_context
+        from nexus.db.base import async_session as _refresh_db
+        from nexus.capabilities.retrieval import get_capability_retriever, reset_capability_retriever
+
+        compiled = await load_compiled_graph_async()
+        if compiled:
+            async with _refresh_db() as _db:
+                ctx = await GlobalContext.build(compiled, tool_session=_db)
+            set_global_context(ctx)
+            _bump_tool_registry_marker()
+            # Retriever corpus is built from GlobalContext on first use —
+            # reset it so the next retrieve() rebuilds with fresh metadata.
+            reset_capability_retriever()
+            _ = get_global_context()
+            logger.info(
+                "registry.indexes_refreshed",
+                capabilities=len(ctx.capability_providers),
+                aliases=len(ctx.alias_index),
+                domains=len(ctx.domain_index),
+            )
+    except Exception as exc:
+        logger.warning("registry.indexes_refresh_failed", error=str(exc)[:200])
 
 
 def _tool_to_read(tool: Tool) -> ToolRead:
@@ -63,13 +169,40 @@ def _tool_to_read(tool: Tool) -> ToolRead:
         aliases=tool.aliases or [],
         category=tool.category or "general",
         risk_level=tool.risk_level or "low",
-        requires_approval=getattr(tool, "requires_approval", False) or tool.risk_level == "high",
+        requires_approval=_requires_approval(tool),
+        compensating_operation=getattr(tool, "compensating_operation", None),
         enabled=tool.enabled if tool.enabled is not None else True,
+        tenant_public=bool(getattr(tool, "tenant_public", False)),
+        idempotent=bool(getattr(tool, "idempotent", False)),
+        capabilities=tool.capabilities or [],
+        produces=tool.produces or [],
+        consumes=tool.consumes or [],
+        related=tool.related or [],
+        cacheable=bool(getattr(tool, "cacheable", True)),
         version=tool.version or 1,
         created_at=tool.created_at,
         updated_at=tool.updated_at,
         embedding=tool.embedding,
     )
+
+
+def _requires_approval(tool: Any) -> bool:
+    """Derive the approval requirement from tool metadata + settings.
+
+    Uses the same settings-driven threshold as ``approval_gate.requires_approval``
+    so the read path and the gate never diverge.
+    """
+    if getattr(tool, "requires_approval", False) is True:
+        return True
+    try:
+        from nexus.config.settings import get_settings as _reg_settings
+        settings = _reg_settings()
+        risk_order = settings.agent.risk_order
+        min_risk = settings.tools.approval_min_risk
+        risk_level = getattr(tool, "risk_level", "low") or "low"
+        return risk_order.get(risk_level, 0) >= risk_order.get(min_risk, 10_000)
+    except Exception:
+        return False
 
 
 def _embedding_text(tool: ToolCreate | Tool) -> str:
@@ -79,6 +212,51 @@ def _embedding_text(tool: ToolCreate | Tool) -> str:
     tags_list = tool.tags if isinstance(tool, Tool) else tool.tags
     tag_str = ",".join(sorted(tags_list)) if tags_list else ""
     return f"{name}: {desc}. {purp}. tags: {tag_str}"
+
+
+def _coerce_examples(values: list[Any]) -> list[dict[str, Any]]:
+    """Normalize example entries to plain dicts for JSONB storage.
+
+    ``ToolUpdate.model_dump`` already serializes ``ToolExample`` models to
+    dicts, and API clients may pass raw dicts directly — so entries can be
+    either. ``.model_dump()`` must never be called on the output of
+    ``model_dump()``.
+    """
+    return [v.model_dump() if hasattr(v, "model_dump") else v for v in values]
+
+
+def _build_tool_contract(tool: Any) -> dict[str, Any]:
+    """Build the capability contract dict from a tool definition.
+
+    Fully metadata-driven — every field comes from the tool. The tool's
+    validation rules are surfaced as ``business_rules`` so the
+    ValidatorNode's Tier-3 check (which reads ``capability.contract.
+    business_rules``) enforces exactly what the registration form declares.
+    """
+    return {
+        "idempotent": getattr(tool, "idempotent", False),
+        "risk_level": getattr(tool, "risk_level", None) or "low",
+        "requires_approval": getattr(tool, "requires_approval", False),
+        "cacheable": bool(getattr(tool, "cacheable", True)),
+        "capabilities": list(getattr(tool, "capabilities", None) or []),
+        "related": list(getattr(tool, "related", None) or []),
+        "business_rules": getattr(tool, "validation_rules", None) or {},
+        # Unified execution policy (Phase 4) — readers prefer this block and
+        # fall back to the legacy keys above (back-compat).
+        "execution_policy": {
+            "timeout_s": _TOOL_DEFAULT_TIMEOUT_S,
+            "retries": _TOOL_DEFAULT_RETRIES,
+            "parallel": True,
+            "risk_level": getattr(tool, "risk_level", None) or "low",
+            "requires_approval": getattr(tool, "requires_approval", False),
+            "idempotent": getattr(tool, "idempotent", False),
+            "cacheable": bool(getattr(tool, "cacheable", True)),
+            "budget_usd": None,
+            "permissions": [],
+            "rollback": getattr(tool, "compensating_operation", None),
+            "maintenance_windows": [],
+        },
+    }
 
 
 class ToolRegistry:
@@ -107,10 +285,12 @@ class ToolRegistry:
             name=data.name,
             description=data.description,
             purpose=data.purpose,
+            tool_type=data.tool_type,
             endpoint_url=data.endpoint_url,
+            mcp_server_url=data.mcp_server_url,
             http_method=data.http_method,
             auth_type=data.auth_type,
-            auth_ref=data.auth_ref,
+            auth_ref=data.auth_ref or "",
             input_schema=data.input_schema,
             output_schema=data.output_schema,
             validation_rules=data.validation_rules,
@@ -118,13 +298,27 @@ class ToolRegistry:
             tags=data.tags,
             category=data.category,
             risk_level=data.risk_level,
+            requires_approval=data.requires_approval,
+            compensating_operation=data.compensating_operation,
+            idempotent=data.idempotent,
+            rate_limit_per_minute=data.rate_limit_per_minute,
             enabled=data.enabled,
             keywords=data.keywords or auto_keywords,
             aliases=data.aliases,
+            capabilities=data.capabilities,
+            produces=data.produces,
+            consumes=data.consumes,
+            related=data.related,
+            cacheable=data.cacheable,
             version=1,
         )
         session.add(tool)
         await session.flush()
+
+        # Sync into the capability registry (capability + provider + endpoint
+        # rows) so the agent's resolver/executor can use this tool — the
+        # runtime resolves capabilities via the registry, not the tool table.
+        await self._sync_capability_registry(session, tool)
 
         if not skip_embedding:
             emb = await self._generate_embedding(_embedding_text(tool))
@@ -133,6 +327,21 @@ class ToolRegistry:
                 await session.flush()
 
         await session.refresh(tool)
+
+        # Capability version history — first snapshot for this capability.
+        from nexus.db.models.capability_version import CapabilityVersion
+
+        session.add(
+            CapabilityVersion(
+                capability_id=tool.id,
+                version=1,
+                snapshot=_tool_to_read(tool).model_dump(mode="json"),
+                changed_by=None,
+                change_comment="Initial registration",
+                active=True,
+            )
+        )
+        await session.flush()
 
         logger.info("tool.registered", tool_id=str(tool.id), name=tool.name)
         return _tool_to_read(tool)
@@ -157,9 +366,12 @@ class ToolRegistry:
         def _sync_update(t_obj: Tool) -> tuple[ToolRead, str]:
             old_txt = _embedding_text(t_obj)
             for field, raw_val in update_dict.items():
+                # ``model_dump`` already serialized nested models (e.g.
+                # ``ToolExample``) to plain dicts — never call ``.model_dump()``
+                # on the result.
                 val = raw_val
                 if field == "examples" and val is not None:
-                    val = [e.model_dump() for e in val]
+                    val = _coerce_examples(val)
                 setattr(t_obj, field, val)
             if any(f in update_dict for f in ("name", "purpose", "tags", "aliases")):
                 from nexus.tools.keywords import extract_keywords
@@ -187,6 +399,19 @@ class ToolRegistry:
                 change_comment=change_comment,
             )
             session.add(version)
+            # Capability version history — same snapshot, capability-scoped.
+            from nexus.db.models.capability_version import CapabilityVersion
+
+            session.add(
+                CapabilityVersion(
+                    capability_id=tool.id,
+                    version=tool.version,
+                    snapshot=snapshot,
+                    changed_by=changed_by,
+                    change_comment=change_comment,
+                    active=True,
+                )
+            )
             tool.version = (tool.version or 1) + 1
 
         if needs_reembed:
@@ -195,6 +420,8 @@ class ToolRegistry:
                 tool.embedding = await self._generate_embedding(new_text)
 
         await session.flush()
+        # Keep the capability registry in sync with the tool definition.
+        await self._sync_capability_registry(session, tool)
         logger.info("tool.updated", tool_id=str(tool.id), version=tool.version)
         return updated_read
 
@@ -209,8 +436,105 @@ class ToolRegistry:
             return False
         tool.enabled = False
         await session.flush()
+        # Disable the capability in the registry too — the agent must stop
+        # resolving it.
+        from nexus.db.models.registry import CapabilityModel
+
+        await session.execute(
+            CapabilityModel.__table__.update()
+            .where(CapabilityModel.id == tool_id)
+            .values(enabled=False)
+        )
         logger.info("tool.deregistered", tool_id=str(tool.id))
         return True
+
+    async def _sync_capability_registry(
+        self,
+        session: AsyncSession,
+        tool: Tool,
+    ) -> None:
+        """Upsert capability/provider/endpoint rows for a tool.
+
+        The agent's resolver/executor read the capability registry (not the
+        tool table) — without this sync, tools registered via the API are
+        invisible to the runtime. Fully metadata-driven: every field comes
+        from the tool definition.
+        """
+        from nexus.db.models.registry import CapabilityModel, EndpointModel, ProviderModel
+
+        capability = await session.get(CapabilityModel, tool.id)
+        if capability is None:
+            capability = CapabilityModel(
+                id=tool.id,
+                name=tool.name,
+                logical_op_name=tool.name,
+                description=tool.description or tool.purpose or "",
+                tags=tool.tags or [],
+                consumes=tool.consumes or [],
+                produces=tool.produces or [],
+                contract=_build_tool_contract(tool),
+                enabled=tool.enabled,
+                version=tool.version or 1,
+            )
+            session.add(capability)
+        else:
+            capability.name = tool.name
+            capability.logical_op_name = tool.name
+            capability.description = tool.description or tool.purpose or ""
+            capability.tags = tool.tags or []
+            capability.consumes = tool.consumes or []
+            capability.produces = tool.produces or []
+            capability.contract = _build_tool_contract(tool)
+            capability.enabled = tool.enabled
+            capability.version = tool.version or 1
+
+        await session.flush()
+
+        # One default provider per tool, one endpoint per provider.
+        provider = (
+            await session.execute(
+                select(ProviderModel).where(
+                    ProviderModel.capability_id == tool.id
+                ).limit(1)
+            )
+        ).scalars().first()
+        if provider is None:
+            provider = ProviderModel(
+                capability_id=tool.id,
+                name=f"{tool.name}_provider",
+                description=f"Default provider for {tool.name}",
+                privacy_level="low",
+                retry_policy="default",
+                enabled=tool.enabled,
+            )
+            session.add(provider)
+            await session.flush()
+
+        endpoint = (
+            await session.execute(
+                select(EndpointModel).where(
+                    EndpointModel.provider_id == provider.id
+                ).limit(1)
+            )
+        ).scalars().first()
+        url = tool.mcp_server_url or tool.endpoint_url or ""
+        if endpoint is None:
+            endpoint = EndpointModel(
+                provider_id=provider.id,
+                url=url,
+                http_method=tool.http_method or "GET",
+                auth_type=tool.auth_type or "none",
+                weight=1,
+                enabled=tool.enabled,
+            )
+            session.add(endpoint)
+        else:
+            endpoint.url = url
+            endpoint.http_method = tool.http_method or "GET"
+            endpoint.auth_type = tool.auth_type or "none"
+            endpoint.enabled = tool.enabled
+
+        await session.flush()
 
     async def get(
         self,
@@ -303,6 +627,11 @@ class ToolRegistry:
     @staticmethod
     def _validate_no_python_code(data: ToolCreate) -> None:
         """Reject tool definitions that contain Python code references."""
+        try:
+            keywords = frozenset(get_settings().tools.python_code_keywords)
+        except Exception:
+            from nexus.config.settings import ToolSettings
+            keywords = frozenset(ToolSettings().python_code_keywords)
         schemas_to_check = {
             "input_schema": data.input_schema,
             "output_schema": data.output_schema,
@@ -311,7 +640,7 @@ class ToolRegistry:
         for field_name, schema in schemas_to_check.items():
             if schema and isinstance(schema, dict):
                 for key in schema:
-                    if key.lower() in _PYTHON_CODE_KEYWORDS:
+                    if key.lower() in keywords:
                         raise ValueError(
                             f"Tool '{data.name}' contains Python code reference "
                             f"'{key}' in {field_name} — rejected"
@@ -319,7 +648,7 @@ class ToolRegistry:
                 props = schema.get("properties", {})
                 if isinstance(props, dict):
                     for prop_key in props:
-                        if prop_key.lower() in _PYTHON_CODE_KEYWORDS:
+                        if prop_key.lower() in keywords:
                             raise ValueError(
                                 f"Tool '{data.name}' contains Python code reference "
                                 f"'{prop_key}' in {field_name}.properties — rejected"
@@ -391,7 +720,7 @@ class ToolRegistry:
                         url = url.replace(match.group(0), str(sample_input[param]))
                         params.pop(param, None)
 
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
                 method = tool.http_method.lower()
                 if method == "get":
                     resp = await client.get(url, params=params or None)
@@ -399,7 +728,8 @@ class ToolRegistry:
                     resp = await client.request(
                         method, url, json=params or None
                     )
-                resp.raise_for_status()
+                if resp.status_code >= 400:
+                    resp.raise_for_status()
                 data = resp.json() if resp.text else None
         except httpx.TimeoutException:
             duration_ms = int((time.perf_counter() - start) * 1000)

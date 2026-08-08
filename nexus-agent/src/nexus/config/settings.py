@@ -121,9 +121,9 @@ class LLMSettings(BaseModel):
         default="text-embedding-3-small", description="Default embedding model"
     )
     embedding_dimensions: int = Field(
-        default=768, ge=1, description="Output dimensions for the embedding column (must match DB VECTOR(n))"
+        default=4096, ge=1, description="Output dimensions for the embedding column (must match DB VECTOR(n))"
     )
-    timeout_s: int = Field(default=60, ge=1, description="Request timeout in seconds")
+    timeout_s: int = Field(default=45, ge=1, description="Request timeout in seconds")
     max_retries: int = Field(default=3, ge=0, description="Max retries on failure")
     providers: list[ProviderConfig] = Field(
         default_factory=list, description="Configured LLM providers"
@@ -282,6 +282,39 @@ class AdaptiveReflectionSettings(BaseModel):
     confidence_low: float = Field(default=0.5, ge=0, le=1, description="Clarification threshold")
 
 
+class RequirementCollectorSettings(BaseModel):
+    """RequirementCollectorNode — interactive requirement gathering configuration.
+    
+    Controls the clarification loop: how many rounds to ask, when to skip,
+    and how to format questions.
+    """
+
+    max_rounds: int = Field(
+        default=8, ge=1, le=50,
+        description="Max clarification rounds before forcing plan or aborting",
+    )
+    min_confidence_to_skip: float = Field(
+        default=0.85, ge=0.0, le=1.0,
+        description="Confidence threshold above which the collector is skipped entirely",
+    )
+    min_confidence_to_proceed: float = Field(
+        default=0.7, ge=0.0, le=1.0,
+        description="Confidence threshold above which planning proceeds with partial info",
+    )
+    question_max_tokens: int = Field(
+        default=256, ge=32, le=2048,
+        description="Max LLM tokens for generating a clarification question",
+    )
+    knowledge_max_tokens: int = Field(
+        default=2000, ge=128, le=16384,
+        description="Max LLM tokens for KnowledgeAssistantNode response",
+    )
+    knowledge_temperature: float = Field(
+        default=0.3, ge=0.0, le=1.0,
+        description="LLM temperature for knowledge-only queries",
+    )
+
+
 class AgentSettings(BaseModel):
     """LangGraph agent execution configuration.
 
@@ -304,9 +337,35 @@ class AgentSettings(BaseModel):
         milestone_min_length: Min response length to qualify as milestone.
         max_intent_display: Max intents to show in extraction prompt.
         adaptive_reflection: Adaptive reflection and uncertainty settings.
+        max_invocation_wall_time_ms: Per-invocation ReasoningBudget wall clock.
+        max_graph_steps: Max graph node steps per invocation (budget).
+        max_replans: Max TOTAL replans per invocation (validator + compiler +
+            recovery share ONE budget counter — an identical failure can
+            never trigger an identical replan indefinitely).
+        max_recovery_attempts: Max recovery attempts per invocation.
+        max_llm_calls: Max LLM calls per invocation.
+        max_tool_calls: Max tool calls per invocation.
+        max_invocation_cost_usd: Max estimated cost per invocation.
     """
 
     max_iterations: int = Field(default=25, ge=1, description="Max iterations per turn")
+    max_invocation_wall_time_ms: int = Field(
+        default=180_000, ge=1_000, description="Per-invocation ReasoningBudget wall clock (ms)"
+    )
+    max_graph_steps: int = Field(default=50, ge=1, description="Max graph node steps per invocation")
+    max_replans: int = Field(default=4, ge=1, description="Max TOTAL replans per invocation (shared)")
+    max_recovery_attempts: int = Field(default=3, ge=1, description="Max recovery attempts per invocation")
+    max_llm_calls: int = Field(default=30, ge=1, description="Max LLM calls per invocation")
+    max_tool_calls: int = Field(default=40, ge=1, description="Max tool calls per invocation")
+    max_invocation_cost_usd: float = Field(
+        default=1.0, ge=0.0, description="Max estimated cost per invocation"
+    )
+    memory_default_ttl_s: int = Field(
+        default=0, ge=0,
+        description="Default memory entry lifetime in seconds (0 = no expiry; "
+        "a bounded lifetime prevents stale context from being treated as "
+        "current truth — the P1 freshness contract)",
+    )
     context_window_tokens: int = Field(default=128000, ge=1, description="Context window in tokens")
     summarization_threshold_tokens: int = Field(
         default=64000, ge=1, description="Summarization threshold in tokens"
@@ -321,29 +380,11 @@ class AgentSettings(BaseModel):
     global_execution_timeout_s: int = Field(default=60, ge=1, description="Global execution timeout")
     max_reflection_retries: int = Field(default=0, ge=0, le=10, description="Max retries before finalize")
     quorum_threshold: float = Field(default=0.5, ge=0.0, le=1.0, description="Max failed task ratio before quorum lost")
-    greetings: list[str] = Field(default_factory=lambda: [
-        "hi", "hello", "hey", "howdy", "yo", "sup", "greetings", "good morning",
-        "good afternoon", "good evening", "morning", "evening", "thanks", "thank you",
-        "goodbye", "bye",
-    ], description="Greeting keywords for router heuristic")
-    conjunction_markers: list[str] = Field(default_factory=lambda: [
-        "and", "or", "also", "plus", "then", "too", "additionally",
-    ], description="Conjunction keywords for multi-intent detection")
-    stop_words: list[str] = Field(default_factory=lambda: [
-        "a", "an", "the", "is", "it", "of", "in", "on", "for", "to", "with",
-        "and", "or", "but", "not", "this", "that", "from", "as", "at", "by",
-    ], description="Stop words for tokenization")
-    skip_prefixes: list[str] = Field(default_factory=lambda: [
-        "get", "search", "predict", "find", "list", "fetch", "create", "update", "delete",
-    ], description="Verb prefixes to skip in keyword index building")
-    validation_error_keywords: list[str] = Field(default_factory=lambda: [
-        "missing", "required", "invalid", "clarification", "validation",
-    ], description="Keywords that mark errors as validation failures for routing")
-    low_confidence_prefixes: list[str] = Field(default_factory=lambda: [
-        "i'm not entirely sure", "i'm a bit confused", "i'm having trouble",
-        "i'm not confident", "i don't understand", "i didn't catch",
-        "could you rephrase", "could you clarify", "no results were produced",
-    ], description="Response prefixes that indicate low confidence (skip milestone marking)")
+    # Risk level ordering for multi-stage approval gating
+    risk_order: dict[str, int] = Field(
+        default_factory=lambda: {"low": 0, "medium": 1, "high": 2},
+        description="Risk level → integer order for max-risk computation",
+    )
     extraction_max_tokens: int = Field(default=512, ge=64, description="LLM max tokens for extraction")
     extraction_temperature: float = Field(default=0.0, ge=0, le=1, description="LLM temperature for extraction")
     planner_max_tokens: int = Field(default=2048, ge=128, description="LLM max tokens for planner")
@@ -361,6 +402,10 @@ class AgentSettings(BaseModel):
         default_factory=AdaptiveReflectionSettings,
         description="Adaptive reflection and uncertainty settings",
     )
+    requirement_collector: RequirementCollectorSettings = Field(
+        default_factory=RequirementCollectorSettings,
+        description="Requirement collector interactive loop settings",
+    )
 
 
 class CompilerSettings(BaseModel):
@@ -376,6 +421,118 @@ class CompilerSettings(BaseModel):
     max_budget_usd: float = Field(default=0.50, ge=0.0, description="Max estimated cost before warning")
     max_latency_ms: int = Field(default=30000, ge=1, description="Max estimated latency before warning")
     max_workflow_nodes: int = Field(default=50, ge=1, le=200, description="Max nodes per compiled workflow")
+    optimizer_min_nodes: int = Field(
+        default=3, ge=1, le=50,
+        description="Graphs with at most this many nodes bypass the optimizer entirely (pass-manager fixpoint + checkpoint writes are pure overhead on tiny linear graphs; schema defaults/coercion are applied by the executor at call time)",
+    )
+    max_critique_rounds: int = Field(
+        default=0, ge=0, le=10,
+        description="Max PlanCriticNode refinement rounds (0 = disabled)",
+    )
+    max_plan_validator_rounds: int = Field(
+        default=2, ge=1, le=10,
+        description="Max PlanValidatorNode replan rounds before explicit failure",
+    )
+    background_threshold_ms: int = Field(
+        default=15000, ge=0,
+        description="Estimated latency at/above which the strategy marks the plan for background execution",
+    )
+    planner_budget_ms: int = Field(
+        default=25000, ge=0,
+        description="ExecutionBudget: planning over this budget degrades to the lightweight pipeline (optimizer/critic bypassed)",
+    )
+    synthesis_budget_ms: int = Field(
+        default=20000, ge=0,
+        description="ExecutionBudget: synthesis over this budget degrades to the deterministic Artifact Renderer",
+    )
+    max_replan_rounds: int = Field(
+        default=1, ge=1, le=5,
+        description="Max ReplanNode replan rounds before explicit failure",
+    )
+
+
+class CapabilityResolverSettings(BaseModel):
+    """DynamicCapabilityResolver — multi-factor endpoint scoring configuration.
+
+    Score is a weighted sum of normalized factors.  Higher is better.
+    Each factor is normalized to [0.0, 1.0] before weighting.
+
+    Factors:
+        capability_match: Exact match on logical_op_name (always 1.0 or 0.0 — enforced by instructor).
+        schema_match: How well the required inputs match what's available (from SchemaMatcher).
+        reliability_success_rate: EWMA reliability score from ProviderModel.
+        latency_score: Inversely proportional to latency_p99_ms (lower latency = higher score).
+        cost_score: Inversely proportional to cost_per_call (lower cost = higher score).
+        permissions_match: Whether user context satisfies required_permissions.
+        version_recency: Newer API versions get a higher score.
+        non_deprecated: Deprecated endpoints receive a penalty.
+    """
+
+    capability_match_weight: float = Field(
+        default=2.0, ge=0.0, description="Weight for capability match score"
+    )
+    schema_match_weight: float = Field(
+        default=1.5, ge=0.0, description="Weight for input schema match score"
+    )
+    reliability_weight: float = Field(
+        default=1.5, ge=0.0, description="Weight for EWMA reliability score"
+    )
+    latency_weight: float = Field(
+        default=1.0, ge=0.0, description="Weight for normalized latency score"
+    )
+    cost_weight: float = Field(
+        default=1.0, ge=0.0, description="Weight for normalized cost score"
+    )
+    permissions_weight: float = Field(
+        default=2.0, ge=0.0, description="Weight for permissions match score"
+    )
+    user_preference_weight: float = Field(
+        default=0.5, ge=0.0, description="Weight for user preference signal"
+    )
+    version_weight: float = Field(
+        default=0.5, ge=0.0, description="Weight for API version recency"
+    )
+    deprecated_penalty: float = Field(
+        default=0.5, ge=0.0, le=1.0,
+        description="Score multiplier for deprecated endpoints (applied after sum)",
+    )
+
+    max_latency_ms: int = Field(
+        default=5000, ge=1, description="Latency at or above this value scores 0.0"
+    )
+    max_cost_usd: float = Field(
+        default=1.0, ge=0.01, description="Cost at or above this value scores 0.0"
+    )
+    default_reliability: float = Field(
+        default=0.8, ge=0.0, le=1.0,
+        description="Default reliability for providers without EWMA data",
+    )
+    top_k_candidates: int = Field(
+        default=3, ge=1, le=20, description="Number of candidate endpoints to return"
+    )
+    # Layered resolution (capabilities/resolution.py) — fuzzy safety net
+    # parameters. Fuzzy matches below the threshold are NEVER auto-applied;
+    # they escalate to LLM repair instead.
+    fuzzy_scorer: str = Field(
+        default="wratio",
+        description="RapidFuzz scorer: ratio | partial_ratio | token_sort | token_set | wratio",
+    )
+    fuzzy_threshold: float = Field(
+        default=95.0, ge=0.0, le=100.0,
+        description="Minimum fuzzy match score (0-100) for automatic resolution",
+    )
+    use_alias_index: bool = Field(
+        default=True, description="Enable explicit-alias O(1) resolution"
+    )
+    use_domain_classification: bool = Field(
+        default=True, description="Enable domain-first narrowing in resolution"
+    )
+    enable_llm_repair: bool = Field(
+        default=True, description="Allow LLM repair (top-K) when all deterministic layers fail"
+    )
+    max_repair_candidates: int = Field(
+        default=5, ge=1, le=20, description="Top-K candidates sent to LLM repair"
+    )
 
 
 class ToolSettings(BaseModel):
@@ -401,12 +558,110 @@ class ToolSettings(BaseModel):
     max_domain_concurrency: int = Field(default=10, ge=1, le=100, description="Max concurrent calls per API domain")
     sandbox_enabled: bool = Field(default=True, description="Enable sandboxed execution")
     allowed_hosts: list[str] = Field(
-        default_factory=list, description="Allowed external hosts (empty = block all)"
+        default_factory=list,
+        description="Allowed external hosts (glob patterns; '*' = allow all, empty + enabled = block ALL — configure explicitly)",
+    )
+    # Approval threshold: minimum risk level that requires HITL approval,
+    # compared against ``agent.risk_order``. Defaults to "high" — any tool
+    # whose risk_level ranks at or above this tier triggers the approval gate.
+    # Operators can lower it to "medium" (or raise to an impossible tier) to
+    # tighten or relax the gate without code changes.
+    approval_min_risk: str = Field(
+        default="high",
+        description="Minimum risk level requiring human approval (per agent.risk_order)",
     )
     proxy_url: str | None = Field(
         default=None, description="HTTP proxy URL for tool calls (e.g. http://proxy:8080)"
     )
     http2_enabled: bool = Field(default=True, description="Enable HTTP/2 for tool calls")
+
+    # Default User-Agent for outbound tool HTTP requests
+    user_agent: str = Field(
+        default="NexusAgent/1.0 (agentic-ai-platform; +https://github.com/anomalyco/nexus-agent)",
+        description="User-Agent header for tool HTTP calls",
+    )
+
+    # Auth header name mappings — auth_type → HTTP header name
+    auth_header_mappings: dict[str, str] = Field(
+        default_factory=lambda: {
+            "bearer": "Bearer",
+            "basic": "Basic",
+            "api_key": "X-API-Key",
+            "oauth2": "Bearer",
+        },
+        description="Auth type → HTTP header name mapping",
+    )
+
+    # Python code injection keywords — any schema field matching these is rejected
+    python_code_keywords: list[str] = Field(
+        default_factory=lambda: [
+            "code", "script", "python", "exec", "eval", "compile",
+            "subprocess", "__import__", "importlib", "run_python",
+            "exec_python", "sandbox_code",
+        ],
+        description="Field name keywords that indicate Python code injection (rejected)",
+    )
+
+    # Common field name map for semantic fix-up when inputs fail validation
+    common_field_map: dict[str, str] = Field(
+        default_factory=lambda: {
+            "q": "query", "query": "q",
+            "name": "title", "title": "name",
+            "id": "identifier", "identifier": "id",
+            "email": "email_address", "email_address": "email",
+            "lat": "latitude", "latitude": "lat",
+            "lon": "longitude", "longitude": "lon", "long": "lon",
+            "city": "location", "location": "city",
+        },
+        description="Field name → common variant mapping for semantic input fix-up",
+    )
+
+    # Retryable HTTP status codes
+    retryable_status_codes: list[int] = Field(
+        default_factory=lambda: [408, 429, 500, 502, 503, 504],
+        description="HTTP status codes that trigger automatic retry",
+    )
+
+    # MCP client retry settings
+    mcp_retry_max_attempts: int = Field(
+        default=3, ge=0, description="Max retry attempts for MCP transport errors",
+    )
+    mcp_retry_backoff_base_s: float = Field(
+        default=1.0, ge=0, description="Base backoff in seconds for MCP retry",
+    )
+    mcp_retry_backoff_max_s: float = Field(
+        default=30.0, ge=0, description="Max backoff in seconds for MCP retry",
+    )
+
+    # Sensitive field names for log masking
+    sensitive_field_names: list[str] = Field(
+        default_factory=lambda: [
+            "authorization", "api_key", "api-key", "x-api-key",
+            "apikey", "token", "secret",
+        ],
+        description="Header/field names whose values should be redacted in logs",
+    )
+
+    # Max request body size in bytes
+    max_request_bytes: int = Field(
+        default=1_000_000, ge=1, description="Max request body size in bytes",
+    )
+
+    # Field name aliases for placeholder resolution across chained tools.
+    # When a step expects "latitude" but the tool returned "lat", these mappings
+    # ensure the placeholder is still resolved.  Configurable via env:
+    # NEXUS_TOOLS__FIELD_ALIASES={"latitude":"lat","longitude":"lon"}
+    field_aliases: dict[str, str] = Field(
+        default_factory=lambda: {
+            "latitude": "lat",
+            "longitude": "lon",
+            "lat": "latitude",
+            "lon": "longitude",
+            "temperature": "temp",
+            "temp": "temperature",
+        },
+        description="Field name → alias mappings for placeholder resolution",
+    )
 
     # Performance-aware selection
     performance_weight: float = Field(default=0.4, ge=0, le=1, description="Performance vs relevance weight")
@@ -429,6 +684,56 @@ class ToolSettings(BaseModel):
         default=["thinking", "think", "output"],
         description="XML/HTML tags to strip before JSON extraction",
     )
+
+
+class CacheSettings(BaseModel):
+    """Compiler cache TTL configuration.
+
+    Fields:
+        parse_ttl: TTL in seconds for the ParseCache (LLM workflow extraction).
+        plan_ttl: TTL in seconds for the PlanCache (compiled execution plans).
+    """
+
+    parse_ttl: int = Field(default=3600, ge=0, description="ParseCache TTL in seconds (0 = disabled)")
+    plan_ttl: int = Field(default=300, ge=0, description="PlanCache TTL in seconds (0 = disabled)")
+
+
+class QueueSettings(BaseModel):
+    """Task queue configuration.
+
+    Fields:
+        provider: Queue transport (``redis_streams`` default; external MQ
+            adapters pluggable behind the provider interface).
+        worker_poll_ms: Worker claim poll interval in milliseconds.
+        retry_backoff_s: Base backoff between task retries in seconds.
+    """
+
+    provider: str = Field(
+        default="redis_streams",
+        description="Queue provider (redis_streams | <adapter>)",
+    )
+    worker_poll_ms: int = Field(default=500, ge=50, description="Worker claim poll interval (ms)")
+    retry_backoff_s: float = Field(default=2.0, ge=0, description="Task retry backoff (s)")
+
+
+class AuthSettings(BaseModel):
+    """Authentication configuration.
+
+    Fields:
+        mode: ``none`` (default — embeddable passthrough), ``api_key``
+            (static key header), or ``jwt`` (verifiable tokens).
+        jwt_algorithm: Algorithm used to verify JWTs.
+        jwt_issuer: Expected token issuer (optional).
+        api_key_header: Header name carrying the static API key.
+    """
+
+    mode: str = Field(
+        default="none",
+        description="Auth mode: none | api_key | jwt",
+    )
+    jwt_algorithm: str = Field(default="HS256", description="JWT signing/verification algorithm")
+    jwt_issuer: str | None = Field(default=None, description="Expected JWT issuer (optional)")
+    api_key_header: str = Field(default="X-API-Key", description="Static API key header name")
 
 
 class ServerSettings(BaseModel):
@@ -487,8 +792,21 @@ class Settings(BaseSettings):
     tools: ToolSettings = Field(
         default_factory=ToolSettings, description="Tool execution configuration"
     )
+    resolver: CapabilityResolverSettings = Field(
+        default_factory=CapabilityResolverSettings,
+        description="Capability resolver scoring configuration",
+    )
     server: ServerSettings = Field(
         default_factory=ServerSettings, description="Server configuration"
+    )
+    cache: CacheSettings = Field(
+        default_factory=CacheSettings, description="Cache TTL configuration"
+    )
+    queue: QueueSettings = Field(
+        default_factory=QueueSettings, description="Task queue configuration"
+    )
+    auth: AuthSettings = Field(
+        default_factory=AuthSettings, description="Authentication configuration"
     )
     experiment: ExperimentSettings = Field(
         default_factory=ExperimentSettings, description="A/B experiment configuration"

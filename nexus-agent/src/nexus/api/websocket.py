@@ -14,7 +14,6 @@ from nexus.agent.runner import AgentRunner
 from nexus.llm.client import LLMClient
 from nexus.redis_client.client import get_redis_client
 from nexus.redis_client.pubsub import EventBus
-from nexus.tools.discovery import DynamicToolSelector
 from nexus.tools.executor import ToolExecutor
 from nexus.tools.registry import ToolRegistry
 
@@ -43,17 +42,28 @@ async def handle_websocket(websocket: WebSocket) -> None:
     tool_registry = ToolRegistry()
     llm = LLMClient()
     tool_executor = ToolExecutor(event_bus=event_bus)
-    tool_selector = DynamicToolSelector(
-        registry=tool_registry,
-        llm_client=llm,
-    )
+
+    # Same persistent checkpointer as the SSE path — WS sessions must be
+    # able to resume multi-turn state and conversational approval
+    # checkpoints across reconnects.
+    from nexus.config.settings import get_settings
+    from nexus.db.base import async_session as _ws_session_factory
+    from nexus.memory.checkpointer import get_checkpointer
+
+    checkpointer = None
+    _ws_settings = get_settings()
+    if _ws_settings.memory.checkpointer_type == "postgres":
+        try:
+            checkpointer = await get_checkpointer()
+        except Exception as exc:
+            logger.warning("websocket.checkpointer_unavailable", error=str(exc))
 
     runner = AgentRunner(
         llm_client=llm,
-        tool_selector=tool_selector,
         tool_executor=tool_executor,
         event_bus=event_bus,
-        session_factory=None,
+        session_factory=_ws_session_factory,
+        checkpointer=checkpointer,
     )
 
     connected = True

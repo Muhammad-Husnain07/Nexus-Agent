@@ -63,6 +63,10 @@ class EpisodicSummarizer:
             stop=["###", "<|im_end|>"],
         )
 
+        if response.failed:
+            logger.warning("summarizer.llm_failed", error=response.error)
+            return ""
+
         summary = (response.content or "").strip()
         if not summary:
             summary = "Agent run completed with no notable outcomes."

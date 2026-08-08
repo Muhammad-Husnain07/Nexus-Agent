@@ -39,6 +39,10 @@ def create_redis_client() -> Redis[Any]:
         "db": settings.redis.db,
         "max_connections": settings.redis.max_connections,
         "decode_responses": True,
+        # Fast-fail on a down/unreachable Redis — without these the client
+        # blocks for OS-level timeouts and every agent run hangs.
+        "socket_connect_timeout": 2,
+        "socket_timeout": 5,
     }
     if settings.redis.ssl:
         pool_kwargs["ssl"] = True

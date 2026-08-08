@@ -186,9 +186,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.active_agent_runs = 0
     app.state.active_sse_connections: set = set()
 
-    from nexus.utils.scheduler import start_scheduler, stop_scheduler
+    from nexus.utils.scheduler import start_scheduler, start_outbox_relay, stop_scheduler
 
     await start_scheduler()
+    await start_outbox_relay()
 
     # Initialize checkpointer for persistent agent state
     from nexus.memory.checkpointer import close_checkpointer, get_checkpointer  # noqa: PLC0415
@@ -201,10 +202,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as exc:
             logger.warning("checkpointer.init_failed", error=str(exc))
 
+    # Loud sandbox misconfiguration warning: enabled + empty allowlist means
+    # EVERY outbound tool call is blocked — surface it prominently so a
+    # misconfigured deployment fails loudly, not silently.
+    if settings.tools.sandbox_enabled and not settings.tools.allowed_hosts:
+        logger.warning(
+            "sandbox.blocking_all_outbound",
+            hint="NEXUS_TOOLS__SANDBOX_ENABLED=false or set "
+            "NEXUS_TOOLS__ALLOWED_HOSTS (e.g. '[\"*\"]') to allow tool calls",
+        )
+
     # Initialize shared HTTPX client for tool execution (singleton, avoids connection leaks)
     client_kwargs: dict[str, Any] = {
         "timeout": httpx.Timeout(settings.tools.execution_timeout_s),
         "limits": httpx.Limits(max_keepalive_connections=20, max_connections=100),
+        "follow_redirects": True,  # many tool APIs 301 to a canonical URL
+        "trust_env": False,  # Fix for WSL2: ignore proxy env vars that break httpx
     }
     if settings.tools.http2_enabled:
         try:
@@ -217,6 +230,33 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         client_kwargs["proxies"] = settings.tools.proxy_url
     app.state.http_client = httpx.AsyncClient(**client_kwargs)
     logger.info("http_client.initialized")
+
+    # Initialize GlobalContext with compiled capability graph (O(1) keyword + provider maps)
+    from nexus.compiler.compiled_graph import load_compiled_graph_async  # noqa: PLC0415
+    from nexus.context.global_context import GlobalContext, set_global_context  # noqa: PLC0415
+    from nexus.db.base import async_session as _gc_session  # noqa: PLC0415
+
+    # Async-safe loader — the lifespan runs inside an event loop, where the
+    # sync ``load_compiled_graph()`` DB fallback (asyncio.run) would crash.
+    compiled = await load_compiled_graph_async()
+    if compiled:
+        async with _gc_session() as _gc_db:
+            ctx = await GlobalContext.build(compiled, tool_session=_gc_db)
+        set_global_context(ctx)
+        logger.info(
+            "global_context.initialized",
+            capabilities=len(ctx.capability_providers),
+            keywords=len(ctx.capability_keywords),
+            aliases=len(ctx.alias_index),
+            domains=len(ctx.domain_index),
+        )
+    else:
+        logger.warning("global_context.empty", reason="compiled_graph not available")
+
+    # Initialize Artifact Renderers (plugin discovery)
+    from nexus.artifacts.renderers.registry import RendererRegistry  # noqa: PLC0415
+    RendererRegistry.initialize()
+    logger.info("renderers.initialized", count=len(RendererRegistry._renderers))
 
     yield
 
@@ -338,10 +378,13 @@ def create_app() -> FastAPI:
 
     # ── Middleware stack ──────────────────────────────────────────────────
     # Order: outermost first
+    # CORS — credentials with "*" is invalid per spec; drop credentials when
+    # the wildcard is used (or set explicit origins in production).
+    cors_allow_credentials = settings.server.cors_origins != ["*"]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.server.cors_origins,
-        allow_credentials=True,
+        allow_credentials=cors_allow_credentials,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -379,10 +422,20 @@ def create_app() -> FastAPI:
     if app.openapi_schema is not None:
         app.openapi_schema = None  # force rebuild
 
+    # Capture the original generator BEFORE overriding app.openapi (the
+    # override must not call itself). FastAPI >= 0.139 renamed
+    # _generate_openapi → openapi(); support both.
+    _openapi_generator = (
+        getattr(app, "_generate_openapi", None)
+        or getattr(app, "openapi", None)
+    )
+
     def _custom_openapi() -> dict:
         if app.openapi_schema:
             return app.openapi_schema
-        schema = app._generate_openapi()
+        if _openapi_generator is None:
+            return {}
+        schema = _openapi_generator()
         if schema:
             schema.setdefault("components", {})
         app.openapi_schema = schema

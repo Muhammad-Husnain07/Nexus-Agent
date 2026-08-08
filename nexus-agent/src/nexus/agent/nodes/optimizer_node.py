@@ -11,7 +11,7 @@ import structlog
 
 from nexus.agent.node_wrapper import context_node
 from nexus.execution.context import ExecutionContext, StatePatch
-from nexus.execution.event_emitter import emit_optimization_finished
+from nexus.execution.events import emit_optimization_finished
 
 logger = structlog.get_logger("nexus.agent.nodes.optimizer")
 
@@ -29,7 +29,7 @@ async def optimizer_node(ctx: ExecutionContext) -> StatePatch:
         return StatePatch(
             version=ctx.version + 1,
             updates={
-                "_optimized_graph": None,
+                
                 "errors": ["No execution graph to optimize"],
             },
         )
@@ -73,7 +73,13 @@ async def optimizer_node(ctx: ExecutionContext) -> StatePatch:
     return StatePatch(
         version=ctx.version + 1,
         updates={
-            "_optimized_graph": optimized.model_dump(),
+            # C13 — single canonical graph: the optimized graph REPLACES
+            # ``_execution_graph`` in place (all consumers already fall back
+            # to it), so the checkpoint never carries two near-identical
+            # graph copies. Pass deltas live in ``_optimization_snapshots``.
+            "_execution_graph": optimized.model_dump(),
             "_optimization_snapshots": [s.model_dump() for s in snapshots],
+            "_graph_version": int(ctx.snapshot.get("_graph_version") or 0) + 1,
+            "iteration_count": ctx.snapshot.get("iteration_count", 0) + 1,
         },
     )

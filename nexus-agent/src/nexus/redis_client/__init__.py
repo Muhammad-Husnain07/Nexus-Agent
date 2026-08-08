@@ -1,5 +1,4 @@
-"""Redis cache, pub/sub, rate limiting, and distributed lock client."""
-
+"""Redis cache, pub/sub, rate limiting, and client."""
 from nexus.redis_client.cache import RedisCache
 from nexus.redis_client.client import (
     close_redis,
@@ -11,7 +10,6 @@ from nexus.redis_client.client import (
     pubsub_channel,
     redis_health_check,
 )
-from nexus.redis_client.locks import LockAcquisitionError, distributed_lock
 from nexus.redis_client.pubsub import (
     EventBus,
     agent_channel,
@@ -25,7 +23,6 @@ from nexus.redis_client.rate_limiter import (
 
 __all__ = [
     "EventBus",
-    "LockAcquisitionError",
     "RateLimitError",
     "RedisCache",
     "SlidingWindowRateLimiter",
@@ -33,7 +30,6 @@ __all__ = [
     "agent_channel",
     "close_redis",
     "create_redis_client",
-    "distributed_lock",
     "get_redis",
     "get_redis_client",
     "health_check",

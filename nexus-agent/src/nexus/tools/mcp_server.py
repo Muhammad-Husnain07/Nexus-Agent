@@ -21,6 +21,7 @@ def setup_mcp(app: FastAPI, tool_registry: ToolRegistry) -> None:
         name="Nexus Agent MCP Server",
         description="Model Context Protocol server for Nexus Agent",
     )
-    mcp.mount_sse(mount_path="/sse")
+    # SSE transport at /mcp (matches docs + the /mcp API reference).
+    mcp.mount_sse(mount_path="/mcp")
 
-    logger.info("mcp.server_setup", mount_path="/sse")
+    logger.info("mcp.server_setup", mount_path="/mcp")

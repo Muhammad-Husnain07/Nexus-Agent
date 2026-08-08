@@ -4,14 +4,13 @@ Provides a singleton ``AsyncPostgresSaver`` bound to the application's async
 PostgreSQL pool.  Used by the compiled agent graph to persist checkpoint
 state across process restarts (enables resume + HITL + time-travel).
 
-On Windows (where psycopg async doesn't work with ProactorEventLoop), this
-module gracefully returns ``None``, allowing the graph to fall back to
-``MemorySaver``.
+The checkpointer is gated on the availability of the psycopg async driver,
+NOT on the platform: WSL (Linux) provides it even when the repo sits on a
+Windows drive. Only when the driver is genuinely missing do we fall back to
+``MemorySaver`` (with a loud warning — in-memory state breaks resume/HITL).
 """
 
 from __future__ import annotations
-
-import sys
 
 import structlog
 
@@ -24,23 +23,28 @@ _pool = None
 async def get_checkpointer():
     """Return a singleton ``AsyncPostgresSaver`` or ``None``.
 
-    Returns ``None`` on platforms where psycopg async is unavailable
-    (Windows + ProactorEventLoop), allowing fallback to ``MemorySaver``.
+    Returns ``None`` only when the psycopg async driver is unavailable
+    (fallback to ``MemorySaver``) — otherwise always initialises against
+    the configured PostgreSQL database.
     """
     global _checkpointer, _pool  # noqa: PLW0603
 
     if _checkpointer is not None:
         return _checkpointer
 
-    if sys.platform == "win32":
-        logger.warning("checkpointer.unavailable_on_windows")
-        return None
-
     try:
         from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
         from psycopg.rows import dict_row
         from psycopg_pool import AsyncConnectionPool
+    except ImportError as exc:
+        logger.warning(
+            "checkpointer.driver_unavailable",
+            error=str(exc),
+            hint="Install psycopg[binary] to enable persistent checkpoints",
+        )
+        return None
 
+    try:
         from nexus.config.settings import get_settings
 
         settings = get_settings()

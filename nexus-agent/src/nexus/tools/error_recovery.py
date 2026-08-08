@@ -304,22 +304,18 @@ class SemanticRetryHandler:
         modified = dict(params)
         renamed: dict[str, str] = {}
 
-        # Try field renames based on common patterns
+        # Try field renames based on common patterns from settings
         if diagnosis.affected_fields:
+            try:
+                candidates = get_settings().tools.common_field_map
+            except Exception:
+                from nexus.config.settings import ToolSettings
+                candidates = ToolSettings().common_field_map
             for field in diagnosis.affected_fields:
                 if field in modified:
                     continue
                 # Check for common renames
                 lower = field.lower()
-                candidates = {
-                    "q": "query", "query": "q",
-                    "name": "title", "title": "name",
-                    "id": "identifier", "identifier": "id",
-                    "email": "email_address", "email_address": "email",
-                    "lat": "latitude", "latitude": "lat",
-                    "lon": "longitude", "longitude": "lon", "long": "lon",
-                    "city": "location", "location": "city",
-                }
                 if lower in candidates and candidates[lower] in modified:
                     renamed[field] = candidates[lower]
 

@@ -9,6 +9,7 @@ Usage::
 
 from __future__ import annotations
 
+import json
 import secrets
 from typing import Any
 
@@ -141,7 +142,18 @@ class PromptManager:
         max_mistakes: int = 5,
         **kwargs: Any,
     ) -> str:
-        """Retrieve and format a prompt template (backward compat — same as :meth:`render`)."""
+        """Retrieve and format a prompt template (backward compat — same as :meth:`render`).
+
+        Merges ``context`` dict items into ``kwargs`` so they are available
+        for template variable substitution.
+        """
+        if context:
+            for k, v in context.items():
+                if k not in kwargs:
+                    if isinstance(v, (dict, list)):
+                        kwargs[k] = json.dumps(v)
+                    elif v is not None:
+                        kwargs[k] = str(v)
         rendered = self.render(
             prompt_name,
             prompt_version=prompt_version or version,

@@ -39,8 +39,20 @@ class ExecutionStatus(enum.Enum):
 
 
 class MemoryKind(enum.Enum):
-    """Type of stored memory."""
+    """Type of stored memory.
+
+    Six-layer model:
+    - episodic: event summaries of agent runs
+    - semantic: general facts and knowledge
+    - procedural: step-by-step how-to sequences
+    - task: current workflow scratchpad state
+    - project: artifact-bound project-level knowledge
+    - user_preference: persistent user choices and corrections
+    """
 
     EPISODIC = "episodic"
     SEMANTIC = "semantic"
     PROCEDURAL = "procedural"
+    TASK = "task"
+    PROJECT = "project"
+    USER_PREFERENCE = "user_preference"

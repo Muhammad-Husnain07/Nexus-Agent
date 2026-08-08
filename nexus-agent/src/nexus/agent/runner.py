@@ -18,7 +18,8 @@ import contextlib
 import secrets
 import uuid
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from copy import deepcopy as _deepcopy
+from datetime import datetime, timezone
 from typing import Any
 
 import time as time_module
@@ -29,7 +30,10 @@ from langgraph.types import Command
 
 from nexus.agent.graph import build_agent_graph
 from nexus.agent.state import AgentState, _EPHEMERAL_FIELDS
+from nexus.artifacts.graph import reset_artifact_graph
 from nexus.config.settings import get_settings
+from nexus.context.global_context import get_global_context, set_global_context
+from nexus.context.session_context import SessionContext
 from nexus.llm.client import LLMClient
 
 # Module-level compiled graph cache — rebuilt once per process lifetime.
@@ -56,10 +60,18 @@ def _track_bg_task(task: asyncio.Task) -> None:
     task.add_done_callback(_pending_bg_tasks.discard)
 from nexus.redis_client.client import get_redis_client
 from nexus.redis_client.pubsub import EventBus, agent_channel
-from nexus.tools.discovery import DynamicToolSelector
 from nexus.tools.executor import ToolExecutor
 
 logger = structlog.get_logger("nexus.agent.runner")
+
+# Guarded module-level tracer: OTel is optional — tracing must never break
+# the run when the package is absent or unconfigured.
+try:
+    from opentelemetry.trace import get_tracer as _get_tracer  # noqa: PLC0415
+
+    _NODE_TRACER = _get_tracer("nexus.agent.runner")
+except Exception:
+    _NODE_TRACER = None
 
 AGENT_EVENT_TYPES = frozenset(
     {
@@ -68,7 +80,14 @@ AGENT_EVENT_TYPES = frozenset(
         "tool_call_started",
         "tool_call_completed",
         "clarification_needed",
-        "approval_required",
+        "clarification_question",
+        "requirement_collected",
+        "intent_extracted",
+        "workflow_composing_progress",
+        "validation_progress",
+        "approval_checkpoint",
+        "artifact_produced",
+        "token_delta",
         "intermediate_preview",
         "final_response",
         "error",
@@ -93,54 +112,6 @@ return 0
 """
 
 
-# Module-level cache for available tools (avoids DB query per request)
-_tool_cache: list[dict[str, Any]] = []
-_tool_cache_ts: float = 0
-_TOOL_CACHE_TTL: int = 60
-_tool_cache_lock = asyncio.Lock()
-
-
-def _get_cached_tools() -> list[dict[str, Any]]:
-    global _tool_cache, _tool_cache_ts
-    import time as _time
-    if _tool_cache and (_time.time() - _tool_cache_ts) < _TOOL_CACHE_TTL:
-        return _tool_cache
-    return []
-
-
-async def _refresh_tool_cache(
-    selector: DynamicToolSelector | None,
-    session_factory: Callable[[], Any] | None,
-) -> list[dict[str, Any]]:
-    global _tool_cache, _tool_cache_ts
-    import time as _time
-    if selector is not None and session_factory is not None:
-        # Double-checked locking: only one coroutine refreshes the cache
-        if _tool_cache and (_time.time() - _tool_cache_ts) < _TOOL_CACHE_TTL:
-            return _tool_cache
-        async with _tool_cache_lock:
-            # Second check after acquiring lock (another coroutine may have refreshed)
-            if _tool_cache and (_time.time() - _tool_cache_ts) < _TOOL_CACHE_TTL:
-                return _tool_cache
-            try:
-                from nexus.tools.schemas import ToolList  # noqa: PLC0415
-                async with session_factory() as session:
-                    tl: ToolList = await selector._registry.list(session, page_size=1000)
-                    _tool_cache = [
-                        {k: v for k, v in t.model_dump(mode="json").items() if k != "embedding"}
-                        for t in tl.items
-                    ]
-                    _tool_cache_ts = _time.time()
-                    # Reset router's keyword index so it rebuilds with fresh tools
-                    try:
-                        from nexus.agent.router import _reset_keyword_index
-                        _reset_keyword_index()
-                    except ImportError:
-                        pass
-            except Exception:
-                logger.warning("runner.available_tools_prepopulate_failed")
-    return _tool_cache
-
 
 class AgentEvent:
     """An event emitted during agent execution.
@@ -153,11 +124,70 @@ class AgentEvent:
 
     def __init__(self, type: str, payload: dict[str, Any]) -> None:  # noqa: A002
         self.type = type
+        self.ts = datetime.now(timezone.utc).isoformat()
         self.payload = payload
-        self.ts = datetime.now(UTC).isoformat()
+
+    @classmethod
+    def from_model(cls, model: Any) -> "AgentEvent":
+        """Build from a typed event model (envelope + typed payload)."""
+        event = cls(type=str(model.type), payload=dict(model.payload))
+        event.ts = str(model.ts)
+        return event
 
     def to_dict(self) -> dict[str, Any]:
         return {"type": self.type, "ts": self.ts, "payload": self.payload}
+
+
+def _append_step_progress(
+    events: list[AgentEvent],
+    step: str,
+    status: str,
+    text: str,
+    tool_name: str,
+) -> None:
+    """Append a typed StepProgress event (the stable UI contract)."""
+    from nexus.events.models import build_event
+
+    events.append(AgentEvent.from_model(build_event("step_progress", {
+        "step": step,
+        "status": status,
+        "text": text,
+        "tool_name": tool_name,
+    })))
+
+
+def _emit_execution_completed(
+    state: dict[str, Any],
+    status: str,
+    event_bus: Any,
+    session_id: str,
+    yield_event: bool = False,
+) -> AgentEvent | None:
+    """Emit the typed ExecutionCompletedEvent at run end (best-effort)."""
+    try:
+        from nexus.events.models import build_event
+
+        duration = 0.0
+        if state.get("_latency_estimate_ms"):
+            duration = float(state["_latency_estimate_ms"])
+        event = AgentEvent.from_model(build_event("execution_completed", {
+            "status": status,
+            "final_response": str(state.get("final_response", "") or ""),
+            "cost_usd": float(state.get("total_cost_usd", 0.0) or 0.0),
+            "duration_ms": duration,
+        }))
+        if event_bus is not None and not yield_event:
+            import asyncio as _asyncio
+
+            try:
+                _asyncio.ensure_future(
+                    event_bus.publish(agent_channel(session_id), event.to_dict())
+                )
+            except Exception:
+                pass
+        return event
+    except Exception:
+        return None
 
 
 class AgentRunner:
@@ -165,7 +195,7 @@ class AgentRunner:
 
     Usage::
 
-        runner = AgentRunner(llm_client, tool_selector, tool_executor, event_bus)
+        runner = AgentRunner(llm_client, tool_executor, event_bus)
         async for event in runner.invoke(
             session_id=..., user_message=..., user_id=...
         ):
@@ -175,18 +205,19 @@ class AgentRunner:
     def __init__(
         self,
         llm_client: LLMClient | None = None,
-        tool_selector: DynamicToolSelector | None = None,
         tool_executor: ToolExecutor | None = None,
         event_bus: EventBus | None = None,
         session_factory: Any = None,
         checkpointer: BaseCheckpointSaver | None = None,
     ) -> None:
         self._llm = llm_client or LLMClient()
-        self._selector = tool_selector
         self._executor = tool_executor
         self._event_bus = event_bus
         self._session_factory = session_factory
         self._checkpointer = checkpointer
+        # Initialize GlobalContext singleton at startup (no-op if already set)
+        if get_global_context().compiled_graph is None:
+            set_global_context(get_global_context())
 
     async def _build_graph(self) -> Any:
         """Return the compiled graph, cached at module level.
@@ -201,7 +232,6 @@ class AgentRunner:
                 if _compiled_graph is None:
                     _compiled_graph = build_agent_graph(
                         llm_client=self._llm,
-                        tool_selector=self._selector,
                         tool_executor=self._executor,
                         event_bus=self._event_bus,
                         session_factory=self._session_factory,
@@ -218,22 +248,33 @@ class AgentRunner:
     ) -> tuple[str, bool]:
         """Try to acquire a distributed lock.
 
-        Returns (lock_token, acquired).
+        Returns (lock_token, acquired). On Redis outage, degrades to
+        (no-op token, True) so the agent still runs — the lock is an
+        optimization, not a correctness gate.
         """
         lock_token = secrets.token_hex(16)
-        acquired = await redis.set(lock_key, lock_token, nx=True, ex=ttl_s)
-        return lock_token, bool(acquired)
+        try:
+            acquired = await redis.set(lock_key, lock_token, nx=True, ex=ttl_s)
+            return lock_token, bool(acquired)
+        except Exception as exc:
+            logger.warning("lock.acquire_redis_down", error=str(exc)[:200])
+            return lock_token, True
 
     async def _renew_lock(self, redis: Any, key: str, token: str, ttl_s: int) -> None:
         """Background heartbeat: extend lock TTL every ttl/3 seconds.
 
-        Cancelled by the caller when ``astream`` completes.
+        Cancelled by the caller when ``astream`` completes. Transient Redis
+        errors are tolerated — the heartbeat simply retries on the next tick.
         """
         interval = max(1, ttl_s // 3)
         try:
             while True:
                 await asyncio.sleep(interval)
-                renewed = await redis.eval(_RENEW_LUA, 1, key, token, str(ttl_s))
+                try:
+                    renewed = await redis.eval(_RENEW_LUA, 1, key, token, str(ttl_s))
+                except Exception as exc:
+                    logger.warning("lock.renew_redis_error", error=str(exc)[:200])
+                    continue
                 if not renewed:
                     logger.warning("lock.renewal_failed", key=key, reason="stolen or expired")
                     break
@@ -291,6 +332,12 @@ class AgentRunner:
         except Exception:
             pass
 
+        # Reset artifact graph between turns — UNLESS an interactive workflow is active,
+        # so workflow steps can read the previous step's tool results across turns
+        active_wf = (prior_state.values.get("_active_workflow_id") if prior_state and prior_state.values else None)
+        if not active_wf:
+            reset_artifact_graph(sid)
+
         # Tag first-ever user message as milestone (survives rolling window)
         user_msg: dict[str, Any] = {"role": "user", "content": user_message}
         is_first_turn = not prior_messages
@@ -299,16 +346,15 @@ class AgentRunner:
 
         _settings = get_settings()
 
-        # Pre-populate available_tools (cache with 60s TTL — avoid DB query per request)
-        available_tools = _get_cached_tools()
-        if not available_tools and self._selector is not None and self._session_factory is not None:
-            available_tools = await _refresh_tool_cache(self._selector, self._session_factory)
+        # Build SessionContext for this invocation
+        session_ctx = SessionContext(
+            session_id=sid,
+        )
 
         initial_state: AgentState = {
             "messages": prior_messages + [user_msg],
             "session_id": sid,
             "gathered_requirements": prior_state.values.get("gathered_requirements", {}) if prior_state else {},
-            "available_tools": available_tools,
             "_tool_executed_in_turn": False,
             "iteration_count": 0,
             "tool_results": [],
@@ -322,18 +368,68 @@ class AgentRunner:
             "total_cost_usd": 0.0,
             "_cost_breakdown": {},
             "_total_tokens": 0,
-            "dag_tasks": [],
             "_routing_decision": "continue",
             "_safety_result": {"passed": True, "action": "allow", "reason": ""},
-            "_query_type": "single_tool",
+            "_query_type": "action",
+            "_goals": ["action"],
+            "_needs_requirements": False,
             "_force_query_type": "",
             "_preferred_tools": [],
             "_executor_failed": [],
-            "_executor_results": {},
             "_executor_all_success": True,
             "_tool_retry_counts": {},
             "_pending_tasks": [],
+            "_approval_granted": False,
+            "_approval_decision": None,
+            "_needs_approval": False,
+            # Approval chain state MUST be reset explicitly — it is an ephemeral
+            # field that the checkpointer would otherwise restore from the last
+            # checkpoint (LangGraph merges stored channel values). A completed
+            # chain from a previous turn would auto-grant future approvals.
+            "_approval_chain_state": None,
+            "_pending_approval_tools": [],
+            "_approval_requested_at": None,
+            "_approval_pending": None,
+            "_approval_checkpoint_context": None,
+            "_approval_modification": None,
+            # Ephemeral routing flag — MUST reset each turn. The modify branch
+            # sets it True to bypass the workflow manager while replanning;
+            # leaking it forward would skip the conversational checkpoint
+            # routing on the next user message.
+            "_bypass_workflow": False,
+            # Routing flags MUST be explicitly reset: LangGraph merges the
+            # checkpointed channel values under absent input keys, so a
+            # workflow's ``_route_to_compiler``/``_route_to_planner`` from a
+            # previous turn would otherwise re-route a NEW message into the
+            # stale compiler path (observed: a new query re-executed the old
+            # workflow instead of planning).
+            "_route_to_compiler": False,
+            "_route_to_planner": False,
+            # Domain hint computed by the router each turn (capability
+            # classification) — never carries across turns.
+            "_domain_hint": None,
         }
+
+        # Preserve an OPEN conversational approval checkpoint across turns —
+        # it must survive until the user decides in-chat. The resume node
+        # clears it once the decision is consumed.
+        if prior_state is not None and prior_state.values:
+            for _cp_key in ("_approval_pending", "_approval_checkpoint_context", "_approval_modification"):
+                if prior_state.values.get(_cp_key) is not None:
+                    initial_state[_cp_key] = _deepcopy(prior_state.values[_cp_key])
+
+        # Preserve interactive workflow context across every invoke boundary.
+        # Any `_workflow_*` key (or `_active_workflow_id`) present in the prior
+        # checkpoint is carried forward explicitly — LangGraph merges declared
+        # channels, but this guarantees the state machine never loses its
+        # place between turns (e.g. after an approval resume or a re-invoke).
+        # DEEPCOPY: checkpoint values are shared references — carrying them by
+        # reference lets a later in-place write mutate a prior checkpoint object.
+        if prior_state is not None and prior_state.values:
+            for _wf_key in list(prior_state.values.keys()):
+                if _wf_key == "_active_workflow_id" or _wf_key.startswith("_workflow_"):
+                    if _wf_key not in _EPHEMERAL_FIELDS:
+                        initial_state[_wf_key] = _deepcopy(prior_state.values[_wf_key])
 
         redis = get_redis_client()
         lock_acquired = False
@@ -360,24 +456,97 @@ class AgentRunner:
         _last_state: dict[str, Any] = {}
         _error_msg: str | None = None
 
+        # REASONING BUDGET (P0): the per-invocation contract — every
+        # subsystem (validator/compiler/recovery/executor) draws from this
+        # ONE budget. The runner enforces the wall-time + graph-step
+        # dimensions; the nodes enforce the replan/recovery/tool dimensions.
+        try:
+            from nexus.agent.budget import ReasoningBudget
+
+            _budget = ReasoningBudget(
+                max_wall_time_ms=float(_settings.agent.max_invocation_wall_time_ms),
+                max_graph_steps=int(_settings.agent.max_graph_steps),
+                max_replans=int(_settings.agent.max_replans),
+                max_recovery_attempts=int(_settings.agent.max_recovery_attempts),
+                max_llm_calls=int(_settings.agent.max_llm_calls),
+                max_tool_calls=int(_settings.agent.max_tool_calls),
+                max_cost_usd=float(_settings.agent.max_invocation_cost_usd),
+            )
+            initial_state["_invocation_budget"] = _budget.to_dict()
+        except Exception:
+            _budget = None
+
         span = _tracer.start_span("agent.invoke")
         span.set_attribute("session_id", sid)
         span.set_attribute("model", _settings.llm.default_model)
 
         try:
             _node_start_times: dict[str, float] = {}
+            _last_event_time: float = time_module.perf_counter()
+            initial_state.setdefault("_invocation_status", "RUNNING")
             async for event in graph.astream(initial_state, run_config, stream_mode="updates"):
                 if not isinstance(event, dict):
                     logger.warning("runner.skipping_non_dict_event", event_type=type(event).__name__, event=repr(event)[:200])
                     continue
+                if _budget is not None:
+                    _budget.consume("graph_steps")
+                    _exceeded = _budget.exceeded()
+                    if _exceeded:
+                        logger.error(
+                            "runner.invocation_budget_exceeded",
+                            dimension=_exceeded,
+                            consumed=_budget.consumed,
+                        )
+                        initial_state["_invocation_status"] = (
+                            "TIMED_OUT" if _exceeded == "wall_time" else "INTERRUPTED"
+                        )
+                        yield AgentEvent(
+                            "error",
+                            {"message": f"invocation budget exceeded ({_exceeded})"},
+                        )
+                        _error_msg = f"invocation budget exceeded ({_exceeded})"
+                        break
                 node_name: str = next(iter(event))
                 state_update: Any = event[node_name]
 
-                # Track per-node timing
+                # Track per-node timing: the inter-event delta attributes each
+                # node's wall time to the node that just completed (single
+                # visits included). Repeated visits accumulate.
                 now = time_module.perf_counter()
-                if node_name not in _node_start_times:
-                    _node_start_times[node_name] = now
-                _node_duration = int((now - _node_start_times.get(node_name, now)) * 1000)
+                _node_duration = int((now - _last_event_time) * 1000)
+                _last_event_time = now
+                _node_start_times[node_name] = now
+
+                # Per-stage metrics accumulator (observability): node → ms.
+                # Surfaced in the final state under ``_stage_metrics`` so
+                # latency attribution is data, not guessing.
+                _stage_metrics = dict(_last_state.get("_stage_metrics") or {})
+                _stage_metrics[node_name] = int(_stage_metrics.get(node_name, 0) or 0) + _node_duration
+                _last_state["_stage_metrics"] = _stage_metrics
+
+                # Per-node OpenTelemetry span: node, duration, cache/token
+                # attributes when present. Failures must never break the run.
+                if _NODE_TRACER is not None:
+                    _span = _NODE_TRACER.start_span(
+                        f"agent.node.{node_name}",
+                        attributes={
+                            "agent.node": node_name,
+                            "agent.node.duration_ms": _node_duration,
+                            "agent.session_id": sid,
+                        },
+                    )
+                    try:
+                        if isinstance(state_update, dict):
+                            _span.set_attribute(
+                                "agent.node.cached",
+                                bool(state_update.get("cached")),
+                            )
+                            _span.set_attribute(
+                                "agent.node.tokens",
+                                int(state_update.get("_total_tokens", 0) or 0),
+                            )
+                    finally:
+                        _span.end()
 
                 if not isinstance(state_update, dict):
                     logger.debug("runner.non_dict_update", node=node_name, value_type=type(state_update).__name__)
@@ -388,35 +557,78 @@ class AgentRunner:
                     _last_state.update(state_update)
                     agent_events = self._translate(node_name, state_update)
 
-                # Emit node lifecycle events for observability
-                node_event = AgentEvent("node_completed", {
+                # Emit node lifecycle events for observability (typed model:
+                # cost/retries/decision-reason fields, validated).
+                from nexus.events.models import build_event
+
+                node_event = AgentEvent.from_model(build_event("node_completed", {
                     "node": node_name,
                     "duration_ms": _node_duration,
                     "has_output": bool(state_update),
-                })
+                    "cost_usd": float(state_update.get("_cost_estimate", 0.0) or 0.0)
+                    if node_name == "EstimatorNode" else 0.0,
+                    "retries": int(state_update.get("_plan_validator_rounds", 0) or 0)
+                    if node_name == "PlanValidatorNode" else 0,
+                }))
                 if self._event_bus:
-                    await self._event_bus.publish(agent_channel(sid), node_event.to_dict())
+                    # Redis outage must NOT fail a successful agent run —
+                    # telemetry is best-effort.
+                    try:
+                        await self._event_bus.publish(agent_channel(sid), node_event.to_dict())
+                    except Exception as _pub_exc:
+                        logger.warning("runner.event_publish_failed", error=str(_pub_exc)[:200])
                 yield node_event
 
                 for agent_event in agent_events:
                     if self._event_bus:
-                        await self._event_bus.publish(
-                            agent_channel(sid),
-                            agent_event.to_dict(),
-                        )
+                        try:
+                            await self._event_bus.publish(
+                                agent_channel(sid),
+                                agent_event.to_dict(),
+                            )
+                        except Exception as _pub_exc:
+                            logger.warning("runner.event_publish_failed", error=str(_pub_exc)[:200])
                     yield agent_event
 
         except asyncio.CancelledError:
             logger.info("agent.run.cancelled", session_id=sid)
+            _emit_execution_completed(_last_state, "cancelled", self._event_bus, sid)
         except Exception as exc:
             _error_msg = str(exc)
             logger.error("agent.run.failed", exc_info=exc)
             error_event = AgentEvent("error", {"message": _error_msg})
             if self._event_bus:
-                await self._event_bus.publish(agent_channel(sid), error_event.to_dict())
+                try:
+                    await self._event_bus.publish(agent_channel(sid), error_event.to_dict())
+                except Exception as _pub_exc:
+                    logger.warning("runner.event_publish_failed", error=str(_pub_exc)[:200])
             yield error_event
+            _emit_execution_completed(_last_state, "failed", self._event_bus, sid)
+        else:
+            # Normal completion: final status from the last state.
+            final_status = "completed"
+            if _last_state.get("_executor_failed"):
+                final_status = "failed"
+            elif _last_state.get("_background_task_id"):
+                final_status = "queued"
+            try:
+                if _last_state.get("_invocation_status") in (None, "RUNNING"):
+                    _last_state["_invocation_status"] = "COMPLETED"
+            except Exception:
+                pass
+            yield _emit_execution_completed(_last_state, final_status, self._event_bus, sid, yield_event=True)
         finally:
             span.end()
+            # CANCELLATION (P0): the async-generator close (client
+            # disconnect) or an exception cancels the invocation — record
+            # the terminal state so interrupted runs are attributable,
+            # never silent.
+            try:
+                _target = _last_state if _last_state else initial_state
+                if _target.get("_invocation_status") in (None, "RUNNING"):
+                    _target["_invocation_status"] = "CANCELLED"
+            except Exception:
+                pass
             # Persist outcome record (fire-and-forget)
             latency = int((time_module.perf_counter() - _start_ts) * 1000)
             try:
@@ -434,115 +646,6 @@ class AgentRunner:
             if lock_acquired and redis is not None:
                 await self._release_lock(redis, lock_key, lock_token)
 
-    # ------------------------------------------------------------------
-    # Continue after approval
-    # ------------------------------------------------------------------
-
-    async def continue_after_approval(self, session_id: str) -> None:
-        """Re-trigger graph execution after an approval/rejection decision.
-
-        Loads the persisted state (which now contains ``_approval_decision``),
-        builds a fresh initial state preserving the existing execution plan,
-        and streams the graph. The router is bypassed via ``_force_query_type``.
-
-        Acquires the same Redis distributed lock as ``invoke()`` to prevent
-        concurrent graph executions for the same session.
-
-        Events are streamed to Redis pub/sub for the frontend to consume.
-        """
-        sid = str(session_id)
-        graph = await self._build_graph()
-        config = {"configurable": {"thread_id": sid}}
-
-        prior_state = await graph.aget_state(config)
-        if prior_state is None or not prior_state.values:
-            logger.warning("continue_after_approval.no_state", session_id=sid)
-            return
-
-        prior_values = prior_state.values
-        prior_messages = list(prior_values.get("messages", []))
-        approval_decision = prior_values.get("_approval_decision")
-
-        if not approval_decision:
-            logger.warning("continue_after_approval.no_decision", session_id=sid)
-            return
-
-        # Acquire Redis lock to prevent concurrent graph executions
-        redis = get_redis_client()
-        lock_acquired = False
-        lock_key = f"lock:agent_run:{sid}"
-        lock_token = ""
-        heartbeat_task: asyncio.Task[None] | None = None
-
-        if redis is not None:
-            ttl = get_settings().agent.run_lock_ttl_s
-            lock_token, lock_acquired = await self._try_acquire_lock(redis, lock_key, ttl)
-            if not lock_acquired:
-                logger.warning("continue_after_approval.lock_busy", session_id=sid)
-                # Don't return — proceed since the plan is already persisted in state
-                # and the lock will be released when the previous invocation finishes
-            else:
-                heartbeat_task = asyncio.ensure_future(
-                    self._renew_lock(redis, lock_key, lock_token, ttl)
-                )
-
-        # Build state that preserves the plan and approval decision
-        resume_state: AgentState = {
-            "messages": prior_messages,
-            "session_id": sid,
-            "available_tools": prior_values.get("available_tools", []),
-            "plan": prior_values.get("plan"),
-            "_query_type": prior_values.get("_query_type", "single_tool"),
-            "_force_query_type": prior_values.get("_query_type", "single_tool"),
-            "_approval_decision": approval_decision,
-            "_tool_executed_in_turn": False,
-            "iteration_count": prior_values.get("iteration_count", 0),
-            "tool_results": [],
-            "final_response": None,
-            "intent": prior_values.get("intent"),
-            "errors": [],
-            "intent_analysis": prior_values.get("intent_analysis"),
-            "response_type": "tool",
-            "reflection_feedback": "",
-            "working_memory": prior_values.get("working_memory", {"entries": []}),
-            "total_cost_usd": prior_values.get("total_cost_usd", 0.0),
-            "_cost_breakdown": prior_values.get("_cost_breakdown", {}),
-            "_total_tokens": prior_values.get("_total_tokens", 0),
-            "dag_tasks": prior_values.get("dag_tasks", []),
-            "_routing_decision": "continue",
-            "_safety_result": prior_values.get("_safety_result", {"passed": True, "action": "allow", "reason": ""}),
-            "_executor_failed": [],
-            "_executor_results": {},
-            "_executor_all_success": True,
-            "_tool_retry_counts": {},
-            "_pending_tasks": [],
-        }
-
-        # Stream the graph
-        try:
-            async for event in graph.astream(resume_state, config, stream_mode="updates"):
-                if not isinstance(event, dict):
-                    continue
-                node_name = next(iter(event))
-                state_update = event[node_name]
-                agent_events = self._translate(node_name, state_update or {})
-                for agent_event in agent_events:
-                    if self._event_bus:
-                        await self._event_bus.publish(
-                            agent_channel(sid),
-                            agent_event.to_dict(),
-                        )
-        except Exception as exc:
-            logger.error("continue_after_approval.failed", session_id=sid, error=str(exc))
-        finally:
-            if heartbeat_task is not None:
-                heartbeat_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await heartbeat_task
-            if lock_acquired and redis is not None:
-                await self._release_lock(redis, lock_key, lock_token)
-
-        logger.info("continue_after_approval.complete", session_id=sid)
 
     # ------------------------------------------------------------------
     # Recover from checkpoint
@@ -725,7 +828,6 @@ class AgentRunner:
     # ------------------------------------------------------------------
 
     @staticmethod
-    @staticmethod
     def _translate(node_name: str, state_update: Any) -> list[AgentEvent]:
         """Map a LangGraph state update to zero or more ``AgentEvent`` instances.
 
@@ -743,10 +845,53 @@ class AgentRunner:
         # --- ResponseNode → final answer ---
         fr = state_update.get("final_response")
         if fr is not None and inner == "ResponseNode":
-            events.append(AgentEvent("final_response", {"text": fr}))
+            from nexus.events.models import build_event
 
-        # --- RouterNode → query classification ---
-        elif inner == "RouterNode":
+            events.append(AgentEvent.from_model(build_event("final_response", {
+                "text": str(fr),
+                "cost_usd": float(state_update.get("total_cost_usd", 0.0) or 0.0),
+                "latency_ms": float(state_update.get("_latency_estimate_ms", 0.0) or 0.0),
+            })))
+
+        # --- KnowledgeAssistantNode → knowledge response ---
+        if fr is not None and inner == "KnowledgeAssistantNode":
+            from nexus.events.models import build_event
+
+            events.append(AgentEvent.from_model(build_event("final_response", {
+                "text": str(fr),
+            })))
+
+        # --- RequirementCollectorNode → clarification question (the
+        # collector's question IS the turn's final answer — without this
+        # event the API response comes back empty) ---
+        if fr is not None and inner == "RequirementCollectorNode":
+            from nexus.events.models import build_event
+
+            events.append(AgentEvent.from_model(build_event("final_response", {
+                "text": str(fr),
+                "response_type": "clarification",
+            })))
+
+        # --- RequirementCollectorNode → clarification question ---
+        if inner == "RequirementCollectorNode":
+            asked = state_update.get("_clarification_asked")
+            if asked and isinstance(asked, dict):
+                events.append(AgentEvent("clarification_question", {
+                    "question": asked.get("question", ""),
+                    "slots_filled": len(state_update.get("_clarification_slots", {})),
+                }))
+
+        # --- RouterNode → intent_extracted + query classification ---
+        # NOTE: single branch — an ``elif`` with the same condition would be
+        # dead code (the first ``if`` always matches RouterNode).
+        if inner == "RouterNode":
+            intent = state_update.get("intent")
+            if intent:
+                events.append(AgentEvent("intent_extracted", {
+                    "query_type": intent.get("query_type", ""),
+                    "confidence": intent.get("confidence", 0.0),
+                    "suggested_capability": intent.get("suggested_capability"),
+                }))
             qtype = state_update.get("_query_type", "")
             if qtype:
                 preferred = state_update.get("_preferred_tools", [])
@@ -757,39 +902,123 @@ class AgentRunner:
                         "parameters": {"query_type": qtype, "preferred_tools": preferred},
                     },
                 ))
+                # Decision event — answers WHY (goals + domain + requirements).
+                from nexus.events.models import build_event
 
-        # --- CompilerNode → execution graph compiled ---
+                events.append(AgentEvent.from_model(build_event("routing_decision", {
+                    "decision": qtype,
+                    "reason": "goals: " + ", ".join(state_update.get("_goals", []) or []),
+                    "candidates": preferred,
+                })))
+
+        # --- PlanValidatorNode → deterministic decision ---
+        elif inner == "PlanValidatorNode":
+            action = state_update.get("_plan_validator_action", "")
+            if action:
+                from nexus.events.models import build_event
+
+                events.append(AgentEvent.from_model(build_event("routing_decision", {
+                    "decision": f"plan_validator:{action}",
+                    "reason": "; ".join(state_update.get("_plan_validator_errors", []) or []),
+                })))
+
+        # --- CompilerNode → execution graph compiled + composition progress ---
         elif inner == "CompilerNode":
-            graph = state_update.get("_execution_graph") or state_update.get("_optimized_graph")
+            graph = state_update.get("_execution_graph")
             if graph and isinstance(graph, dict):
                 waves = graph.get("waves", [])
                 node_summary = {k: v.get("capability", v.get("tool_name", k)) for k, v in (graph.get("nodes", {}) or {}).items() if isinstance(v, dict)}
-                events.append(AgentEvent("plan_created", {"steps": node_summary, "waves": len(waves)}))
+                from nexus.events.models import build_event
+
+                events.append(AgentEvent.from_model(build_event("plan_created", {
+                    "steps": node_summary,
+                    "waves": len(waves),
+                    "strategy": state_update.get("_execution_strategy", ""),
+                    "estimated_cost_usd": float(state_update.get("_cost_estimate", 0.0) or 0.0),
+                    "estimated_latency_ms": int(state_update.get("_latency_estimate_ms", 0) or 0),
+                })))
+                # Step progress: QUEUED per planned step (stable UI contract).
+                for _task_id, _tool in node_summary.items():
+                    _append_step_progress(events, _task_id, "queued", f"Waiting: {_tool}", str(_tool))
+            events.append(AgentEvent("workflow_composing_progress", {
+                "phase": "compile",
+                "status": "complete",
+            }))
 
         # --- ExecutorNode → tool call results ---
         elif inner == "ExecutorNode":
             tool_results = state_update.get("tool_results", [])
             if tool_results:
+                from nexus.events.models import build_event
+
                 for tr in tool_results:
                     etype = "tool_call_completed" if tr.get("status") == "success" else "error"
-                    events.append(AgentEvent(etype, {
+                    events.append(AgentEvent.from_model(build_event(etype, {
                         "tool_name": tr.get("tool_name"),
                         "status": tr.get("status"),
                         "data": tr.get("data"),
                         "error": tr.get("error"),
                         "task_id": tr.get("task_id", ""),
-                    }))
-            executor_results = state_update.get("_executor_results", {})
-            if executor_results:
-                for task_id, outcome in executor_results.items():
-                    if isinstance(outcome, dict):
-                        etype = "tool_call_completed" if outcome.get("status") == "success" else "error"
-                        events.append(AgentEvent(etype, {
-                            "tool_name": outcome.get("tool_name", task_id),
-                            "status": outcome.get("status"),
-                            "data": outcome.get("data"),
-                            "task_id": task_id,
-                        }))
+                        "duration_ms": float(tr.get("duration_ms", 0.0) or 0.0),
+                        "retries": int(tr.get("retries", 0) or 0),
+                        "cached": bool(tr.get("cached", False)),
+                    })))
+                    # Step progress: terminal state per tool (UI contract).
+                    _status = str(tr.get("status", "failed"))
+                    if _status == "success":
+                        _append_step_progress(
+                            events, tr.get("task_id", ""), "completed",
+                            f"Done: {tr.get('tool_name')}", str(tr.get("tool_name", "")),
+                        )
+                    elif _status == "skipped":
+                        _append_step_progress(
+                            events, tr.get("task_id", ""), "skipped",
+                            f"Skipped: {tr.get('tool_name')}", str(tr.get("tool_name", "")),
+                        )
+                    else:
+                        _append_step_progress(
+                            events, tr.get("task_id", ""), "failed",
+                            f"Failed: {tr.get('tool_name')}", str(tr.get("tool_name", "")),
+                        )
+
+        # --- OptimizerNode → composition progress ---
+        elif inner == "OptimizerNode":
+            snapshots = state_update.get("_optimization_snapshots", [])
+            events.append(AgentEvent("workflow_composing_progress", {
+                "phase": "optimize",
+                "status": "complete",
+                "snapshots": len(snapshots),
+            }))
+
+        # --- EstimatorNode → composition progress ---
+        elif inner == "EstimatorNode":
+            events.append(AgentEvent("workflow_composing_progress", {
+                "phase": "estimate",
+                "status": "complete",
+                "within_budget": state_update.get("_within_budget", True),
+                "strategy": state_update.get("_execution_strategy", ""),
+                "estimated_cost_usd": float(state_update.get("_cost_estimate", 0.0) or 0.0),
+                "estimated_latency_ms": int(state_update.get("_latency_estimate_ms", 0) or 0),
+                "background": bool(state_update.get("_background_execution", False)),
+            }))
+
+        # --- ValidatorNode → validation progress ---
+        elif inner == "ValidatorNode":
+            validation_results = state_update.get("_validation_results", [])
+            events.append(AgentEvent("validation_progress", {
+                "total_checked": len(validation_results),
+                "failures": [{"tier": f.get("tier"), "reason": f.get("reason", "")[:80]}
+                             for f in validation_results if isinstance(f, dict)],
+            }))
+
+        # --- AggregatorNode → artifact produced ---
+        elif inner == "AggregatorNode":
+            results = state_update.get("_aggregated_results", {})
+            if results and isinstance(results, dict) and any(results.values()):
+                events.append(AgentEvent("artifact_produced", {
+                    "aggregated_keys": list(results.keys())[:10],
+                    "count": len(results),
+                }))
 
         # --- ReflectionNode → retry or finalize ---
         elif inner == "ReflectionNode":
@@ -800,18 +1029,73 @@ class AgentRunner:
                     "feedback": "Retrying failed tasks",
                     "reflection_count": 1,
                 }))
+                for _failed in (state_update.get("_executor_failed", []) or []):
+                    _append_step_progress(
+                        events, str(_failed), "retrying",
+                        f"Retrying: {_failed}", str(_failed),
+                    )
 
-        # ── Approval required (any node) ───────────────────────────
-        if state_update.get("_needs_approval"):
-            tools = state_update.get("_pending_approval_tools", [])
-            events.append(AgentEvent("approval_required", {
-                "pending_tools": tools,
-                "message": state_update.get("final_response", "Approval required"),
-            }))
+        # --- InteractiveWorkflowNode → workflow state transitions ---
+        elif inner == "InteractiveWorkflowNode":
+            wf_id = state_update.get("_active_workflow_id", "")
+
+            if state_update.get("_route_to_compiler"):
+                completed_steps = state_update.get("_workflow_completed_steps", [])
+                events.append(AgentEvent("workflow_step_started", {
+                    "workflow_id": wf_id,
+                    "next_step": len(completed_steps),
+                }))
+            elif state_update.get("response_type") == "clarification":
+                events.append(AgentEvent("workflow_input_required", {
+                    "workflow_id": wf_id,
+                    "question": state_update.get("final_response", ""),
+                }))
+            elif state_update.get("_bypass_workflow"):
+                events.append(AgentEvent("workflow_paused", {
+                    "workflow_id": wf_id,
+                    "reason": "off_topic_query",
+                }))
+            elif state_update.get("response_type") == "cancellation":
+                events.append(AgentEvent("workflow_cancelled", {
+                    "workflow_id": wf_id,
+                    "message": state_update.get("final_response", "Workflow cancelled."),
+                }))
+            elif state_update.get("_structured_payload"):
+                events.append(AgentEvent("workflow_completed", {
+                    "workflow_id": wf_id,
+                    "payload": state_update.get("_structured_payload"),
+                }))
+
+        # ── Approval checkpoint (conversational, any node) ──────────
+        # The user decides IN-CHAT: approve/reject/cancel/clarify/modify.
+        # Only the GATE's own update is a pause request — other nodes echo
+        # _approval_pending via the @context_node snapshot surfacing, which
+        # must not re-emit. The resume node clears it to None.
+        if inner == "ApprovalGateNode" and state_update.get("_approval_pending"):
+            pending = state_update.get("_approval_pending")
+            if isinstance(pending, dict):
+                events.append(AgentEvent("approval_checkpoint", {
+                    "message": state_update.get("final_response")
+                        or pending.get("message", "Approval required"),
+                    "tools": pending.get("tools", []),
+                    "policy": pending.get("policy", ""),
+                    "context": state_update.get("_approval_checkpoint_context", ""),
+                    "options": ["approve", "reject", "cancel", "modify", "clarify"],
+                }))
+                for _tool in (pending.get("tools", []) or []):
+                    _append_step_progress(
+                        events, str(_tool), "approval",
+                        f"Awaiting approval: {_tool}", str(_tool),
+                    )
 
         # ── Errors (any node) ─────────────────────────────────────
+        # UNIFIED SHAPE: always {"message": ...} — every other error event in
+        # the runner uses this shape; clients must not special-case variants.
         errors = state_update.get("errors", [])
         if errors and isinstance(errors, list):
-            events.append(AgentEvent("error", {"errors": errors[-1:]}))
+            last_error = errors[-1]
+            events.append(AgentEvent("error", {
+                "message": str(last_error)[:500] if last_error else "Unknown error",
+            }))
 
         return events

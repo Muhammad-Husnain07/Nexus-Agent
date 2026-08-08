@@ -24,9 +24,6 @@ from nexus.config.settings import get_settings
 
 logger = structlog.get_logger("nexus.compiler.cache")
 
-_DEFAULT_PARSE_CACHE_TTL: int = 3600
-_DEFAULT_PLAN_CACHE_TTL: int = 300
-
 
 def _get_cache_ttl(cache_name: str) -> int:
     try:
@@ -39,20 +36,52 @@ def _get_cache_ttl(cache_name: str) -> int:
     return 0
 
 
+_CACHE_NS = "nexus:cache:"  # namespaced prefix so clear_all never touches other services' keys
+
+
 def _make_key(*parts: str) -> str:
     raw = "|".join(parts)
-    return hashlib.sha256(raw.encode()).hexdigest()[:32]
+    return f"{_CACHE_NS}{hashlib.sha256(raw.encode()).hexdigest()[:32]}"
 
 
 def _registry_fingerprint() -> str:
+    """Return a stable registry version fingerprint for cache keys.
+
+    Prefers the deterministic structural ``registry_checksum`` (hashes nodes,
+    templates, adjacency, providers — NOT timestamps), falling back to the
+    compile timestamp. Any registry change (new tool, edited template,
+    provider update) changes the fingerprint and invalidates cached plans.
+
+    API-registered tools change the ``tool`` table without recompiling the
+    graph — their updated_at + count is folded into the fingerprint so
+    plans never go stale after tool registration/edits.
+    """
+    parts: list[str] = []
     try:
         from nexus.compiler.compiled_graph import get_compiled_graph
         g = get_compiled_graph()
-        if g is not None and hasattr(g, "compiled_at"):
-            return str(g.compiled_at)
+        if g is not None:
+            checksum = getattr(g, "registry_checksum", "") or ""
+            if checksum:
+                parts.append(f"reg:{checksum[:16]}")
+            elif hasattr(g, "compiled_at"):
+                parts.append(str(g.compiled_at))
     except Exception:
         pass
-    return ""
+
+    # Tool-table mutation marker: API-registered tools don't recompile the
+    # graph, so fold the registry's tool marker into the fingerprint — any
+    # tool registration/edit/deregister invalidates cached plans.
+    try:
+        from nexus.tools.registry import get_tool_registry_marker
+
+        marker = get_tool_registry_marker()
+        if marker:
+            parts.append(marker)
+    except Exception:
+        pass
+
+    return "|".join(parts) if parts else ""
 
 
 def _query_fingerprint(query: str, available_tools: list[dict[str, Any]]) -> str:
@@ -76,6 +105,7 @@ class _BaseCache:
         self._default_ttl = default_ttl
         self._redis: Any = None
         self._memory: dict[str, tuple[float, str]] = {}
+        self._max_memory_entries: int = 1000
         self._hits: int = 0
         self._misses: int = 0
 
@@ -118,6 +148,18 @@ class _BaseCache:
     def _store_in_memory(self, key: str, value: str) -> None:
         expiry = time.time() + self._get_ttl()
         self._memory[key] = (expiry, value)
+        # Bound the in-memory cache: opportunistically evict expired entries
+        # on write so long-running servers don't grow unbounded.
+        if len(self._memory) > self._max_memory_entries:
+            now = time.time()
+            expired = [k for k, (exp, _v) in self._memory.items() if exp <= now]
+            for k in expired:
+                self._memory.pop(k, None)
+            if len(self._memory) > self._max_memory_entries:
+                # Still over the cap — drop oldest (dict preserves insertion order)
+                overflow = len(self._memory) - self._max_memory_entries
+                for k in list(self._memory.keys())[:overflow]:
+                    self._memory.pop(k, None)
 
     async def _store_in_redis(self, key: str, value: str) -> bool:
         redis = await self._get_redis()
@@ -137,7 +179,10 @@ class _BaseCache:
         redis = await self._get_redis()
         if redis is not None:
             try:
-                await redis.flushdb()
+                # Scoped delete by namespace prefix — NEVER flushdb (that
+                # wipes every key on the shared Redis server).
+                async for key in redis.scan_iter(match=f"{_CACHE_NS}*"):
+                    await redis.delete(key)
             except Exception:
                 pass
 
@@ -159,22 +204,38 @@ class _BaseCache:
 
 class ParseCache(_BaseCache):
     def __init__(self, ttl: int | None = None) -> None:
-        super().__init__(ttl or _DEFAULT_PARSE_CACHE_TTL)
+        super().__init__(ttl or _get_cache_ttl("parse") or 3600)
 
     def _get_ttl(self) -> int:
         cfg_ttl = _get_cache_ttl("parse")
         return cfg_ttl if cfg_ttl > 0 else self._default_ttl
 
-    def _build_key(self, query: str, tools: list[dict[str, Any]], model: str) -> str:
-        return _make_key("parse", _query_fingerprint(query, tools), model)
+    def _build_key(self, query: str, tools: list[dict[str, Any]], model: str,
+                   context: str = "") -> str:
+        # Versioned key: the architecture cache fingerprint (over the whole
+        # manifest — ADR 0008) plus the registry fingerprint — a cached plan
+        # must never outlive the code that produced it (deployment-safe
+        # invalidation). The fingerprint is the ONLY architecture version
+        # in cache keys.
+        try:
+            from nexus.agent.architecture import ArchitectureVersion
+
+            _arch_fp = ArchitectureVersion.cache_fingerprint()
+        except Exception:
+            _arch_fp = "arch-unknown"
+        return _make_key(
+            "parse", _query_fingerprint(query, tools), model, context,
+            _arch_fp,
+        )
 
     async def get(
         self,
         query: str,
         tools: list[dict[str, Any]],
         model: str,
+        context: str = "",
     ) -> list[dict[str, Any]] | None:
-        key = self._build_key(query, tools, model)
+        key = self._build_key(query, tools, model, context)
         raw = await self._get_from_redis(key)
         if raw is not None:
             self._record_hit()
@@ -195,8 +256,19 @@ class ParseCache(_BaseCache):
         tools: list[dict[str, Any]],
         model: str,
         intents: list[dict[str, Any]],
+        context: str = "",
     ) -> None:
-        key = self._build_key(query, tools, model)
+        # Guard: don't cache empty workflows — they're likely planning failures
+        if isinstance(intents, dict):
+            nodes = intents.get("nodes", [])
+            if not nodes:
+                logger.debug("cache.parse_skip_empty", query=query[:50])
+                return
+        elif isinstance(intents, list) and not intents:
+            logger.debug("cache.parse_skip_empty", query=query[:50])
+            return
+
+        key = self._build_key(query, tools, model, context)
         value = json.dumps(intents)
         if await self._store_in_redis(key, value):
             logger.debug("cache.parse_stored_redis", key=key[:12])
@@ -222,31 +294,48 @@ class ParseCache(_BaseCache):
 
 class PlanCache(_BaseCache):
     def __init__(self, ttl: int | None = None) -> None:
-        super().__init__(ttl or _DEFAULT_PLAN_CACHE_TTL)
+        super().__init__(ttl or _get_cache_ttl("plan") or 300)
 
     def _get_ttl(self) -> int:
         cfg_ttl = _get_cache_ttl("plan")
         return cfg_ttl if cfg_ttl > 0 else self._default_ttl
 
-    def _build_key(self, goals: list[dict[str, Any]], tools: list[dict[str, Any]]) -> str:
-        goal_fingerprint = json.dumps(
-            sorted((g.get("action", ""), sorted(g.get("required_artifacts", []))) for g in goals)
-        )
-        tool_fingerprint = json.dumps(
-            sorted(f"{t.get('name','')}:{t.get('version',1)}" for t in tools if t.get("name"))
-        )
-        reg_fp = _registry_fingerprint()
-        parts = ["plan", goal_fingerprint, tool_fingerprint]
-        if reg_fp:
-            parts.append(reg_fp)
-        return _make_key(*parts)
+    def build_workflow_key(self, logical_workflow: dict[str, Any]) -> str:
+        """Versioned cache key for a COMPILED execution graph.
 
-    async def get(
-        self,
-        goals: list[dict[str, Any]],
-        tools: list[dict[str, Any]],
-    ) -> list[dict[str, Any]] | None:
-        key = self._build_key(goals, tools)
+        Keyed by the canonical logical-workflow content + registry
+        fingerprint + compiler + artifact-schema versions — the compiled
+        graph for an identical plan is reused across turns without
+        re-running codegen/resolution, and can never outlive the code or
+        registry that produced it.
+        """
+        nodes = logical_workflow.get("nodes") if isinstance(logical_workflow, dict) else []
+        wf_fp = json.dumps(
+            [
+                {
+                    "op": str(n.get("op") or ""),
+                    "inputs": {k: str(v) for k, v in (n.get("inputs") or {}).items()},
+                    "depends_on": [str(d) for d in (n.get("depends_on") or [])],
+                }
+                for n in nodes
+                if isinstance(n, dict)
+            ],
+            sort_keys=True,
+        )
+        try:
+            from nexus.agent.architecture import ArchitectureVersion
+
+            _arch_fp = ArchitectureVersion.cache_fingerprint()
+        except Exception:
+            _arch_fp = "arch-unknown"
+        reg_fp = _registry_fingerprint() or ""
+        return _make_key(
+            "plan", wf_fp, _arch_fp, reg_fp,
+        )
+
+    async def get_workflow(self, logical_workflow: dict[str, Any]) -> dict[str, Any] | None:
+        """Retrieve a cached compiled ExecutionGraph dict (or None)."""
+        key = self.build_workflow_key(logical_workflow)
         raw = await self._get_from_redis(key)
         if raw is not None:
             self._record_hit()
@@ -258,14 +347,10 @@ class PlanCache(_BaseCache):
         self._record_miss()
         return None
 
-    async def set(
-        self,
-        goals: list[dict[str, Any]],
-        tools: list[dict[str, Any]],
-        plan: list[dict[str, Any]],
-    ) -> None:
-        key = self._build_key(goals, tools)
-        value = json.dumps(plan)
+    async def set_workflow(self, logical_workflow: dict[str, Any], graph: dict[str, Any]) -> None:
+        """Store a compiled ExecutionGraph dict under its versioned key."""
+        key = self.build_workflow_key(logical_workflow)
+        value = json.dumps(graph)
         if await self._store_in_redis(key, value):
             return
         self._store_in_memory(key, value)

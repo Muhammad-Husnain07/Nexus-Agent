@@ -113,7 +113,7 @@ async def chat(
     If ``body.stream`` is ``True`` (default), returns an SSE stream with
     ``15s`` keepalive heartbeats.  Event types include:
     ``plan_created``, ``tool_call_started``, ``tool_call_completed``,
-    ``clarification_needed``, ``approval_required``, ``intermediate_preview``,
+    ``clarification_needed``, ``approval_checkpoint``, ``intermediate_preview``,
     ``final_response``, ``error``, ``done``.
 
     If ``body.stream`` is ``False``, returns a single ``ChatResponse`` JSON
@@ -241,7 +241,7 @@ async def _json_response(
         ):
             if agent_event.type == "final_response":
                 final_text = agent_event.payload.get("text")
-            elif agent_event.type == "approval_required":
+            elif agent_event.type == "approval_checkpoint":
                 interrupted = True
                 approval_payload = agent_event.payload
             elif agent_event.type == "error":
@@ -278,7 +278,7 @@ async def get_session_state(
     """
     sid = str(session_id)
     runner: AgentRunner = await get_agent_runner(request)
-    graph = runner._build_graph()
+    graph = await runner._build_graph()
     config = {"configurable": {"thread_id": sid}}
 
     try:

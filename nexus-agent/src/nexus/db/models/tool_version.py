@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -15,6 +15,11 @@ from nexus.db.base import Base
 
 class ToolVersion(Base):
     """Snapshot of a tool definition at a specific version number."""
+
+    __tablename__ = "toolversion"
+    __table_args__ = (
+        UniqueConstraint("tool_id", "version", name="uq_toolversion_tool_version"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tool_id: Mapped[uuid.UUID] = mapped_column(

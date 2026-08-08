@@ -19,6 +19,10 @@ from nexus.compiler.ir_models import (
     ToolNode,
 )
 
+# Merges duplicate nodes — runs after constraint ordering, before
+# elimination/fusion so downstream passes see a deduplicated node set.
+PRIORITY = 40
+
 
 def run(graph: ExecutionGraph) -> ExecutionGraph:
     """Merge duplicate ToolNodes and remap dependency references.
@@ -80,7 +84,10 @@ def run(graph: ExecutionGraph) -> ExecutionGraph:
         if kept_wave:
             new_waves.append(kept_wave)
 
-    return graph.model_copy(update={"nodes": kept, "waves": new_waves})
+    data = graph.model_dump()
+    data.pop("nodes", None)
+    data.pop("waves", None)
+    return ExecutionGraph(**data, nodes=kept, waves=new_waves)
 
 
 def _extract_tool_node(node: PhysicalNode) -> ToolNode | None:

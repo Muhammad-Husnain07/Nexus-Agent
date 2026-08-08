@@ -32,6 +32,9 @@ class InvocationOutcome:
     error_message: str | None = None
     cost_breakdown: dict[str, Any] = None
     created_at: str = ""
+    architecture_fingerprint: str = ""
+    planner_metrics: dict[str, Any] = None
+    reproducibility: dict[str, Any] = None
 
     def __post_init__(self):
         if self.cost_breakdown is None:
@@ -51,6 +54,37 @@ class InvocationOutcome:
         tool_count = len(tool_results)
         tool_errors = sum(1 for r in tool_results if r.get("status") != "success") if tool_results else 0
         cost_breakdown = state.get("_cost_breakdown", {})
+        try:
+            from nexus.agent.architecture import ArchitectureVersion  # noqa: PLC0415
+
+            architecture_fingerprint = ArchitectureVersion.cache_fingerprint()
+        except Exception:
+            architecture_fingerprint = ""
+        planner_metrics = {}
+        try:
+            _report = state.get("_plan_validator_report") or {}
+            if isinstance(_report, dict):
+                planner_metrics = _report.get("metrics") or {}
+        except Exception:
+            planner_metrics = {}
+        # REPRODUCIBILITY (P2): the model identity + prompt versions that
+        # produced this run — every outcome is auditable/reproducible.
+        reproducibility = {"model": model}
+        try:
+            from nexus.agent.architecture import ArchitectureVersion  # noqa: PLC0415
+            from nexus.agent.prompts.manager import prompt_manager  # noqa: PLC0415
+
+            reproducibility["architecture_fingerprint"] = ArchitectureVersion.cache_fingerprint()
+            prompt_versions = {}
+            for name in ("router", "logical_planner", "finalize"):
+                try:
+                    tmpl = prompt_manager.get(name)
+                    prompt_versions[name] = getattr(tmpl, "version", "") or ""
+                except Exception:
+                    pass
+            reproducibility["prompt_versions"] = prompt_versions
+        except Exception:
+            pass
 
         return InvocationOutcome(
             session_id=state.get("session_id", ""),
@@ -63,6 +97,9 @@ class InvocationOutcome:
             tool_error_count=tool_errors,
             error_message=error_message,
             cost_breakdown=cost_breakdown,
+            architecture_fingerprint=architecture_fingerprint,
+            planner_metrics=planner_metrics,
+            reproducibility=reproducibility,
         )
 
 

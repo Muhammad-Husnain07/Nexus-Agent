@@ -30,7 +30,8 @@ from nexus.compiler.ir_models import (
     MapNode,
     ToolNode,
 )
-from nexus.compiler.resolver import CapabilityResolver, CapabilityError
+from nexus.capabilities.resolver import DynamicCapabilityResolver
+from nexus.compiler.resolver import CapabilityError
 
 
 class CompilerError(Exception):
@@ -42,14 +43,14 @@ class Compiler:
 
     Usage::
 
-        resolver = CapabilityResolver(db_session)
+        resolver = DynamicCapabilityResolver(db_session)
         compiler = Compiler(resolver)
         graph = await compiler.compile(workflow)
 
     Pure: all ID generation uses SHA256 hashing, never ``uuid.uuid4()``.
     """
 
-    def __init__(self, resolver: CapabilityResolver) -> None:
+    def __init__(self, resolver: DynamicCapabilityResolver) -> None:
         self.resolver = resolver
 
     def _deterministic_id(self, *parts: str, length: int = 12) -> str:
@@ -60,8 +61,145 @@ class Compiler:
         raw = "::".join(parts)
         return hashlib.sha256(raw.encode()).hexdigest()[:length]
 
-    async def compile(self, workflow: LogicalWorkflow) -> ExecutionGraph:
+    async def _synthesize_resolve_producers(
+        self,
+        workflow: LogicalWorkflow,
+        resolver_context: Any | None = None,
+    ) -> LogicalWorkflow:
+        """Deterministic chain insertion for ``RESOLVE(...)`` expressions.
+
+        The planner may emit ``RESOLVE("capability", "input_key", "value")``
+        instead of ``${ref.result.field}`` placeholders to declare a
+        producer chain. This pre-pass synthesizes the producer LogicalNode
+        (metadata-driven via the resolver + registry), rewrites the
+        consumer's input to the corresponding ``${producer_ref.result.<a>}``
+        placeholder, and wires the dependency. The frozen IR is REBUILT
+        (never mutated). Expressions whose capability cannot resolve stay
+        literal — the executor rejects them explicitly (never guessed).
+        """
+        from nexus.agent.nodes.plan_validator_node import _is_chain_expression
+        from nexus.artifacts.normalizer import strip_normalization_state  # noqa: F401
+        from nexus.context.global_context import get_global_context
+
+        resolve_re = re.compile(
+            r'RESOLVE\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\)'
+        )
+        synthesized: list[LogicalNode] = []
+        rewritten: dict[str, dict[str, Any]] = {}
+        extra_deps: dict[str, list[str]] = {}
+        producer_by_ref: dict[str, str] = {}
+
+        index = {}
+        try:
+            index = getattr(get_global_context(), "capability_index", None) or {}
+        except Exception:
+            index = {}
+
+        existing_refs = {n.ref for n in workflow.nodes}
+
+        def _producer_meta(name: str) -> dict:
+            meta = index.get(name) or {}
+            return meta if isinstance(meta, dict) else {}
+
+        for node in workflow.nodes:
+            if not node.inputs:
+                continue
+            new_inputs = dict(node.inputs)
+            changed = False
+            for key, value in list(new_inputs.items()):
+                if not (isinstance(value, str) and _is_chain_expression(value)):
+                    continue
+                match = resolve_re.search(value)
+                if not match:
+                    continue
+                producer_op, producer_key, producer_value = (
+                    match.group(1), match.group(2), match.group(3),
+                )
+                meta = _producer_meta(producer_op)
+                if not meta:
+                    continue  # unresolved capability → stays literal
+                try:
+                    candidates = await self.resolver.resolve(
+                        producer_op, context=resolver_context
+                    )
+                    if not candidates:
+                        continue
+                except Exception:
+                    continue
+                # Producer input mapping: the expression's key if the
+                # producer's schema declares it, else its first required
+                # input (metadata-driven — mirrors the workflow engine).
+                schema = meta.get("input_schema") or {}
+                props = schema.get("properties") if isinstance(schema, dict) else {}
+                producer_input: dict[str, Any] = {}
+                if isinstance(props, dict) and producer_key in props:
+                    producer_input[producer_key] = producer_value
+                else:
+                    required = meta.get("input_required") or []
+                    if required:
+                        producer_input[str(required[0])] = producer_value
+                    else:
+                        continue
+                producer_ref = f"{node.ref}_producer_{key}"
+                if producer_ref in existing_refs:
+                    producer_ref = f"{node.ref}_producer_{key}_{len(synthesized)}"
+                producer_by_ref[producer_ref] = producer_op
+                synthesized.append(LogicalNode(
+                    op=producer_op,
+                    ref=producer_ref,
+                    inputs=producer_input,
+                    depends_on=[],
+                ))
+                # Consumer input rewrite: the consumed artifact ← the
+                # producer's produces list (the key itself first, else the
+                # first produced artifact).
+                produces = meta.get("produces") or []
+                field = key if key in produces else (produces[0] if produces else key)
+                new_inputs[key] = f"${{{producer_ref}.result.{field}}}"
+                extra_deps.setdefault(node.ref, []).append(producer_ref)
+                changed = True
+            if changed:
+                rewritten[node.ref] = new_inputs
+
+        if not synthesized:
+            return workflow
+
+        final_nodes = []
+        for node in workflow.nodes:
+            final_nodes.append(node)
+            if node.ref in rewritten:
+                final_nodes[-1] = LogicalNode(
+                    op=node.op,
+                    ref=node.ref,
+                    inputs=rewritten[node.ref],
+                    depends_on=list(node.depends_on) + extra_deps.get(node.ref, []),
+                    condition=node.condition,
+                    branch_true=node.branch_true,
+                    branch_false=node.branch_false,
+                    iterate_over=node.iterate_over,
+                    domain=node.domain,
+                    action=node.action,
+                )
+        final_nodes.extend(synthesized)
+        return LogicalWorkflow(
+            version=workflow.version,
+            nodes=final_nodes,
+            collections=workflow.collections,
+        )
+
+
+    async def compile(
+        self,
+        workflow: LogicalWorkflow,
+        resolver_context: Any | None = None,
+    ) -> ExecutionGraph:
         """Translate a LogicalWorkflow into a complete ExecutionGraph.
+
+        Args:
+            workflow: The logical workflow to compile.
+            resolver_context: Optional ``ResolverContext`` (permissions,
+                tier, preferred version/environment) passed to capability
+                resolution for identity-aware scoring.
 
         Steps:
         1. Create a deterministic mapping from logical refs to physical node IDs.
@@ -74,6 +212,15 @@ class Compiler:
         if not workflow.nodes:
             empty_id = self._deterministic_id("empty_graph")
             return ExecutionGraph(graph_id=empty_id, nodes={}, waves=[])
+
+        # Step 0: synthesize producers for declarative chain expressions —
+        # ``RESOLVE("capability", "input_key", "value")`` input values are
+        # the planner's declared producer intent: a producer node is
+        # synthesized (metadata-driven via the resolver), the consumer's
+        # input is rewritten to a ``${producer_ref.result.<artifact>}``
+        # placeholder, and the dependency is wired. Fully deterministic —
+        # never a guessed literal. The frozen IR is REBUILT, never mutated.
+        workflow = await self._synthesize_resolve_producers(workflow, resolver_context)
 
         # Step 1: deterministic ref → id mapping
         ref_to_id: dict[str, str] = {}
@@ -88,17 +235,41 @@ class Compiler:
         for l_node in workflow.nodes:
             dep_ids = [ref_to_id[d] for d in l_node.depends_on if d in ref_to_id]
 
+            # Conditional gate: no tool resolution — the node routes
+            # execution based on ``condition`` against accumulated results.
+            if l_node.condition and (l_node.branch_true or l_node.branch_false):
+                p_id = ref_to_id.get(l_node.ref) or self._deterministic_id(
+                    "cond", l_node.op, l_node.ref
+                )
+                ref_to_id[l_node.ref] = p_id
+                physical_nodes[p_id] = ConditionalNode(
+                    id=p_id,
+                    symbolic_ref=l_node.ref,
+                    depends_on=dep_ids,
+                    condition=l_node.condition,
+                    branch_true=[ref_to_id[b] for b in l_node.branch_true if b in ref_to_id],
+                    branch_false=[ref_to_id[b] for b in l_node.branch_false if b in ref_to_id],
+                )
+                continue
+
+            # Normalize LLM input wrappers: some models emit
+            # ``{"args": {...}}`` / ``{"parameters": {...}}`` instead of a
+            # flat inputs dict. Unwrap generically — no tool-specific logic.
+            node_inputs = _unwrap_input_wrapper(l_node.inputs)
+
             try:
-                endpoint = await self.resolver.resolve(l_node.op)
+                candidates = await self.resolver.resolve(l_node.op, context=resolver_context)
             except CapabilityError:
-                endpoint = None
-            endpoint_url = endpoint.url if endpoint else ""
+                candidates = []
+            best = candidates[0] if candidates else None
+            endpoint_url = best.url if best else ""
             tool_name = l_node.op
-            http_method = endpoint.http_method if endpoint else "GET"
-            cost_est = endpoint.cost_per_call if endpoint and endpoint.cost_per_call is not None else 0.0
+            http_method = best.http_method if best else "GET"
+            cost_est = best.cost_per_call if best and best.cost_per_call is not None else 0.0
             from nexus.config.settings import get_settings as _cg_settings
             _def_lat = _cg_settings().compiler.default_latency_ms
-            lat_est = endpoint.latency_p99_ms if endpoint and endpoint.latency_p99_ms is not None else _def_lat
+            lat_est = best.latency_p99_ms if best and best.latency_p99_ms is not None else _def_lat
+            candidate_list = [c.model_dump() for c in candidates] if candidates else []
 
             if l_node.iterate_over:
                 p_id = ref_to_id[l_node.ref]
@@ -111,9 +282,10 @@ class Compiler:
                     tool_name=tool_name,
                     endpoint_url=endpoint_url,
                     http_method=http_method,
-                    inputs=dict(l_node.inputs),
+                    inputs=dict(node_inputs),
                     cost_estimate=cost_est,
                     latency_estimate_ms=lat_est,
+                    candidate_endpoints=candidate_list,
                 )
                 map_node = MapNode(
                     id=p_id,
@@ -133,14 +305,25 @@ class Compiler:
                     tool_name=tool_name,
                     endpoint_url=endpoint_url,
                     http_method=http_method,
-                    inputs=dict(l_node.inputs),
+                    inputs=dict(node_inputs),
                     cost_estimate=cost_est,
                     latency_estimate_ms=lat_est,
+                    candidate_endpoints=candidate_list,
                 )
                 physical_nodes[p_id] = tool_node
 
         # Step 4: static dataflow analysis — wire implicit depends_on from placeholders
         self._wire_implicit_dependencies(physical_nodes, ref_to_id)
+
+        # Step 4b: branch nodes depend on their conditional gate — a branch
+        # must never execute before the gate has evaluated its condition.
+        for node in physical_nodes.values():
+            if not isinstance(node, ConditionalNode):
+                continue
+            for branch_id in node.branch_true + node.branch_false:
+                branch = physical_nodes.get(branch_id)
+                if branch is not None and node.id not in branch.depends_on:
+                    branch.depends_on = list(branch.depends_on) + [node.id]
 
         # Step 5: topological sort (Kahn's algorithm) → waves
         waves = self._build_waves(physical_nodes)
@@ -248,3 +431,25 @@ class Compiler:
                 Compiler._scan_for_placeholders(item, regex, found)
         elif isinstance(obj, str):
             found.update(regex.findall(obj))
+
+
+def _unwrap_input_wrapper(inputs: dict[str, Any]) -> dict[str, Any]:
+    """Normalize LLM input wrappers into a flat inputs dict.
+
+    Some models emit ``{"args": {...}}`` / ``{"parameters": {...}}`` /
+    ``{"params": {...}}`` instead of a flat inputs dict. Unwrapping is
+    purely structural (single-key wrapper whose value is a dict) — it
+    applies to any tool/capability with no tool-specific logic.
+
+    Args:
+        inputs: The raw inputs dict from a LogicalNode.
+
+    Returns:
+        The unwrapped flat inputs dict (or the original if no wrapper).
+    """
+    if not isinstance(inputs, dict) or len(inputs) != 1:
+        return dict(inputs)
+    wrapper_key, wrapper_val = next(iter(inputs.items()))
+    if wrapper_key in ("args", "arguments", "parameters", "params", "input") and isinstance(wrapper_val, dict):
+        return dict(wrapper_val)
+    return dict(inputs)

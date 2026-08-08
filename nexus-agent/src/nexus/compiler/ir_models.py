@@ -10,13 +10,89 @@ Optimizer functions operate on these models purely — no I/O, no datetime, no r
 
 from __future__ import annotations
 
+# Immutable implementation version (module constant — never settings/env).
+# Bumped only when the IR/codegen contract changes.
+COMPILER_VERSION = 2
+
 import hashlib
 import json
 import uuid
+from enum import Enum
 from typing import Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Annotated
+
+
+# ============================================================================
+# Execution Strategy — drives provider selection and execution behaviour
+# ============================================================================
+
+
+class ExecutionStrategy(str, Enum):
+    """Execution strategy for an ExecutionPlan.
+
+    Determines how the executor selects endpoints and handles failures:
+    - FAST: Pick the provider with lowest latency_p99_ms.
+    - CHEAP: Pick the provider with lowest cost_per_call.
+    - BALANCED: Use the default composite scoring (latency + cost + reliability).
+    - SPECULATIVE: Fire two candidate providers concurrently, take first valid.
+    - HIGH_CONFIDENCE: Use the highest-reliability provider; retry more aggressively.
+    """
+    FAST = "fast"
+    CHEAP = "cheap"
+    BALANCED = "balanced"
+    SPECULATIVE = "speculative"
+    HIGH_CONFIDENCE = "high_confidence"
+
+
+class RetryPolicy(BaseModel):
+    """Retry policy for a single operation within an ExecutionPlan.
+
+    Attributes:
+        max_attempts: Maximum number of execution attempts.
+        backoff_base_s: Base backoff in seconds.
+        backoff_max_s: Maximum backoff in seconds.
+        retryable_codes: HTTP status codes that trigger a retry.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    max_attempts: int = Field(default=3, ge=0, description="Max execution attempts")
+    backoff_base_s: float = Field(default=1.0, ge=0, description="Base backoff seconds")
+    backoff_max_s: float = Field(default=30.0, ge=0, description="Max backoff seconds")
+    retryable_codes: list[int] = Field(
+        default_factory=lambda: [408, 429, 500, 502, 503, 504],
+        description="HTTP status codes that trigger retry",
+    )
+
+
+class OperationIR(BaseModel):
+    """Intermediate Representation for a single resolved operation.
+
+    This is the **resolved** version of a LogicalNode — the capability has
+    been matched to specific provider/endpoint candidates by the resolver.
+
+    Attributes:
+        op_id: Unique identifier for this operation instance.
+        capability: The resolved capability name.
+        provider_id: The selected provider identifier (set by strategy).
+        endpoint_url: The selected endpoint URL (set by strategy).
+        inputs: Input parameters for the operation.
+        candidates: List of candidate endpoint scores for strategy selection.
+        retry_policy: Per-operation retry policy override.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    op_id: str = Field(description="Operation instance identifier")
+    capability: str = Field(description="Resolved capability name")
+    provider_id: str | None = Field(default=None, description="Selected provider ID")
+    endpoint_url: str | None = Field(default=None, description="Selected endpoint URL")
+    inputs: dict[str, Any] = Field(default_factory=dict, description="Input parameters")
+    candidates: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Candidate endpoint scores for strategy selection",
+    )
+    retry_policy: RetryPolicy | None = Field(default=None, description="Per-operation retry override")
 
 
 # ============================================================================
@@ -44,7 +120,21 @@ class LogicalNode(BaseModel):
     inputs: dict[str, Any] = Field(default_factory=dict, description="Input parameters")
     depends_on: list[str] = Field(default_factory=list, description="Prerequisite node refs")
     condition: str | None = Field(default=None, description="Conditional expression")
+    branch_true: list[str] = Field(
+        default_factory=list, description="Node refs to run when the condition is true"
+    )
+    branch_false: list[str] = Field(
+        default_factory=list, description="Node refs to run when the condition is false"
+    )
     iterate_over: str | None = Field(default=None, description="Collection to iterate over")
+    domain: str | None = Field(
+        default=None,
+        description="Domain/category hint emitted by the planner (metadata only — runtime uses it for narrowing)",
+    )
+    action: str | None = Field(
+        default=None,
+        description="Verb/action hint emitted by the planner (metadata only — explainability)",
+    )
 
 
 class LogicalWorkflow(BaseModel):
@@ -53,7 +143,7 @@ class LogicalWorkflow(BaseModel):
     Contains a sequence of LogicalNodes and any named collections for iteration.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     version: Literal["1.0"] = "1.0"
     nodes: list[LogicalNode] = Field(default_factory=list, description="Ordered logical operations")
@@ -125,6 +215,10 @@ class ToolNode(BasePhysicalNode):
     cost_estimate: float = Field(default=0.0, description="Estimated cost per call in USD")
     latency_estimate_ms: int = Field(default=1000, description="Estimated P99 latency in ms")
     execution_key: str | None = Field(default=None, description="Idempotency hash")
+    candidate_endpoints: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Ranked alternative endpoints for late-binding fallback",
+    )
 
 
 class MapNode(BasePhysicalNode):
@@ -198,7 +292,7 @@ class ExecutionGraph(BaseModel):
         waves: Pre-computed topological wave ordering for the Executor.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     version: Literal["1.0"] = "1.0"
     graph_id: str = Field(description="Unique graph instance identifier")

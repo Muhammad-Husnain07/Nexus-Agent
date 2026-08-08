@@ -2,7 +2,7 @@
 
 CLI command: ``nexus compile-registry``
 
-Reads CapabilityModel, ProviderModel, EndpointModel, GoalTemplateModel from the DB.
+Reads CapabilityModel, ProviderModel, EndpointModel from the DB.
 Validates contracts, checks for missing producers, detects cycles.
 Generates a CompiledCapabilityGraph that the runtime reads — never computes ontology.
 
@@ -11,6 +11,7 @@ No hardcoded capability names. All data comes from DB metadata.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from datetime import datetime, timezone
@@ -41,14 +42,22 @@ class CompiledCapabilityNode:
         postconditions: list[str] | None = None,
         providers: list[dict[str, Any]] | None = None,
         version: int = 1,
+        description: str = "",
+        purpose: str = "",
+        tags: list[str] | None = None,
+        logical_op_name: str = "",
     ) -> None:
         self.name = name
+        self.logical_op_name = logical_op_name
         self.consumes = consumes or []
         self.produces = produces or []
         self.preconditions = preconditions or []
         self.postconditions = postconditions or []
         self.providers = providers or []
         self.version = version
+        self.description = description
+        self.purpose = purpose
+        self.tags = tags or []
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -59,6 +68,10 @@ class CompiledCapabilityNode:
             "postconditions": self.postconditions,
             "providers": self.providers,
             "version": self.version,
+            "description": self.description,
+            "purpose": self.purpose,
+            "tags": self.tags,
+            "logical_op_name": self.logical_op_name,
         }
 
     @staticmethod
@@ -71,6 +84,10 @@ class CompiledCapabilityNode:
             postconditions=data.get("postconditions", []),
             providers=data.get("providers", []),
             version=data.get("version", 1),
+            description=data.get("description", ""),
+            purpose=data.get("purpose", ""),
+            tags=data.get("tags", []),
+            logical_op_name=data.get("logical_op_name", ""),
         )
 
 
@@ -120,6 +137,8 @@ class CompiledCapabilityGraph:
         self.cycles: list[list[str]] = []
         self.compiled_at: str = ""
         self.source_registry_version: int = 0
+        self.registry_checksum: str = ""  # SHA256 of the registry content for O(1) staleness check
+        self.capability_providers: dict[str, list[dict[str, Any]]] = {}  # O(1) lookup map
 
     def add_node(self, node: CompiledCapabilityNode) -> None:
         self.nodes[node.name] = node
@@ -176,6 +195,42 @@ class CompiledCapabilityGraph:
         self.cycles = cycles
         return cycles
 
+    def build_capability_providers(self) -> None:
+        """Build O(1) capability_id → candidate_providers hash map.
+
+        Dual-keyed: each capability is registered under BOTH its registry
+        name (category slug, e.g. ``data_list_tables``) AND its logical
+        operation name (tool name, e.g. ``list_tables``). The executor
+        resolves providers by ``tool_name`` (= logical op), so a single-key
+        map keyed only by slug would silently miss every categorized tool
+        and leave authenticated calls without credentials.
+        """
+        self.capability_providers = {}
+        for name, node in self.nodes.items():
+            providers = []
+            for prov in node.providers or []:
+                for ep in prov.get("endpoints", []):
+                    providers.append({
+                        "provider_name": prov.get("name", ""),
+                        "url": ep.get("url", ""),
+                        "http_method": ep.get("http_method", "GET"),
+                        "auth_type": ep.get("auth_type", "none"),
+                        "auth_ref": prov.get("auth_ref", ""),
+                        "latency_p99_ms": ep.get("latency_p99_ms", 0),
+                        "cost_per_call": ep.get("cost_per_call", 0.0),
+                        "reliability_score": prov.get("reliability_score", 1.0),
+                        "region": ep.get("region", ""),
+                        "weight": ep.get("weight", 1),
+                    })
+            if not providers:
+                continue
+            self.capability_providers[name] = providers
+            logical_op = getattr(node, "logical_op_name", "") or ""
+            if logical_op and logical_op != name:
+                # Logical-op alias → same provider candidates (executor lookup)
+                existing = self.capability_providers.get(logical_op, [])
+                self.capability_providers[logical_op] = existing + providers
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "nodes": {k: v.to_dict() for k, v in self.nodes.items()},
@@ -186,6 +241,8 @@ class CompiledCapabilityGraph:
             "cycles": self.cycles,
             "compiled_at": self.compiled_at,
             "source_registry_version": self.source_registry_version,
+            "registry_checksum": self.registry_checksum,
+            "capability_providers": self.capability_providers,
         }
 
     def to_json(self, indent: int = 2) -> str:
@@ -204,6 +261,8 @@ class CompiledCapabilityGraph:
         graph.cycles = data.get("cycles", [])
         graph.compiled_at = data.get("compiled_at", "")
         graph.source_registry_version = data.get("source_registry_version", 0)
+        graph.registry_checksum = data.get("registry_checksum", "")
+        graph.capability_providers = data.get("capability_providers", {})
         return graph
 
 
@@ -225,19 +284,14 @@ async def compile_registry(
     Returns:
         A ``CompiledCapabilityGraph`` ready for runtime consumption.
     """
-    import time
-
     graph = CompiledCapabilityGraph()
     graph.compiled_at = datetime.now(timezone.utc).isoformat()
 
     try:
         from sqlalchemy import select
-        from sqlalchemy.ext.asyncio import AsyncSession
 
         from nexus.db.models.registry import (
             CapabilityModel,
-            EndpointModel,
-            GoalTemplateModel,
             ProviderModel,
         )
 
@@ -257,6 +311,12 @@ async def compile_registry(
             )
             capabilities = result.scalars().all()
 
+            # Load tool auth_refs for mapping capability names to auth settings
+            from nexus.db.models.tool import Tool  # noqa: PLC0415
+            tool_rows = (await session.execute(select(Tool))).scalars().all()
+            tool_auth: dict[str, str] = {t.name: (t.auth_ref or "") for t in tool_rows if t.auth_ref}
+            tool_auth_type: dict[str, str] = {t.name: t.auth_type for t in tool_rows if t.auth_type and t.auth_type != "none"}
+
             for cap in capabilities:
                 providers_list = []
                 for prov in cap.providers or []:
@@ -269,20 +329,22 @@ async def compile_registry(
                         endpoints_list.append({
                             "url": ep.url,
                             "http_method": ep.http_method,
-                            "auth_type": ep.auth_type,
+                            "auth_type": tool_auth_type.get(cap.name, ep.auth_type or "none"),
+                            "auth_ref": tool_auth.get(cap.name, ""),
                             "region": ep.region,
                             "weight": ep.weight,
+                            "latency_p99_ms": ep.latency_p99_ms,
+                            "cost_per_call": ep.cost_per_call,
                         })
                     providers_list.append({
                         "name": prov.name,
-                        "cost_per_call": prov.cost_per_call,
-                        "sla_p99_ms": prov.sla_p99_ms,
                         "privacy_level": prov.privacy_level,
                         "reliability_score": prov.reliability_score,
                         "rate_limit_per_minute": prov.rate_limit_per_minute,
                         "retry_policy": prov.retry_policy,
                         "circuit_breaker_threshold": prov.circuit_breaker_threshold,
                         "endpoints": endpoints_list,
+                        "auth_ref": tool_auth.get(cap.name, ""),
                     })
 
                 node = CompiledCapabilityNode(
@@ -293,29 +355,44 @@ async def compile_registry(
                     postconditions=list(cap.postconditions or []),
                     providers=providers_list,
                     version=cap.version or 1,
+                    description=cap.description or "",
+                    purpose="",
+                    tags=list(cap.tags or []),
+                    logical_op_name=cap.logical_op_name or "",
                 )
                 graph.add_node(node)
 
                 if cap.ontology_parent:
                     graph.ontology_parents[cap.name] = cap.ontology_parent
+                if cap.parent_capability_id:
+                    # Add to ontology_parents from FK if not already set
+                    if cap.name not in graph.ontology_parents:
+                        graph.ontology_parents[cap.name] = str(cap.parent_capability_id)
 
             # ── Build adjacency ──────────────────────────────────────
             graph.build_adjacency()
 
-            # ── Load goal templates ──────────────────────────────────
-            result = await session.execute(
-                select(GoalTemplateModel).where(GoalTemplateModel.enabled == True)  # noqa: E712
-            )
-            templates = result.scalars().all()
-            for tmpl in templates:
-                cap_chain = [c.name for c in (tmpl.capabilities or []) if c.enabled]
-                ct = CompiledGoalTemplate(
-                    name=tmpl.name,
-                    trigger_action=tmpl.trigger_action,
-                    capability_chain=cap_chain,
-                    version=tmpl.version or 1,
-                )
-                graph.add_template(ct)
+            # ── Build O(1) capability→providers map ────────────────
+            graph.build_capability_providers()
+
+            # ── Compute registry checksum ─────────────────────────
+            # Hashes ONLY the structural content (nodes, templates, adjacency,
+            # providers) — NOT ``compiled_at``, which changes on every compile
+            # and would make the checksum non-deterministic.
+            graph.registry_checksum = hashlib.sha256(
+                json.dumps(
+                    {
+                        "nodes": {k: v.to_dict() for k, v in graph.nodes.items()},
+                        "goal_templates": {
+                            k: v.to_dict() for k, v in graph.goal_templates.items()
+                        },
+                        "adjacency": graph.adjacency,
+                        "ontology_parents": graph.ontology_parents,
+                        "capability_providers": graph.capability_providers,
+                    },
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()[:16]
 
             # ── Validate ─────────────────────────────────────────────
             graph.find_missing_producers()

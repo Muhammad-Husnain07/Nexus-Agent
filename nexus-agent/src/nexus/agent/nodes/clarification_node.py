@@ -38,15 +38,7 @@ async def clarification_node(state: AgentState) -> dict[str, Any]:
         # Try to build a specific question from the router's preferred tools signal
         preferred = state.get("_preferred_tools", [])
         if preferred:
-            avail = state.get("available_tools", [])
-            tool_map = {t.get("name", ""): t for t in avail if isinstance(t, dict)}
-            names = []
-            for p in preferred:
-                t = tool_map.get(p, {})
-                desc = t.get("description", "") or t.get("purpose", "") or p
-                # Truncate long descriptions
-                short_desc = desc[:60] + "..." if len(desc) > 60 else desc
-                names.append(short_desc)
+            names = [p.replace("_", " ").title() for p in preferred]
             if names:
                 unique = list(dict.fromkeys(names))[:5]  # dedup, max 5
                 if len(unique) == 1:

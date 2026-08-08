@@ -9,6 +9,9 @@ Pass is pure: no I/O, no datetime, no random.
 
 from nexus.compiler.ir_models import ExecutionGraph, PhysicalNode, ToolNode
 
+# Last structural pass — fuses batches only after the node set is final.
+PRIORITY = 70
+
 _BATCH_FUSION_THRESHOLD: int = 5
 
 

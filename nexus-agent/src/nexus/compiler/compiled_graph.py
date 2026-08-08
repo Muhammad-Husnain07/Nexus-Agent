@@ -10,13 +10,14 @@ The graph path is configured via ``settings.compiler.compiled_graph_path``.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from typing import Any
 
 import structlog
 
-from nexus.compiler.registry_compiler import CompiledCapabilityGraph
+from nexus.compiler.registry_compiler import CompiledCapabilityGraph, compile_registry
 from nexus.config.settings import get_settings
 
 logger = structlog.get_logger("nexus.compiler.compiled_graph")
@@ -67,15 +68,63 @@ def load_compiled_graph(path: str | None = None) -> CompiledCapabilityGraph | No
     # DB fallback — compile on-the-fly from live registry
     logger.info("compiled_graph.db_fallback", path=filepath)
     try:
-        import asyncio
+        if asyncio.get_running_loop() is not None:
+            # Called from within a running event loop — cannot block it with
+            # asyncio.run/run_until_complete here. Callers in async contexts
+            # must use ``load_compiled_graph_async`` instead; this sync path
+            # returns None rather than crashing (an empty graph is logged and
+            # handled downstream).
+            logger.warning("compiled_graph.async_context_no_fallback")
+            return None
+    except RuntimeError:
+        pass  # No running loop — safe to use asyncio.run below
 
-        from nexus.compiler.registry_compiler import compile_registry
-
+    try:
         _compiled_graph = asyncio.run(compile_registry())
         logger.info(
             "compiled_graph.db_fallback_ok",
             nodes=len(_compiled_graph.nodes),
         )
+        return _compiled_graph
+    except Exception as exc:
+        logger.error("compiled_graph.db_fallback_failed", error=str(exc))
+        return None
+
+
+async def load_compiled_graph_async(path: str | None = None) -> CompiledCapabilityGraph | None:
+    """Async-load the compiled capability graph (safe inside an event loop).
+
+    Falls back to compiling from the live registry when the JSON file is
+    missing — without ``asyncio.run()``, which would crash inside a running
+    event loop (the FastAPI request path).
+
+    Args:
+        path: Path to compiled graph JSON. If None, uses configured path.
+
+    Returns:
+        ``CompiledCapabilityGraph`` or None if not found and no DB fallback.
+    """
+    global _compiled_graph
+
+    filepath = path or _get_graph_path()
+    if os.path.exists(filepath):
+        try:
+            with open(filepath) as f:
+                data = json.load(f)
+            _compiled_graph = CompiledCapabilityGraph.from_dict(data)
+            logger.info(
+                "compiled_graph.loaded",
+                nodes=len(_compiled_graph.nodes),
+                path=filepath,
+            )
+            return _compiled_graph
+        except Exception as exc:
+            logger.error("compiled_graph.load_failed", path=filepath, error=str(exc))
+
+    logger.info("compiled_graph.db_fallback_async", path=filepath)
+    try:
+        _compiled_graph = await compile_registry()
+        logger.info("compiled_graph.db_fallback_ok", nodes=len(_compiled_graph.nodes))
         return _compiled_graph
     except Exception as exc:
         logger.error("compiled_graph.db_fallback_failed", error=str(exc))

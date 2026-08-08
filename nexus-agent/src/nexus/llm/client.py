@@ -29,7 +29,6 @@ from nexus.observability.tracing import get_tracer
 log = logging.getLogger(__name__)
 
 # Cache of Ollama model name → capabilities (fetched from /api/tags at runtime)
-_ollama_capabilities: dict[str, set[str]] = {}
 # Simple template for models that don't support the chat API natively
 _RAW_TEMPLATE = (
     "{system}"
@@ -37,36 +36,6 @@ _RAW_TEMPLATE = (
 )
 
 _LITELLM_TEMPERATURE: float = 0.7
-
-
-async def _ollama_supports_tools(model: str, api_base: str) -> bool:
-    """Check if an Ollama model supports the chat API with tool calls.
-
-    Fetches model capabilities from ``/api/tags`` at runtime and caches
-    the result.  No hardcoded model names — works for any Ollama model.
-    """
-    if model in _ollama_capabilities:
-        return "tools" in _ollama_capabilities[model]
-
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"{api_base}/api/tags")
-            if resp.status_code == 200:
-                data = resp.json()
-                for entry in data.get("models", []):
-                    name: str = entry.get("name", "")
-                    caps: list[str] = entry.get("capabilities", [])
-                    _ollama_capabilities[name] = set(caps)
-                    # Also cache without tag (e.g. "Qwen3:4B" and "Qwen3")
-                    base = name.split(":")[0]
-                    if base not in _ollama_capabilities:
-                        _ollama_capabilities[base] = set(caps)
-
-        cached = _ollama_capabilities.get(model, set())
-        return "tools" in cached
-    except Exception as exc:
-        log.warning("Failed to fetch Ollama capabilities for %s: %s", model, exc)
-        return True  # assume chat API works on error rather than breaking
 
 
 class UsageInfo(BaseModel):
@@ -91,6 +60,16 @@ class LLMResponse(BaseModel):
     provider: str = Field(default="", description="Provider name")
     latency_ms: float = Field(default=0.0, description="Request latency in milliseconds")
     cost_usd: float = Field(default=0.0, description="Computed cost in USD")
+    error: str | None = Field(
+        default=None,
+        description="Non-null when the LLM call failed after retries — callers "
+        "must NOT treat empty content as success when this is set",
+    )
+
+    @property
+    def failed(self) -> bool:
+        """True when the LLM call errored (content is unreliable)."""
+        return bool(self.error)
 
 
 class LLMChunk(BaseModel):
@@ -177,6 +156,19 @@ class LLMClient:
         if api_key_val:
             kwargs["api_key"] = api_key_val
 
+        # Apply timeout from settings — prevents hanging when provider is unreachable
+        from nexus.config.settings import get_settings as _get_llm_settings  # noqa: PLC0415
+        kwargs["timeout"] = _get_llm_settings().llm.timeout_s
+
+        # Provider-declared extra kwargs (metadata-driven): e.g. NVIDIA NIM
+        # ``{"options": {"think": false}}`` disables extended reasoning —
+        # a large latency win for reasoning-model deployments. The provider
+        # config is the single source of truth; nothing is hardcoded here.
+        if provider.config.extra_kwargs:
+            for _ek, _ev in provider.config.extra_kwargs.items():
+                if _ek not in kwargs:
+                    kwargs[_ek] = _ev
+
         # Dynamic prompt format detection and adaptation
         fmt = provider.config.prompt_format
         if fmt == "auto":
@@ -207,14 +199,14 @@ class LLMClient:
             if adapted:
                 kwargs["messages"] = adapted
 
-        # Ollama-specific: tool capability detection
-        if provider_name == "ollama":
-            supports_tools = await _ollama_supports_tools(model, provider.config.base_url or "")
-            if not supports_tools:
-                kwargs["extra_body"] = {"raw": True}
-                prompt = _format_raw_prompt(kwargs["messages"])
-                kwargs["messages"] = [{"role": "user", "content": prompt}]
-                kwargs.pop("response_format", None)
+        # Provider tool-calling fallback: when the provider metadata says the
+        # model has no tool support, degrade to raw prompt mode. Metadata-driven
+        # (``supports_tools`` flag) — applies to ANY provider, not just ollama.
+        if provider.config.supports_tools is False:
+            kwargs["extra_body"] = {"raw": True}
+            prompt = _format_raw_prompt(kwargs["messages"])
+            kwargs["messages"] = [{"role": "user", "content": prompt}]
+            kwargs.pop("response_format", None)
 
         if tools:
             kwargs["tools"] = tools
@@ -253,7 +245,29 @@ class LLMClient:
                 capped, pt = await self._enforce_context_window(kwargs, provider)
                 log.info("context_window.enforced prompt_tokens=%s max_tokens=%s context_window=%s", pt, capped, self._get_context_window(model, provider))
             except ContextOverflowError:
-                raise
+                # Graceful handling: trim messages aggressively and retry
+                msgs = kwargs.get("messages", [])
+                log.warning("context_window.overflow_trimming msgs=%s", len(msgs))
+                if len(msgs) > 2:
+                    # Keep first (system) and last message, trim middle history
+                    kwargs["messages"] = [msgs[0]] + msgs[-1:] if len(msgs) > 3 else msgs[-2:]
+                elif len(msgs) > 1:
+                    # Keep only last message
+                    kwargs["messages"] = msgs[-1:]
+                # Re-calculate after trimming
+                try:
+                    capped, pt = await self._enforce_context_window(kwargs, provider)
+                    log.info("context_window.retry_after_trim prompt_tokens=%s", pt)
+                except ContextOverflowError:
+                    # If still too long, return a minimal error response
+                    log.error("context_window.overflow_unrecoverable")
+                    return LLMResponse(
+                        content="",
+                        model=model,
+                        provider=provider_name,
+                        latency_ms=(time.monotonic() - start) * 1000,
+                        usage=UsageInfo(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+                    )
 
         if stream:
             return self._stream_complete(kwargs, model, provider_name)
@@ -281,17 +295,42 @@ class LLMClient:
             span.set_attribute("llm.model", model)
             span.set_attribute("llm.provider", provider_name)
             span.set_attribute("llm.temperature", str(kwargs.get("temperature", "")))
+
+            # Retryable LLM calls: apply the tenacity policy on the hot path
+            # (settings-driven attempts, exponential backoff + jitter). Retries
+            # cover rate limits, connection errors, and provider 5xx; auth and
+            # bad-request failures fail fast.
+            from nexus.config.settings import get_settings as _llm_settings  # noqa: PLC0415
+            from nexus.llm.retries import llm_retry_policy  # noqa: PLC0415
+            max_attempts = max(1, _llm_settings().llm.max_retries + 1)
+
             try:
-                response = await litellm.acompletion(**kwargs)
+                async for attempt in llm_retry_policy(max_attempts=max_attempts):
+                    with attempt:
+                        try:
+                            response = await litellm.acompletion(**kwargs)
+                            break
+                        except litellm.ContextWindowExceededError:
+                            raise
+            except litellm.ContextWindowExceededError:
+                # NOT a typed failure — re-raise so `complete()` can retry once
+                # with trimmed messages (context overflow is recoverable).
+                raise
             except Exception as exc:
-                # Capture cost data even on failure — provider may include it
+                # Typed failure — NOT a silent empty success. Callers must
+                # check ``response.failed`` before treating content as valid.
                 cost_usd = getattr(exc, "cost_usd", 0.0) if hasattr(exc, "cost_usd") else 0.0
                 latency_ms = (time.monotonic() - start) * 1000
                 span.set_attribute("llm.latency_ms", latency_ms)
                 span.set_attribute("llm.error", str(exc)[:200])
                 if cost_usd > 0:
                     span.set_attribute("llm.cost_usd", cost_usd)
-                # Return an error-indicating response with whatever cost data exists
+                log.error(
+                    "llm.complete_failed model=%s error=%s attempts=%s",
+                    model,
+                    str(exc)[:300],
+                    max_attempts,
+                )
                 return LLMResponse(
                     content="",
                     model=model,
@@ -299,7 +338,9 @@ class LLMClient:
                     latency_ms=latency_ms,
                     cost_usd=cost_usd or 0.0,
                     usage=UsageInfo(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+                    error=str(exc),
                 )
+
             latency_ms = (time.monotonic() - start) * 1000
             usage = response.usage if hasattr(response, "usage") else None
             if usage:
@@ -318,7 +359,19 @@ class LLMClient:
         provider_name: str,
     ) -> AsyncIterator[LLMChunk]:
         kwargs["stream"] = True
-        stream = await litellm.acompletion(**kwargs)
+        # Retry the stream START on retryable failures (the iterator itself is
+        # yielded to the caller; errors mid-stream propagate to the consumer).
+        from nexus.config.settings import get_settings as _llm_settings  # noqa: PLC0415
+        from nexus.llm.retries import llm_retry_policy  # noqa: PLC0415
+        max_attempts = max(1, _llm_settings().llm.max_retries + 1)
+        try:
+            async for attempt in llm_retry_policy(max_attempts=max_attempts):
+                with attempt:
+                    stream = await litellm.acompletion(**kwargs)
+                    break
+        except Exception as exc:
+            log.error("llm.stream_failed model=%s error=%s", model, str(exc)[:300])
+            raise
         async for chunk in stream:
             finish_reason = None
             if chunk.choices and chunk.choices[0].finish_reason:
@@ -369,15 +422,16 @@ class LLMClient:
         response = await aembedding(**kwargs)
         embeddings = [item["embedding"] for item in response.data]
 
-        expected = settings.llm.embedding_dimensions
+        max_allowed = settings.llm.embedding_dimensions
         for i, vec in enumerate(embeddings):
             actual = len(vec)
-            if actual != expected:
+            if actual != max_allowed:
                 raise ValueError(
                     f"Embedding model '{model}' returned a {actual}-dim vector "
-                    f"but NEXUS_LLM__EMBEDDING_DIMENSIONS={expected}. "
-                    f"Either change the embedding model or update the setting "
-                    f"and run: uv run python scripts/rebuild_embedding_dim.py {actual}"
+                    f"but NEXUS_LLM__EMBEDDING_DIMENSIONS={max_allowed} "
+                    f"(must match the DB VECTOR column exactly — pgvector "
+                    f"rejects mismatched dimensions). Configure the setting to "
+                    f"the model's true output size or change the model."
                 )
 
         return embeddings

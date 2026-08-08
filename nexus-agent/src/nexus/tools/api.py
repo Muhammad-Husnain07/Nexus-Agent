@@ -7,7 +7,7 @@ import uuid
 from typing import Annotated, Any
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
@@ -15,7 +15,14 @@ from nexus.db.base import get_session
 
 from nexus.tools.registry import ToolRegistry
 from nexus.tools.result import ToolResult
-from nexus.tools.schemas import ToolCreate, ToolList, ToolRead, ToolSearchResult, ToolUpdate
+from nexus.tools.schemas import (
+    TestToolRequest,
+    ToolCreate,
+    ToolList,
+    ToolRead,
+    ToolSearchResult,
+    ToolUpdate,
+)
 
 logger = structlog.get_logger("nexus.tools.api")
 
@@ -31,6 +38,30 @@ async def get_registry() -> ToolRegistry:
 RegistryDep = Annotated[ToolRegistry, Depends(get_registry)]
 
 
+@router.get("/resolution-index", include_in_schema=False)
+async def resolution_index() -> dict[str, Any]:
+    """Debug: inspect the live retrieval/resolution indexes (aliases, domains)."""
+    from nexus.context.global_context import get_global_context
+
+    gc = get_global_context()
+    return {
+        "capabilities": len(gc.capability_index),
+        "aliases": list(gc.alias_index.items())[:20],
+        "domains": {k: len(v) for k, v in list(gc.domain_index.items())[:20]},
+        "keywords": len(gc.capability_keywords),
+    }
+
+
+@router.get("/retrieve", include_in_schema=False)
+async def retrieve_probe(q: str = "Tell me about Pikachu") -> dict[str, Any]:
+    """Debug: run the ResolutionEngine and return the full typed result —
+    ranked candidates, confidence, match sources, availability, explanation."""
+    from nexus.capabilities.resolution_engine import get_resolution_engine
+
+    result = await get_resolution_engine().resolve(q)
+    return result.model_dump(mode="json")
+
+
 @router.post(
     "",
     response_model=ToolRead,
@@ -43,7 +74,24 @@ async def register_tool(
 ) -> ToolRead:
     tool_data = await request.json()
     tool = ToolCreate(**tool_data)
-    return await registry.register(session, tool)
+    # Friendly 409 instead of a raw IntegrityError 500 on duplicate names.
+    from sqlalchemy import select as _sa_select
+
+    from nexus.db.models.tool import Tool as _Tool
+
+    dup = await session.execute(
+        _sa_select(_Tool.id).where(_Tool.name == tool.name).limit(1)
+    )
+    if dup.scalars().first() is not None:
+        raise HTTPException(status_code=409, detail=f"Tool name already exists: {tool.name}")
+    result = await registry.register(session, tool)
+    await session.commit()
+    # Refresh resolution indexes AFTER commit so the new tool's aliases/
+    # domain are immediately visible to retrieval + resolution.
+    from nexus.tools.registry import _refresh_resolution_indexes
+
+    await _refresh_resolution_indexes()
+    return result
 
 
 @router.get("", response_model=ToolList)
@@ -102,6 +150,10 @@ async def update_tool(
     tool = await registry.update(session, tool_id, data)
     if tool is None:
         raise HTTPException(status_code=404, detail="Tool not found")
+    await session.commit()
+    from nexus.tools.registry import _refresh_resolution_indexes
+
+    await _refresh_resolution_indexes()
     return tool
 
 
@@ -117,6 +169,10 @@ async def delete_tool(
     deleted = await registry.deregister(session, tool_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Tool not found")
+    await session.commit()
+    from nexus.tools.registry import _refresh_resolution_indexes
+
+    await _refresh_resolution_indexes()
 
 
 @router.post("/{tool_id}/test", response_model=ToolResult)
@@ -124,14 +180,22 @@ async def test_tool(  # noqa: PLR0913
     tool_id: uuid.UUID,
     registry: RegistryDep,
     session: SessionDep,
-    sample_input: dict[str, Any] | None = None,  # noqa: PT028
+    test_body: TestToolRequest | None = Body(default=None),
     dry_run: bool = Query(True, description="If True, validate schema only without HTTP call"),  # noqa: PT028
 ) -> ToolResult:
+    """Test a tool — live HTTP call (dry_run=False) or schema-only check.
+
+    Accepts sample inputs as a JSON body ``{"input": {...}}`` (the frontend
+    contract). ``dry_run=true`` validates the schema only.
+    """
     tool = await registry.get(session, tool_id)
     if tool is None:
         raise HTTPException(status_code=404, detail="Tool not found")
 
-    payload = sample_input or {}
+    payload: dict[str, Any] = {}
+    if test_body is not None and test_body.input is not None:
+        payload = dict(test_body.input)
+
     if tool.input_schema:
         required = tool.input_schema.get("required", [])
         for field in required:

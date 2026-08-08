@@ -1,0 +1,1018 @@
+"""PlanValidatorNode — deterministic safety layer between planner and compiler.
+
+Checks the LogicalWorkflow BEFORE compilation (runtime contract §6): undefined
+ops, cycles, missing inputs, budget, and policy/permission violations. Zero
+LLM calls; every violation is recorded in a typed ``PlanValidatorReport`` with
+severity + suggested action. The graph routes on the report: valid →
+Compiler, structural → RequirementCollector, refinable → PlanCritic.
+"""
+
+from __future__ import annotations
+
+from enum import Enum
+from typing import Any
+
+import structlog
+from pydantic import BaseModel, ConfigDict, Field
+
+from nexus.context import global_context as _gc_mod
+
+logger = structlog.get_logger("nexus.agent.nodes.plan_validator")
+
+
+class ViolationSeverity(str, Enum):
+    """Severity ladder — CRITICAL and ERROR block compilation."""
+
+    CRITICAL = "critical"      # cannot compile (cycle, undefined op)
+    ERROR = "error"            # must not execute (missing input, budget)
+    WARNING = "warning"        # policy note (approval required, high risk)
+
+
+class ViolationAction(str, Enum):
+    """What the graph should do about the violation."""
+
+    DROP_OP = "drop_op"                        # remove the offending node
+    REQUIRE_MORE_INFO = "require_more_info"    # route to RequirementCollector
+    REFINE = "refine"                          # route to PlanCritic (LLM refine)
+    APPROVAL = "approval"                      # gate will handle (not blocking)
+    PROCEED = "proceed"                        # informational only
+
+
+class Violation(BaseModel):
+    """One validated finding."""
+
+    model_config = ConfigDict(frozen=True)
+
+    code: str = Field(description="Stable violation code (machine-readable)")
+    severity: ViolationSeverity = Field(description="Severity ladder position")
+    action: ViolationAction = Field(description="Suggested graph action")
+    node: str = Field(default="", description="Offending logical op / step ref")
+    message: str = Field(description="Human-readable explanation")
+
+
+class PlanValidatorReport(BaseModel):
+    """Typed validator output consumed by the routing function."""
+
+    model_config = ConfigDict(frozen=True)
+
+    valid: bool = Field(description="True when the plan may compile")
+    violations: tuple[Violation, ...] = Field(default_factory=tuple)
+    errors: list[str] = Field(
+        default_factory=list, description="Human-readable messages (no-guess contract)"
+    )
+    metrics: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Planner-quality metrics: intent_coverage, dropped_intents, "
+        "extraneous_operation_rate, empty_plan (P4 telemetry)",
+    )
+
+    @property
+    def action(self) -> ViolationAction:
+        """Dominant action: worst severity wins."""
+        for v in self.violations:
+            if v.severity == ViolationSeverity.CRITICAL:
+                return v.action
+        for v in self.violations:
+            if v.severity == ViolationSeverity.ERROR:
+                return v.action
+        for v in self.violations:
+            if v.action != ViolationAction.PROCEED:
+                return v.action
+        return ViolationAction.PROCEED
+
+
+class PlanValidatorNode:
+    """Deterministic plan validation (stateless; injected readers)."""
+
+    def __init__(self, budget_cap_usd: float | None = None) -> None:
+        self.budget_cap_usd = budget_cap_usd
+
+    async def __call__(self, state: dict[str, Any]) -> dict[str, Any]:
+        workflow = state.get("_logical_workflow") or {}
+        nodes = workflow.get("nodes") or []
+        prior_chain = _prior_executed_chain(state)
+        user_query = _current_user_query(state)
+        report = self.validate(nodes, prior_chain=prior_chain, user_query=user_query)
+        rounds = int(state.get("_plan_validator_rounds", 0) or 0)
+
+        if report.valid:
+            logger.info("plan_validator.passed", nodes=len(nodes))
+            return {
+                "_plan_validator_report": report.model_dump(mode="json"),
+                "_plan_validator_action": "proceed",
+                "_plan_validator_errors": [],
+                "_plan_validator_rounds": rounds,
+            }
+
+        logger.warning(
+            "plan_validator.rejected",
+            violations=[v.code for v in report.violations],
+            action=report.action.value,
+        )
+
+        if report.action == ViolationAction.REQUIRE_MORE_INFO:
+            return {
+                "_plan_validator_report": report.model_dump(mode="json"),
+                "_plan_validator_action": "require_more_info",
+                "_plan_validator_errors": report.errors,
+                "_plan_validator_rounds": rounds,
+            }
+
+        # Refinable defects (cycle / budget / undefined): bounded replan loop.
+        # The loop consumes the INVOCATION ReasoningBudget's shared replan
+        # counter (unified with compile retries + recovery replans — the
+        # same failure can never trigger an identical replan indefinitely).
+        try:
+            from nexus.config.settings import get_settings
+
+            max_rounds = get_settings().compiler.max_plan_validator_rounds
+        except Exception:
+            max_rounds = 2
+        _budget = None
+        _budget_ok = True
+        try:
+            from nexus.agent.budget import budget_from_state
+
+            _budget = budget_from_state(state)
+            _budget_ok = _budget.consume("replans")
+        except Exception:
+            _budget_ok = True
+        if rounds >= max_rounds or not _budget_ok:
+            logger.error("plan_validator.abort", errors=report.errors)
+            # P4 policy: after bounded repair —
+            #   empty_plan (executable query, nothing to run) → clarify
+            #     (the correctness case: never answer from training).
+            #   intent_coverage/extraneous (a partial plan exists) →
+            #     PROCEED with the best-effort plan (principle 23: return
+            #     partial results; the coverage signal rides the outcome).
+            if any(v.code == "empty_plan" for v in report.violations):
+                return {
+                    "_plan_validator_report": report.model_dump(mode="json"),
+                    "_plan_validator_action": "require_more_info",
+                    "_plan_validator_errors": report.errors,
+                    "_plan_validator_rounds": rounds,
+                    "errors": report.errors,
+                }
+            if any(v.code == "missing_input" for v in report.violations):
+                # After bounded repair the inputs are still absent — the
+                # user must provide them (genuine clarification).
+                return {
+                    "_plan_validator_report": report.model_dump(mode="json"),
+                    "_plan_validator_action": "require_more_info",
+                    "_plan_validator_errors": report.errors,
+                    "_plan_validator_rounds": rounds,
+                    "errors": report.errors,
+                }
+            if any(
+                v.code in ("intent_coverage", "extraneous_operation")
+                for v in report.violations
+            ):
+                logger.warning(
+                    "plan_validator.partial_execution",
+                    errors=report.errors,
+                )
+                return {
+                    "_plan_validator_report": report.model_dump(mode="json"),
+                    "_plan_validator_action": "proceed",
+                    "_plan_validator_errors": report.errors,
+                    "_plan_validator_rounds": rounds,
+                }
+            return {
+                "_plan_validator_report": report.model_dump(mode="json"),
+                "_plan_validator_action": "abort",
+                "_plan_validator_errors": report.errors,
+                "_logical_workflow": None,
+                "errors": report.errors,
+            }
+        return {
+            "_plan_validator_report": report.model_dump(mode="json"),
+            "_plan_validator_action": "refine",
+            "_plan_validator_errors": report.errors,
+            "_plan_validator_rounds": rounds + 1,
+            "_invocation_budget": _budget.to_dict() if _budget is not None else {},
+        }
+
+    # ------------------------------------------------------------------
+    # Pure validation core (side-effect free; testable with fakes)
+    # ------------------------------------------------------------------
+
+    def validate(
+        self,
+        nodes: list[dict[str, Any]],
+        prior_chain: list[str] | None = None,
+        user_query: str | None = None,
+    ) -> PlanValidatorReport:
+        violations: list[Violation] = []
+        errors: list[str] = []
+        metrics: dict[str, Any] = {}
+
+        # INTENT DECOMPOSITION (P4, Tier-1 deterministic): detect the
+        # current request's intent units BEFORE any structural check — the
+        # empty-plan and coverage/traceability rules need them.
+        detected = _detect_intents(user_query) if user_query else None
+        if detected is not None and detected.units:
+            metrics["detected_intents"] = len(detected.units)
+            metrics["intent_confidence"] = round(detected.confidence, 2)
+
+        if not nodes:
+            if detected is not None and _has_executable_units(detected):
+                # P4-2 EMPTY-PLAN POLICY: an executable request with an
+                # empty plan must NOT fall through to the conversational
+                # LLM (training-knowledge answers are unverified). Repair
+                # (REFINE) with the units listed; the cap routes to
+                # clarification.
+                violations.append(Violation(
+                    code="empty_plan",
+                    severity=ViolationSeverity.ERROR,
+                    action=ViolationAction.REFINE,
+                    node="plan",
+                    message=(
+                        "detected executable intent units but the plan is "
+                        f"empty: {_units_text(detected)}"
+                    ),
+                ))
+                errors.append(
+                    f"empty plan for executable request: {_units_text(detected)}"
+                )
+                metrics["empty_plan"] = True
+                return PlanValidatorReport(
+                    valid=False, violations=tuple(violations),
+                    errors=errors, metrics=metrics,
+                )
+            return PlanValidatorReport(valid=True, violations=(), errors=[], metrics=metrics)
+
+        valid_ops = _valid_op_names()
+
+        # 1. Undefined ops (against the resolved catalog).
+        for node in nodes:
+            op = str(node.get("op") or "")
+            if op and valid_ops and op not in valid_ops:
+                violations.append(Violation(
+                    code="undefined_op",
+                    severity=ViolationSeverity.CRITICAL,
+                    action=ViolationAction.DROP_OP,
+                    node=op,
+                    message=f"op '{op}' is not a resolved capability",
+                ))
+                errors.append(f"undefined capability: {op}")
+
+        # 2. Cycles over depends_on refs (DFS before compile).
+        cycle = _find_cycle(nodes)
+        if cycle:
+            path = " -> ".join(cycle)
+            violations.append(Violation(
+                code="cycle",
+                severity=ViolationSeverity.CRITICAL,
+                action=ViolationAction.REFINE,
+                node=path,
+                message=f"dependency cycle: {path}",
+            ))
+            errors.append("dependency cycle detected")
+
+        # 3. Missing required inputs (schema-driven; GC meta carries the
+        # required-property list built from the tool's input_schema).
+        # Empty/whitespace values are NOT provided — they would fail at
+        # execution with a type error, so the plan is invalid as-is.
+        for node in nodes:
+            op = str(node.get("op") or "")
+            node_inputs = node.get("inputs") or {}
+            if isinstance(node_inputs, dict):
+                provided = {
+                    k for k, v in node_inputs.items()
+                    if not (isinstance(v, str) and not v.strip())
+                }
+            else:
+                provided = set(node_inputs)
+            missing = _missing_inputs(op, provided)
+            if missing:
+                # P4: REFINE (bounded replan) instead of an immediate
+                # clarification — a fully-specified query (entities present
+                # in the request) deserves the repair chance first; the
+                # rounds cap routes to clarification for genuinely-missing
+                # information.
+                violations.append(Violation(
+                    code="missing_input",
+                    severity=ViolationSeverity.ERROR,
+                    action=ViolationAction.REFINE,
+                    node=op,
+                    message=f"{op} missing inputs: {', '.join(sorted(missing))}",
+                ))
+                errors.append(f"{op} missing inputs: {', '.join(sorted(missing))}")
+
+        # 3b. Schema type violations: an input VALUE the tool's declared JSON
+        # Schema type cannot ever accept (e.g. ``"temperature"`` for a
+        # ``boolean`` param) would fail at execution with a validation error.
+        # The deterministic validator drops the node pre-compile (explicit
+        # failure — never a runtime surprise). Coercible values (numeric
+        # strings for numbers, boolean-ish strings for booleans) and
+        # unresolved placeholders (``${...}``) are NOT violations — the
+        # executor handles those.
+        for node in nodes:
+            op = str(node.get("op") or "")
+            bad = _schema_type_violations(op, node.get("inputs") or {})
+            if bad:
+                detail = "; ".join(
+                    f"{k}={v!r} (declared {declared})" for k, v, declared in bad
+                )
+                violations.append(Violation(
+                    code="wrong_type",
+                    severity=ViolationSeverity.ERROR,
+                    action=ViolationAction.DROP_OP,
+                    node=op,
+                    message=f"{op} input type violations: {detail}",
+                ))
+                errors.append(f"{op} input type violations: {detail}")
+
+        # 3b2. PARAMETER PROVENANCE (P0): a planned input VALUE must be
+        # traceable to the user request or a producer chain — never an LLM
+        # guess. "Correct operation + wrong parameter" (e.g. hardcoded Tokyo
+        # coordinates for an Islamabad weather query) passes every structural
+        # check yet answers the wrong thing. Provenance is metadata-free:
+        #   - ``${...}`` placeholder        → artifact_reference (chained) ✓
+        #   - value appears in the request  → user_literal ✓
+        #   - otherwise                     → llm_literal (guessed) ✗
+        # Guessed values on REQUIRED inputs trigger a bounded repair so the
+        # planner chains the producer instead.
+        if user_query:
+            for node in nodes:
+                op = str(node.get("op") or "")
+                node_inputs = node.get("inputs") or {}
+                if not isinstance(node_inputs, dict):
+                    continue
+                required = set(_capability_meta(op).get("input_required") or [])
+                for key, value in node_inputs.items():
+                    if key not in required:
+                        continue
+                    if isinstance(value, str) and (
+                        not value.strip() or value.startswith("${")
+                        or _is_chain_expression(value)
+                    ):
+                        continue
+                    if not isinstance(value, (str, int, float)):
+                        continue
+                    if _value_in_message(value, user_query):
+                        continue
+                    violations.append(Violation(
+                        code="parameter_provenance",
+                        severity=ViolationSeverity.ERROR,
+                        action=ViolationAction.REFINE,
+                        node=op,
+                        message=(
+                            f"{op} input '{key}'={value!r} is not traceable to "
+                            f"the user request or a producer chain — chain the "
+                            f"producer or use the user's own value"
+                        ),
+                    ))
+                    errors.append(
+                        f"{op} parameter '{key}' lacks provenance (guessed value)"
+                    )
+                    break
+
+        # 3c. Continuation completeness (Phase 3): when the user is continuing
+        # the PREVIOUS turn's chain ("And in Osaka?" after a weather query)
+        # and the plan includes a prior-chain PRODUCER without its CONSUMER,
+        # the plan is incomplete — the producer's output feeds the consumer
+        # (metadata-driven via produces/consumes). Refine (replan) with the
+        # feedback so the consumer step is included.
+        if prior_chain:
+            planned_ops = {str(n.get("op") or "") for n in nodes if isinstance(n, dict)}
+            for node in nodes:
+                if not isinstance(node, dict):
+                    continue
+                op = str(node.get("op") or "")
+                if op not in prior_chain or op in planned_ops - {op}:
+                    continue
+                idx = prior_chain.index(op)
+                produced = set(_capability_meta(op).get("produces") or [])
+                for later in prior_chain[idx + 1:]:
+                    later_meta = _capability_meta(later)
+                    if produced & set(later_meta.get("consumes") or []):
+                        if later not in planned_ops:
+                            violations.append(Violation(
+                                code="missing_consumer",
+                                severity=ViolationSeverity.ERROR,
+                                action=ViolationAction.REFINE,
+                                node=op,
+                                message=(
+                                    f"{op} produces data consumed by {later} "
+                                    f"(previous chain) — include the consumer step"
+                                ),
+                            ))
+                            errors.append(f"{op} missing consumer {later}")
+                        break
+
+        # 3d. Producer completeness (Step 7): a planned node with a REQUIRED
+        # input carrying a LITERAL value, where a REGISTERED capability
+        # produces that artifact AND the producer's own required inputs are
+        # satisfiable from the plan (a literal anywhere in the plan or an
+        # output of a planned op) — i.e. the producer chain is actually
+        # constructible ("consumes a value the query supplies") — while the
+        # producer itself is absent from the plan → the literal was
+        # guessed/derivable. REFINE so the planner justifies or chains —
+        # metadata-driven via produces/consumes/input_required. Literal
+        # inputs stay legitimate when no producer exists or the chain is not
+        # constructible from the plan.
+        planned_ops = {str(n.get("op") or "") for n in nodes if isinstance(n, dict)}
+        planned_keys: set[str] = set()
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            node_inputs = node.get("inputs") or {}
+            if isinstance(node_inputs, dict):
+                planned_keys.update(node_inputs.keys())
+        planned_outputs: set[str] = set()
+        for op in planned_ops:
+            planned_outputs.update(_capability_meta(op).get("produces") or [])
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            op = str(node.get("op") or "")
+            if op not in valid_ops:
+                continue
+            node_inputs = node.get("inputs") or {}
+            if not isinstance(node_inputs, dict):
+                continue
+            required = set(_capability_meta(op).get("input_required") or [])
+            if not required:
+                continue
+            for key, value in node_inputs.items():
+                if key not in required:
+                    continue
+                if isinstance(value, str) and (
+                    not value.strip() or value.startswith("${")
+                ):
+                    continue
+                if not isinstance(value, (str, int, float, bool)):
+                    continue
+                producers = _producer_ops(key) - {op} - planned_ops
+                constructible = {
+                    p for p in producers
+                    if _chain_constructible(p, planned_keys, planned_outputs)
+                }
+                if constructible:
+                    producer_names = ", ".join(sorted(constructible))
+                    violations.append(Violation(
+                        code="missing_producer",
+                        severity=ViolationSeverity.ERROR,
+                        action=ViolationAction.REFINE,
+                        node=op,
+                        message=(
+                            f"{op} input '{key}' has a literal value but is "
+                            f"producible by: {producer_names} — chain the "
+                            f"producer or justify the literal"
+                        ),
+                    ))
+                    errors.append(f"{op} missing producer for {key}")
+                    break
+
+        # 3e. INTENT COVERAGE + TRACEABILITY (P4-1): the semantic
+        # completeness pair. COVERAGE asks "was every intent served?";
+        # TRACEABILITY asks "did every planned op come from an intent?" —
+        # together they eliminate omission (T1/T2/T8) and invention (T5).
+        # Metadata-driven: unit→capability via the registry keyword index.
+        if detected is not None and detected.units:
+            planned_ops = {str(n.get("op") or "") for n in nodes if isinstance(n, dict)}
+            executable = [
+                u for u in detected.units
+                if not u.negated and _unit_candidates(u)
+            ]
+            # UNCLASSIFIABLE units (no keyword/alias/name signal — e.g. a
+            # unit carrying only an entity like a city name) are excluded
+            # from coverage: the check catches DROPPED known intents, not
+            # entities the keyword bridge cannot see.
+            unclassifiable = [
+                u.text for u in detected.units
+                if not u.negated and not _unit_candidates(u)
+            ]
+            negated = [u for u in detected.units if u.negated]
+            forbidden_ops = set()
+            for u in negated:
+                forbidden_ops |= _unit_candidates(u)
+            served: list[str] = []
+            dropped: list[str] = []
+            for u in executable:
+                candidates = _unit_candidates(u)
+                matches = planned_ops & candidates
+                instance_need = max(1, u.instance_hint)
+                if len(matches) >= instance_need and not (matches & forbidden_ops):
+                    served.append(u.text)
+                else:
+                    dropped.append(u.text)
+            metrics["detected_executable"] = len(executable)
+            metrics["unclassifiable_units"] = len(unclassifiable)
+            metrics["served_intents"] = len(served)
+            metrics["dropped_intents"] = len(dropped)
+            metrics["intent_coverage"] = (
+                round(len(served) / len(executable), 3) if executable else 1.0
+            )
+            # CAPABILITY ALIGNMENT (P0): a served unit may still be served
+            # by the WRONG capability when several candidates matched its
+            # keywords. Alignment = did the plan pick the unit's BEST
+            # candidate? Ranked by the keyword/name/alias match strength.
+            misaligned: list[str] = []
+            alignments: list[float] = []
+            for u in executable:
+                candidates = _unit_candidates(u)
+                matches = planned_ops & candidates
+                if not matches:
+                    continue
+                best = max(candidates, key=lambda c: _op_match_strength(u, c))
+                chosen = max(matches, key=lambda c: _op_match_strength(u, c))
+                if chosen != best:
+                    misaligned.append(f"{u.text[:40]} -> {chosen} (best: {best})")
+                    alignments.append(0.0)
+                else:
+                    alignments.append(1.0)
+            metrics["capability_alignment"] = (
+                round(sum(alignments) / len(alignments), 3) if alignments else 1.0
+            )
+            if misaligned:
+                violations.append(Violation(
+                    code="capability_alignment",
+                    severity=ViolationSeverity.WARNING,
+                    action=ViolationAction.REFINE,
+                    node="plan",
+                    message=(
+                        "planned capability is not the best match for the "
+                        f"intent unit: {'; '.join(misaligned[:4])}"
+                    ),
+                ))
+                errors.append(
+                    f"capability alignment {metrics['capability_alignment']:.0%}"
+                )
+            # Coverage violations: every executable unit must be served.
+            if dropped:
+                violations.append(Violation(
+                    code="intent_coverage",
+                    severity=ViolationSeverity.ERROR,
+                    action=ViolationAction.REFINE,
+                    node="plan",
+                    message=(
+                        "detected intent units not served by any planned "
+                        f"capability: {', '.join(dropped[:5])}"
+                    ),
+                ))
+                errors.append(
+                    f"intent coverage {metrics['intent_coverage']:.0%} "
+                    f"({len(dropped)} dropped): {', '.join(dropped[:5])}"
+                )
+            # Traceability violations: every planned op must trace to a
+            # non-negated unit's candidates OR be a producer feeding a
+            # consumed artifact of another planned op (the chained
+            # producer exemption). Ops matching a NEGATED unit's
+            # candidates are forbidden outright.
+            # NO-SIGNAL RULE: the negative requires at least one
+            # CLASSIFIABLE unit — when the semantic bridge yields no
+            # candidates at all (a weak keyword map for the query's
+            # vocabulary), traceability has no signal and must not flag
+            # every op as invented (false positives).
+            extraneous: list[str] = []
+            if executable or forbidden_ops:
+                planned_consumes = set()
+                for n in nodes:
+                    if isinstance(n, dict):
+                        planned_consumes |= set(
+                            _capability_meta(str(n.get("op") or "")).get("consumes") or []
+                        )
+                for op in sorted(planned_ops):
+                    if op in forbidden_ops:
+                        extraneous.append(op)
+                        continue
+                    if any(op in _unit_candidates(u) for u in executable):
+                        continue
+                    produced = set(_capability_meta(op).get("produces") or [])
+                    if produced & planned_consumes:
+                        continue  # chained producer feeds a planned consumer
+                    extraneous.append(op)
+            metrics["extraneous_operations"] = extraneous
+            metrics["extraneous_operation_rate"] = (
+                round(len(extraneous) / len(planned_ops), 3) if planned_ops else 0.0
+            )
+            if extraneous:
+                # TRACEABILITY PRECISION (P0): ops forbidden by NEGATION are
+                # hard errors (never execute what the user excluded). The
+                # non-forbidden class is a WARNING — its precision is
+                # bounded by the keyword-map quality (a weak bridge can
+                # mis-flag a legitimately planned op); the bounded repair
+                # runs, then the plan proceeds with the signal recorded.
+                if forbidden_ops:
+                    violations.append(Violation(
+                        code="extraneous_operation",
+                        severity=ViolationSeverity.ERROR,
+                        action=ViolationAction.DROP_OP,
+                        node="plan",
+                        message=(
+                            "operations forbidden by user negation: "
+                            f"{', '.join(sorted(forbidden_ops & set(extraneous))[:5])}"
+                        ),
+                    ))
+                violations.append(Violation(
+                    code="extraneous_operation",
+                    severity=ViolationSeverity.WARNING,
+                    action=ViolationAction.REFINE,
+                    node="plan",
+                    message=(
+                        "planned operations trace to no detected intent unit: "
+                        f"{', '.join(extraneous[:5])}"
+                    ),
+                ))
+                errors.append(
+                    f"extraneous operations: {', '.join(extraneous[:5])}"
+                )
+
+        # 4. Budget estimate (metadata-driven cost from provider metadata).
+        if self.budget_cap_usd is not None:
+            cost = _estimate_cost(nodes)
+            if cost > self.budget_cap_usd:
+                violations.append(Violation(
+                    code="budget",
+                    severity=ViolationSeverity.ERROR,
+                    action=ViolationAction.REFINE,
+                    node="plan",
+                    message=f"estimated cost ${cost:.4f} exceeds cap ${self.budget_cap_usd:.4f}",
+                ))
+                errors.append("budget exceeded")
+
+        # 5. Policy/permission pre-check (approval/risk — informational here;
+        # the ApprovalGateNode remains the enforcement point).
+        for node in nodes:
+            op = str(node.get("op") or "")
+            if _requires_approval(op):
+                violations.append(Violation(
+                    code="approval_required",
+                    severity=ViolationSeverity.WARNING,
+                    action=ViolationAction.APPROVAL,
+                    node=op,
+                    message=f"{op} requires approval (risk/approval metadata)",
+                ))
+
+        valid = not any(
+            v.severity in (ViolationSeverity.CRITICAL, ViolationSeverity.ERROR)
+            for v in violations
+        )
+        return PlanValidatorReport(
+            valid=valid,
+            violations=tuple(violations),
+            errors=errors,
+            metrics=metrics,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Pure module-level helpers (side-effect free; GC reads only)
+# ---------------------------------------------------------------------------
+
+
+def _valid_op_names() -> set[str]:
+    """Resolved capability names from GlobalContext (metadata-driven)."""
+    try:
+        return set((getattr(_gc_mod.get_global_context(), "capability_index", {}) or {}).keys())
+    except Exception:
+        return set()
+
+
+def _capability_meta(op: str) -> dict[str, Any]:
+    try:
+        return (getattr(_gc_mod.get_global_context(), "capability_index", {}) or {}).get(op, {})
+    except Exception:
+        return {}
+
+
+def _producer_ops(artifact: str) -> set[str]:
+    """Registered capabilities whose ``produces`` list contains the artifact.
+
+    Metadata-driven (GlobalContext capability_index produces/consumes) —
+    the set of ops that can DERIVE a given input value.
+    """
+    producers: set[str] = set()
+    try:
+        index = getattr(_gc_mod.get_global_context(), "capability_index", {}) or {}
+    except Exception:
+        return producers
+    for name, meta in index.items():
+        if not isinstance(meta, dict):
+            continue
+        produces = meta.get("produces") or []
+        if isinstance(produces, list) and artifact in produces:
+            producers.add(str(name))
+    return producers
+
+
+def _chain_constructible(
+    producer: str,
+    planned_keys: set[str],
+    planned_outputs: set[str],
+) -> bool:
+    """A producer chain is constructible when the producer's own required
+    inputs are satisfiable from the plan — an input KEY present anywhere in
+    the plan, or an artifact produced by another planned op. Purely
+    structural/metadata-driven: no extraction, no guessing.
+    """
+    required = set(_capability_meta(producer).get("input_required") or [])
+    if not required:
+        return False
+    return required <= planned_keys or required <= planned_outputs
+
+
+def _detect_intents(user_query: str):
+    """Deterministic Tier-1 intent decomposition (P4) — None on failure."""
+    try:
+        from nexus.agent.planners.intent_detector import IntentDetector
+
+        return IntentDetector().detect(user_query)
+    except Exception:
+        return None
+
+
+def _has_executable_units(detected) -> bool:
+    return any(not u.negated and _unit_candidates(u) for u in detected.units)
+
+
+def _units_text(detected) -> str:
+    return "; ".join(u.text[:60] for u in detected.units[:5])
+
+
+def _unit_candidates(unit) -> frozenset[str]:
+    """Metadata-driven unit→capability bridge (registry keyword index)."""
+    try:
+        from nexus.agent.planners.intent_detector import unit_candidates
+
+        return unit_candidates(unit, _gc_mod.get_global_context())
+    except Exception:
+        return frozenset()
+
+
+def _op_match_strength(unit, op: str) -> int:
+    """Keyword/name/alias match strength between an intent unit and a
+    capability — used for the capability-alignment ranking. Metadata-only
+    (registry keyword map + capability-name tokens); no hardcoded logic."""
+    import re as _re
+
+    try:
+        gc = _gc_mod.get_global_context()
+        tokens = set(_re.findall(r"[a-zA-Z]+", unit.text.lower()))
+        strength = 0
+        keyword_map = getattr(gc, "capability_keywords", None) or {}
+        for kw, caps in keyword_map.items():
+            if kw in tokens and op in caps:
+                strength += 1
+        alias_index = getattr(gc, "alias_index", None) or {}
+        for token in tokens:
+            if op in (alias_index.get(token) or []):
+                strength += 1
+        name_tokens = set(_re.findall(r"[a-zA-Z]+", op.lower()))
+        strength += len(name_tokens & tokens)
+        return strength
+    except Exception:
+        return 0
+
+
+def _is_chain_expression(value: str) -> bool:
+    """True for the declarative producer-chain expression forms the planner
+    may emit instead of ``${ref.result.field}`` placeholders — the
+    ``RESOLVE("capability", "input_key", "value")`` form (declares a
+    producer capability, its input key, and the value) and the ``{{ref}}``
+    double-brace reference variant. They are chain requests, never guessed
+    literals (exempt from provenance and type checks; the compiler/executor
+    translate or reject them explicitly)."""
+    s = value.strip()
+    if s.startswith("RESOLVE(") and s.endswith(")"):
+        return True
+    return s.startswith("{{") and s.endswith("}}")
+
+
+def _current_user_query(state: dict[str, Any]) -> str | None:
+    """The LAST user message (the current request — never the history)."""
+    messages = state.get("messages") or []
+    for msg in reversed(messages):
+        if isinstance(msg, dict) and msg.get("role") == "user":
+            content = msg.get("content")
+            if isinstance(content, str) and content.strip():
+                return content
+    return None
+
+
+def _value_in_message(value: Any, message: str) -> bool:
+    """True when the value is plausibly derived from the user's request.
+
+    Canonical matching: the value's string form AND its normalized numeric
+    forms (trailing-zero-trimmed) are searched case-insensitively, so
+    ``34`` matches "34 degrees" and ``34.0`` matches "34.5" only when the
+    digits actually appear. Pure structural comparison — no word lists.
+    """
+    if not message:
+        return False
+    haystack = message.lower()
+    candidates: list[str] = [str(value).lower().strip()]
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if isinstance(value, float) and value.is_integer():
+            candidates.append(str(int(value)))
+        candidates.append(f"{value:g}")
+    return any(c and c in haystack for c in candidates)
+
+
+def _prior_executed_chain(state: dict[str, Any]) -> list[str] | None:
+    """The PREVIOUS turn's executed tool chain, in execution order.
+
+    Reads the state's execution graph (waves → task ids → tool names).
+    Returns None when there is no prior execution (a fresh query has no
+    continuation context). Metadata-driven — no hardcoded names.
+    """
+    graph = state.get("_execution_graph") or {}
+    if not isinstance(graph, dict):
+        return None
+    nodes = graph.get("nodes")
+    waves = graph.get("waves")
+    if not isinstance(nodes, dict) or not nodes:
+        return None
+    tool_by_id: dict[str, str] = {}
+    for nid, ndata in nodes.items():
+        if not isinstance(ndata, dict):
+            continue
+        name = ndata.get("tool_name") or ndata.get("capability") or ""
+        if name:
+            tool_by_id[str(nid)] = str(name)
+    ordered: list[str] = []
+    if isinstance(waves, list):
+        for wave in waves:
+            if not isinstance(wave, dict):
+                continue
+            for tid in (wave.get("tasks") or []):
+                if str(tid) in tool_by_id:
+                    ordered.append(tool_by_id[str(tid)])
+    if not ordered:
+        ordered = list(tool_by_id.values())
+    return ordered or None
+
+
+def _find_cycle(nodes: list[dict[str, Any]]) -> list[str]:
+    """DFS cycle detection over depends_on refs; returns cycle path or [].
+
+    Mirrors the compiler's static dataflow: adjacency includes BOTH the
+    explicit ``depends_on`` refs AND the implicit edges the compiler wires
+    from ``${ref.result...}`` input placeholders — a plan the validator
+    clears but the compiler rejects is a plan the validator should have
+    caught (the follow-up class: mutual placeholder refs between nodes).
+    """
+    import re as _re
+
+    names = [
+        str(n.get("ref") or n.get("op") or "")
+        for n in nodes
+    ]
+    index: dict[str, int] = {}
+    for i, node in enumerate(nodes):
+        index[str(node.get("ref") or node.get("op") or "")] = i
+        if node.get("ref") and node.get("op"):
+            index[str(node.get("op"))] = i  # legacy op-named deps still resolve
+    adj: dict[str, list[str]] = {n: [] for n in names}
+    placeholder_re = _re.compile(r"\$\{([a-zA-Z0-9_]+)\.result")
+    for node in nodes:
+        src = str(node.get("ref") or node.get("op") or "")
+        deps: set[str] = set()
+        for dep_raw in (node.get("depends_on") or []):
+            dep_name = str(dep_raw)
+            if dep_name in index:
+                deps.add(names[index[dep_name]])
+        node_inputs = node.get("inputs") or {}
+
+        def _scan(value: Any) -> None:
+            if isinstance(value, dict):
+                for v in value.values():
+                    _scan(v)
+            elif isinstance(value, (list, tuple)):
+                for v in value:
+                    _scan(v)
+            elif isinstance(value, str):
+                for match in placeholder_re.finditer(value):
+                    ref = match.group(1)
+                    if ref in index:
+                        deps.add(names[index[ref]])
+
+        _scan(node_inputs)
+        adj[src].extend(d for d in sorted(deps) if d in adj)
+
+    state: dict[str, int] = {}  # 0=visiting 1=done
+    path: list[str] = []
+
+    def dfs(n: str) -> list[str]:
+        state[n] = 0
+        path.append(n)
+        for m in adj.get(n, []):
+            if m not in state:
+                cycle = dfs(m)
+                if cycle:
+                    return cycle
+            elif state[m] == 0:
+                start = path.index(m)
+                return path[start:] + [m]
+        path.pop()
+        state[n] = 1
+        return []
+
+    for n in names:
+        if n not in state:
+            cycle = dfs(n)
+            if cycle:
+                return cycle
+    return []
+
+
+def _missing_inputs(op: str, provided: set[str]) -> set[str]:
+    """Required schema inputs (GC meta, from the tool's input_schema) the
+    plan does not provide. Alias-aware: a provided key that is an x-alias of
+    a required property counts as satisfied (the executor remaps it at call
+    time). Empty/whitespace values count as NOT provided (a plan that emits
+    ``latitude: ""`` has no usable input — it would fail at execution with
+    a type error). No schema → nothing reported (never guesses)."""
+    if not op:
+        return set()
+    meta = _capability_meta(op)
+    required = set(meta.get("input_required") or [])
+    if not required:
+        return set()
+    provided_aliases: set[str] = set()
+    alias_map = meta.get("input_aliases") or {}
+    for key in provided:
+        for prop_name, aliases in alias_map.items():
+            if key in aliases:
+                provided_aliases.add(prop_name)
+    satisfied = provided | provided_aliases
+    return required - satisfied
+
+
+def _schema_type_violations(op: str, inputs: dict) -> list[tuple[str, Any, str]]:
+    """Input values that can never satisfy the op's declared JSON Schema types.
+
+    Metadata-driven (GC meta ``input_schema`` from the tool registry): a
+    declared ``boolean`` receiving an arbitrary string like ``"temperature"``
+    is a plan defect — it would fail at execution. Coercible values (numeric
+    strings for ``number``, boolean-ish strings for ``boolean``) and
+    unresolved placeholders (``${...}``) are NOT violations. No schema →
+    nothing reported (never guesses).
+    """
+    if not op or not isinstance(inputs, dict) or not inputs:
+        return []
+    meta = _capability_meta(op)
+    schema = meta.get("input_schema")
+    props = schema.get("properties") if isinstance(schema, dict) else None
+    if not isinstance(props, dict) or not props:
+        return []
+    violations: list[tuple[str, Any, str]] = []
+    for key, value in inputs.items():
+        prop = props.get(key)
+        if not isinstance(prop, dict):
+            continue
+        declared = prop.get("type")
+        if not declared:
+            continue
+        if isinstance(value, str) and "${" in value:
+            continue  # unresolved dataflow placeholder
+        if isinstance(value, str) and _is_chain_expression(value):
+            continue  # declarative producer-chain expression (RESOLVE(...))
+        if declared == "boolean":
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, str) and value.strip().lower() in (
+                "true", "false", "1", "0", "yes", "no",
+            ):
+                continue
+            violations.append((key, value, declared))
+        elif declared in ("number", "integer"):
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                continue
+            if isinstance(value, str):
+                try:
+                    float(value.strip())
+                    continue
+                except (ValueError, TypeError):
+                    pass
+            violations.append((key, value, declared))
+        elif declared == "string":
+            if isinstance(value, str):
+                continue
+            if isinstance(value, (int, float, bool)) and value is not None:
+                continue  # executor stringifies scalars
+            violations.append((key, value, declared))
+    return violations
+
+
+def _estimate_cost(nodes: list[dict[str, Any]]) -> float:
+    """Sum of per-op cost metadata (0 when unavailable — never guesses)."""
+    try:
+        providers = getattr(_gc_mod.get_global_context(), "capability_providers", {}) or {}
+    except Exception:
+        providers = {}
+    total = 0.0
+    for node in nodes:
+        op = str(node.get("op") or "")
+        for prov in (providers.get(op) or []):
+            total += float(prov.get("cost_per_call") or 0.0)
+    return total
+
+
+def _requires_approval(op: str) -> bool:
+    meta = _capability_meta(op)
+    if not meta:
+        return False
+    return bool(meta.get("requires_approval")) or str(meta.get("risk_level")) in ("high", "medium")

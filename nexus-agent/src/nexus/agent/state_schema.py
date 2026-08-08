@@ -313,15 +313,36 @@ _EPHEMERAL_FIELDS: list[str] = [
     "_routing_decision",
     "_tool_executed_in_turn",
     "_safety_result",
-    "dag_tasks",
     "tool_results",
     "errors",       # flat backward-compat, not typed in AgentState
 
     "_query_type",
     "_force_query_type",
+    "_goals",
+    "_needs_requirements",
     "_preferred_tools",
+    "_plan_validator_report",
+    "_plan_validator_action",
+    "_plan_validator_errors",
+    "_plan_validator_rounds",
+    "_compile_errors",
+    "_compile_retry_count",
+    "_invocation_budget",
+    "_invocation_status",
+    "_response_coverage",
+    "_execution_strategy",
+    "_execution_strategy_reasons",
+    "_background_execution",
+    "_background_task_id",
+    "_execution_plan",
+    "_needs_replan",
+    "_replan_rounds",
+    "_replan_context",
+    "_recovery_decision",
+    "_recovery_action",
+    "_approval_denied_blocking",
     "_executor_failed",
-    "_executor_results",
+    "_executor_failed",
     "_executor_all_success",
     "_tool_retry_counts",
     "_pending_tasks",
@@ -348,6 +369,35 @@ _EPHEMERAL_FIELDS: list[str] = [
     "_approval_decision",
     # Approval request timestamp (set when approval is first requested)
     "_approval_requested_at",
+    # Multi-stage approval chain state
+    "_approval_chain_state",
+    # Requirement collector state
+    "_clarification_slots",
+    "_clarification_rounds",
+    "_clarification_history",
+    "_clarification_consumed_msgs",
+    "_route_to_planner",
+    "_route_to_compiler",
+    "_bypass_workflow",
+    "_route_to_router",
+    "_route_to_gate",
+    "_domain_hint",
+    # Interactive workflow state
+    # NOTE: The workflow context fields (_workflow_step, _workflow_collected,
+    # _workflow_definition, etc.) MUST NOT be ephemeral. They must persist
+    # across turns so the state machine can resume.
+    # Only the final _structured_payload is ephemeral (consumed by ResponseNode
+    # in the same turn it is produced).
+    "_structured_payload",
+    # Synthesis recovery: set when the LLM synthesizer failed and the
+    # Artifact Renderer produced the answer (never an execution error).
+    "_synthesis_failed",
+    # Per-stage timing metrics (node → ms) for latency attribution.
+    "_stage_metrics",
+    # Immutable append-only execution-event trail (bounded, replayable).
+    "_execution_events",
+    # ExecutionBudget degradation flag (stage that exceeded its budget).
+    "_budget_exceeded",
 ]
 
 
@@ -373,7 +423,6 @@ class AgentState(TypedDict, total=False):
     # Flat fields used by the 5-node production graph
     messages: Annotated[list[dict[str, Any]], messages_reducer]
     session_id: str
-    available_tools: list[dict[str, Any]]
     iteration_count: int
     final_response: str | None
     intent: dict[str, Any] | None
@@ -395,16 +444,36 @@ class AgentState(TypedDict, total=False):
     _safety_result: dict[str, Any]
     _force_query_type: str
     _query_type: str
+    _goals: list[str]
+    _needs_requirements: bool
     _preferred_tools: list[str]
+    _plan_validator_report: dict[str, Any]
+    _plan_validator_action: str
+    _plan_validator_errors: list[str]
+    _plan_validator_rounds: int
+    _compile_errors: list[str]
+    _compile_retry_count: int
+    _invocation_budget: dict[str, Any]
+    _invocation_status: str
+    _response_coverage: float
+    _execution_strategy: str
+    _execution_strategy_reasons: list[str]
+    _background_execution: bool
+    _background_task_id: str
+    _execution_plan: dict[str, Any]
+    _needs_replan: bool
+    _replan_rounds: int
+    _replan_context: dict[str, Any]
+    _recovery_decision: dict[str, Any]
+    _recovery_action: str
+    _approval_denied_blocking: bool
     _executor_failed: list[str]
-    _executor_results: dict[str, Any]
     _executor_all_success: bool
     _tool_retry_counts: dict[str, int]
     _pending_tasks: list[str]
 
     # Tool execution state (also in _EPHEMERAL_FIELDS)
     tool_results: list[dict[str, Any]]
-    dag_tasks: list[dict[str, Any]]
     errors: list[str]
 
     # StructuredContext (extraction → validation → planning)
@@ -420,6 +489,7 @@ class AgentState(TypedDict, total=False):
     _approval_decision: str
     _approval_granted: bool
     _approval_requested_at: float
+    _approval_chain_state: dict[str, Any]
 
     # Compiler IR (persistent across incremental re-compilations)
     _ir_stack: dict[str, Any]
@@ -429,8 +499,8 @@ class AgentState(TypedDict, total=False):
     # New 13-node compiler pipeline fields
     _logical_workflow: dict[str, Any]
     _execution_graph: dict[str, Any]
-    _optimized_graph: dict[str, Any]
     _optimization_snapshots: list[dict[str, Any]]
+    _graph_version: int
     _cost_estimate: float
     _latency_estimate_ms: int
     _within_budget: bool
@@ -444,3 +514,43 @@ class AgentState(TypedDict, total=False):
     _recovery_available: bool
     _recovery_failed_tasks: list
     _clarification_asked: dict
+
+    # Requirement collector state
+    _clarification_slots: dict[str, Any]
+    _clarification_rounds: int
+    _clarification_history: list[dict[str, Any]]
+    _clarification_consumed_msgs: list[str]
+    _route_to_planner: bool
+    _route_to_compiler: bool
+    _bypass_workflow: bool
+    _route_to_router: bool
+    _route_to_gate: bool
+    _domain_hint: str | None
+
+    # Interactive workflow state (multi-turn)
+    _active_workflow_id: str | None
+    _workflow_type: str
+    _workflow_step: int
+    _workflow_steps_total: int
+    _workflow_collected: dict[str, Any]
+    _workflow_history: list[dict[str, Any]]
+    _workflow_next_action: str
+    _workflow_definition: dict[str, Any]
+    _structured_payload: dict[str, Any]
+    _workflow_completed_steps: list[str]
+    _workflow_captured: list[str]
+    # Synthesis recovery: LLM synthesizer failed → Artifact Renderer answered.
+    _synthesis_failed: bool
+    # Per-stage timing metrics (node → ms) for latency attribution.
+    _stage_metrics: dict[str, float]
+    # Immutable append-only execution-event trail (bounded, replayable).
+    _execution_events: list[dict]
+    # ExecutionBudget degradation flag (stage that exceeded its budget).
+    _budget_exceeded: str | None
+    # Hybrid execution: dynamic-step planning markers (persist until captured)
+    _workflow_dynamic_pending: str | None
+    _workflow_dynamic_intent: str | None
+    # Conversational approval checkpoint (persists across turns until decided)
+    _approval_pending: dict[str, Any] | None
+    _approval_checkpoint_context: str | None
+    _approval_modification: str | None
