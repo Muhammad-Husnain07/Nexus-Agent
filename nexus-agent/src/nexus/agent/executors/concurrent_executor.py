@@ -36,7 +36,7 @@ import structlog
 
 from nexus.config.settings import get_settings
 from nexus.errors import PlaceholderResolutionError
-from nexus.tools.executor import ToolExecutor
+from nexus.tools.executor import ToolExecutor, _ZERO_UUID
 
 logger = structlog.get_logger("nexus.agent.executors.concurrent_executor")
 
@@ -412,6 +412,7 @@ class ConcurrentExecutor:
         budget: Any = None,
         user_roles: list[str] | None = None,
         ledger: Any = None,
+        agent_run_id: str | None = None,
     ) -> None:
         self._executor = tool_executor or ToolExecutor()
         self._settings = get_settings()
@@ -419,6 +420,10 @@ class ConcurrentExecutor:
         self._domain_semaphores: dict[str, asyncio.Semaphore] = {}
         self._completed_keys: set[str] = set()
         self._session_id = session_id
+        # P2-C: the parent invocation identity — stamped onto every
+        # ToolExecution row, ledger claim and artifact-cache entry so the
+        # whole chain joins back to the request without log parsing.
+        self._agent_run_id = agent_run_id
         self._ref_aliases: dict[str, str] = {}  # symbolic_ref → task_id
         self._conditional_branch: dict[str, list[str]] = {}
         self._disabled_task_ids: set[str] = set()
@@ -758,6 +763,9 @@ class ConcurrentExecutor:
                         # unreadable (never reused).
                         "reg_fp": _norm_reg_fp,
                         "schema_hash": _norm_schema_hash,
+                        # P2-C: the producing run — a cached artifact joins
+                        # back to its parent invocation.
+                        "run_id": self._agent_run_id,
                     },
                 )
             except Exception as _art_cache_exc:
@@ -930,7 +938,9 @@ class ConcurrentExecutor:
                             error=str(_replay_exc)[:200],
                         )
                     return result
-                _ledger_token = await self._ledger.claim(_sid, exec_key, _arch_fp)
+                _ledger_token = await self._ledger.claim(
+                    _sid, exec_key, _arch_fp, agent_run_id=self._agent_run_id
+                )
                 if _ledger_token is None:
                     # Another attempt holds the claim — it may have completed
                     # in the meantime; otherwise surface an explicit outcome
@@ -1347,6 +1357,7 @@ class ConcurrentExecutor:
                                     if isinstance(_cached_result.data, dict)
                                     else {},
                                     ledger_token,
+                                    agent_run_id=self._agent_run_id,
                                 )
                             return _cached_result
 
@@ -1387,7 +1398,8 @@ class ConcurrentExecutor:
                 _attempt = attempt + 1
                 _exec_ctx = ExecutionContext(
                     session_id=self._session_id,
-                    agent_run_id=None,
+                    agent_run_id=self._agent_run_id,
+                    execution_key=_exec_key,
                 )
                 _exec_ctx.idempotency_key = _idem_key
                 _exec_ctx.user_roles = self._user_roles
@@ -1495,6 +1507,7 @@ class ConcurrentExecutor:
                             ledger_session, ledger_key,
                             result.data if isinstance(result.data, dict) else {},
                             ledger_token,
+                            agent_run_id=self._agent_run_id,
                         )
                     normalized_data = await self._register_artifact(
                         task, result, tool_read,
@@ -1638,8 +1651,10 @@ class ConcurrentExecutor:
         except Exception:
             pass
 
-        # Fallback stub — will cause an execution error downstream
-        uuid_val = "00000000-0000-0000-0000-000000000000"
+        # Fallback stub — will cause an execution error downstream. The
+        # synthetic id is NOT a registry identity (FK-repair P2-E): the
+        # persistence layer refuses to write it as tool_execution.tool_id.
+        uuid_val = _ZERO_UUID
         from datetime import datetime, timezone
         now_str = datetime.now(timezone.utc).isoformat()
         return ToolRead(

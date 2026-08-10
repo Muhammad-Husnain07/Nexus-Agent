@@ -648,6 +648,52 @@ async def approval_gate_node(state: AgentState) -> dict[str, Any]:
 # ============================================================================
 
 
+def _tool_meta_to_read_dict(t: Any) -> dict[str, Any]:
+    """FK-REPAIR (P2-E): the canonical registry-tool metadata dict.
+
+    Builds the complete ToolRead-valid metadata for a registry ``Tool`` row.
+    The ``id`` is the REGISTRY id — the canonical identity that
+    ``tool_execution.tool_id`` may reference. Compiled-graph/synthetic ids
+    (the zero-UUID stub) must NEVER reach the DB foreign key; this dict
+    carries the registry id so ToolRead validation succeeds and the
+    persisted row references the registry. ``version``/``created_at``/
+    ``updated_at`` are ToolRead-required and were previously omitted
+    (validation fell back to the stub for every registered tool).
+    """
+    from datetime import datetime as _dt
+
+    _now = _dt.now().isoformat()
+    return {
+        "name": t.name,
+        "id": str(t.id),
+        "description": t.description or "",
+        "purpose": t.purpose or "",
+        "tool_type": "http_api",
+        "endpoint_url": t.endpoint_url or "",
+        "http_method": t.http_method or "GET",
+        "auth_type": t.auth_type or "none",
+        "auth_ref": t.auth_ref or "",
+        "input_schema": t.input_schema or {},
+        "output_schema": t.output_schema or {},
+        "validation_rules": t.validation_rules or {},
+        "examples": t.examples or [],
+        "tags": t.tags or [],
+        "category": t.category or "general",
+        "risk_level": t.risk_level or "low",
+        "requires_approval": t.requires_approval or False,
+        "enabled": t.enabled if t.enabled is not None else True,
+        "rate_limit_per_minute": t.rate_limit_per_minute,
+        "keywords": t.keywords,
+        "aliases": t.aliases,
+        "idempotent": t.idempotent if t.idempotent is not None else False,
+        "cacheable": t.cacheable if t.cacheable is not None else True,
+        "mcp_server_url": t.mcp_server_url or "",
+        "version": t.version if t.version is not None else 1,
+        "created_at": _now,
+        "updated_at": _now,
+    }
+
+
 async def executor_node(
     state: AgentState,
     tool_executor: ToolExecutor,
@@ -867,32 +913,7 @@ async def executor_node(
                 _select(Tool).where(Tool.name.in_(list(required_tool_names)))
             )
             for t in _result.scalars().all():
-                _tool_meta[t.name] = {
-                    "name": t.name,
-                    "id": str(t.id),
-                    "description": t.description or "",
-                    "purpose": t.purpose or "",
-                    "tool_type": "http_api",
-                    "endpoint_url": t.endpoint_url or "",
-                    "http_method": t.http_method or "GET",
-                    "auth_type": t.auth_type or "none",
-                    "auth_ref": t.auth_ref or "",
-                    "input_schema": t.input_schema or {},
-                    "output_schema": t.output_schema or {},
-                    "validation_rules": t.validation_rules or {},
-                    "examples": t.examples or [],
-                    "tags": t.tags or [],
-                    "category": t.category or "general",
-                    "risk_level": t.risk_level or "low",
-                    "requires_approval": t.requires_approval or False,
-                    "enabled": t.enabled if t.enabled is not None else True,
-                    "rate_limit_per_minute": t.rate_limit_per_minute,
-                    "keywords": t.keywords,
-                    "aliases": t.aliases,
-                    "idempotent": t.idempotent if t.idempotent is not None else False,
-                    "cacheable": t.cacheable if t.cacheable is not None else True,
-                    "mcp_server_url": t.mcp_server_url or "",
-                }
+                _tool_meta[t.name] = _tool_meta_to_read_dict(t)
     except Exception as _exc:
         logger.warning("executor_node.tool_meta_load_failed", error=str(_exc))
 
@@ -920,6 +941,9 @@ async def executor_node(
         session_id=state.get("session_id", ""),
         budget=budget_from_state(state),
         user_roles=list((state.get("user_context") or {}).get("roles") or []),
+        # P2-C: the parent invocation identity — stamped onto every tool
+        # execution row, ledger claim and artifact-cache entry.
+        agent_run_id=state.get("_invocation_id"),
     )
     executor.set_ref_aliases(ref_to_id)
     _settings = get_settings()

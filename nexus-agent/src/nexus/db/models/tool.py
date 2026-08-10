@@ -146,6 +146,15 @@ class ToolExecution(Base):
         nullable=True,
         comment="Agent run identifier (optional — no FK constraint)",
     )
+    # P2-C: the logical-operation identity (idempotency scope + tool +
+    # resolved inputs). STABLE across retries — the attempt dimension is
+    # ``retried``; the durable ledger joins on (session_id, execution_key).
+    execution_key: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        index=True,
+        comment="Logical operation execution key (stable across attempts)",
+    )
     request_payload: Mapped[dict[str, Any]] = mapped_column(
         JSONB, default=dict, comment="Input arguments sent to the tool"
     )
