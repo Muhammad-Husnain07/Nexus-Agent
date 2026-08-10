@@ -305,6 +305,32 @@ class ParseCache(_BaseCache):
                 pass
         self._memory.pop(key, None)
 
+    async def remove(
+        self,
+        query: str,
+        tools: list[dict[str, Any]],
+        model: str,
+        context: str = "",
+    ) -> None:
+        """Remove the EXACT entry for (query, tools, model, context).
+
+        SEMANTIC CACHE ELIGIBILITY (P2F): the validator/compiler remove a
+        plan the moment its semantic verdict is REFINE/ABORT (or coverage
+        < 100%, or an alignment violation, or a compile failure) — a
+        syntactically valid plan is not semantically safe to cache. The
+        key must match the writer's key exactly (context included), so the
+        same entry the planner stored is the one removed.
+        """
+        key = self._build_key(query, tools, model, context)
+        redis = await self._get_redis()
+        if redis is not None:
+            try:
+                await redis.delete(key)
+            except Exception:
+                pass
+        self._memory.pop(key, None)
+        logger.info("cache.parse_removed", key=key[:12], query=query[:50])
+
 
 # ============================================================================
 # PlanCache

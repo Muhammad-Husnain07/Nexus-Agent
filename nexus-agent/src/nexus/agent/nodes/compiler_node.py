@@ -150,6 +150,20 @@ async def compiler_node(ctx: ExecutionContext) -> StatePatch:
                     retry=_compile_retries,
                     error=str(_compile_exc)[:300],
                 )
+                # P2F: a plan that fails compilation must never persist in
+                # the parse cache — it would be replayed into the same
+                # failure on every fresh session. The semantic gatekeeper
+                # removes the entry (degrade-safe).
+                try:
+                    from nexus.agent.nodes.plan_validator_node import (  # noqa: PLC0415
+                        _remove_semantically_ineligible_plan,
+                    )
+
+                    await _remove_semantically_ineligible_plan(
+                        dict(ctx.snapshot), "compile_failed"
+                    )
+                except Exception:
+                    pass
                 return StatePatch(
                     version=ctx.version + 1,
                     updates={
@@ -165,6 +179,16 @@ async def compiler_node(ctx: ExecutionContext) -> StatePatch:
                 "compiler_node.compile_abort",
                 error=str(_compile_exc)[:300],
             )
+            try:
+                from nexus.agent.nodes.plan_validator_node import (  # noqa: PLC0415
+                    _remove_semantically_ineligible_plan,
+                )
+
+                await _remove_semantically_ineligible_plan(
+                    dict(ctx.snapshot), "compile_abort"
+                )
+            except Exception:
+                pass
             return StatePatch(
                 version=ctx.version + 1,
                 updates={

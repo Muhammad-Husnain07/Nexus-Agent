@@ -124,6 +124,15 @@ class PlanValidatorNode:
         # different pick); ambiguous/weak evidence is evidence-only and
         # never blocks (the historical false-positive class: scenarios
         # 8/20/38/47 lived in weak-signal territory).
+        # P2F SEMANTIC CACHE GATEKEEPER: the planner writes the cache BEFORE
+        # this node, so a semantically invalid plan may already be stored
+        # (or replayed from an old entry). Any verdict that is NOT
+        # cache-eligible — REFINE, ABORT, require_more_info, or the
+        # partial-execution PROCEED (coverage < 100%) — removes the entry:
+        # a syntactically valid plan is not semantically safe to cache.
+        if not _semantic_cache_eligible(report):
+            await _remove_semantically_ineligible_plan(state, "validator_verdict")
+
         if report.valid:
             logger.info("plan_validator.passed", nodes=len(nodes))
             return {
@@ -1012,6 +1021,61 @@ async def _engine_ranked_for_unit(unit_text: str) -> list[tuple[str, float]]:
     except Exception as exc:
         logger.warning("plan_validator.engine_rank_failed", error=str(exc)[:150])
         return []
+
+
+def _semantic_cache_eligible(report: PlanValidatorReport) -> bool:
+    """SEMANTIC CACHE ELIGIBILITY (P2F): a plan may persist in the parse
+    cache only when the validator's full verdict is clean:
+
+    - report VALID (no ERROR/CRITICAL violation — REFINE/ABORT verdicts
+      are never cache-eligible);
+    - intent coverage == 100% (a partial-execution plan — coverage < 1.0 —
+      must never be replayed);
+    - no capability_alignment violation (a misaligned plan must never be
+      replayed).
+
+    Structural safety (schema/provenance, I11) is enforced at write time by
+    the planner's ``_plan_unsafe_to_cache``; compile success is enforced by
+    the compiler removing the entry on failure. Together they form the
+    cache-eligibility contract: syntactically valid is NOT semantically
+    safe.
+    """
+    if not report.valid:
+        return False
+    if report.metrics.get("intent_coverage", 1.0) != 1.0:
+        return False
+    if any(v.code == "capability_alignment" for v in report.violations):
+        return False
+    return True
+
+
+async def _remove_semantically_ineligible_plan(snapshot: dict[str, Any], reason: str) -> None:
+    """Remove the parse-cache entry for the current query after a semantic
+    rejection (P2F gatekeeper).
+
+    The planner writes the cache BEFORE validation (the validator is the
+    next node), so the semantic verdict cannot gate the write — instead the
+    validator/compiler REMOVE the entry the moment the verdict is not
+    cache-eligible. Net effect: only semantically-passing plans persist,
+    and pre-rule entries self-heal (removed the first time they are
+    rejected). The key replicates the planner's key exactly (query +
+    context chain + model + architecture/prompt fingerprints via the cache
+    builder) — degrade-safe: any failure only leaves the entry in place.
+    """
+    try:
+        from nexus.agent.nodes.semantic_parser_node import _prior_plan_context  # noqa: PLC0415
+        from nexus.compiler.cache import get_parse_cache  # noqa: PLC0415
+        from nexus.config.settings import get_settings  # noqa: PLC0415
+
+        user_query = _current_user_query(snapshot)
+        if not user_query:
+            return
+        _, prior_chain = _prior_plan_context(snapshot)
+        model = get_settings().llm.default_model
+        await get_parse_cache().remove(user_query, [], model, context=prior_chain)
+        logger.info("plan_cache.semantic_removed", reason=reason)
+    except Exception as exc:
+        logger.warning("plan_cache.semantic_remove_failed", error=str(exc)[:150])
 
 
 def _current_user_query(state: dict[str, Any]) -> str | None:
