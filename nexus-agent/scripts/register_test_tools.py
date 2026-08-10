@@ -664,6 +664,41 @@ TOOLS: list[dict] = [
         "cacheable": True,
         "enabled": True,
     },
+    {
+        "name": "search_web_search",
+        "description": "Search the web index served by the local mock search server.",
+        "purpose": "Use when the user asks for web search results, news, or general web information.",
+        "endpoint_url": "http://localhost:8081/search",
+        "http_method": "GET",
+        "auth_type": "none",
+        "input_schema": {
+            "type": "object",
+            "required": ["q"],
+            "properties": {
+                "q": {"type": "string", "description": "Search query"},
+                "max_results": {"type": "integer", "default": 5, "description": "Max results"},
+            },
+        },
+        "output_schema": {
+            "type": "object",
+            "properties": {
+                "results": {"type": "array"},
+                "query": {"type": "string"},
+            },
+        },
+        "examples": [
+            {"user_prompt": "search for books about climate", "expected_tool": "web_search", "sample_input": {"q": "books about climate"}}
+        ],
+        "tags": ["web", "search", "mock"],
+        "category": "general",
+        "keywords": ["web search", "search the web", "find on the internet"],
+        "aliases": ["web_search", "web search", "search", "internet search"],
+        "capabilities": ["retrieve", "search"],
+        "produces": ["search_results"],
+        "consumes": ["q", "max_results"],
+        "cacheable": True,
+        "enabled": True,
+    },
 ]
 
 

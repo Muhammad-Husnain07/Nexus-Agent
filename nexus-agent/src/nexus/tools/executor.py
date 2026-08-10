@@ -23,6 +23,10 @@ from nexus.config.settings import get_settings
 from nexus.db.models.tool import ToolExecution
 from nexus.observability.tracing import get_tracer
 from nexus.redis_client.client import get_redis_client
+
+# FK-REPAIR (P2-E): the synthetic stub identity used when a tool has no
+# registry row. NOT a registry identity — never valid as tool_execution.tool_id.
+_ZERO_UUID = "00000000-0000-0000-0000-000000000000"
 from nexus.redis_client.pubsub import EventBus, tool_channel
 from nexus.redis_client.rate_limiter import RateLimitError, TokenBucketRateLimiter
 from nexus.tools.mcp_client import MCPClient
@@ -271,15 +275,25 @@ def _coerce_inputs_to_schema(
 
 
 class ExecutionContext:
-    """Context for a single tool execution."""
+    """Context for a single tool execution.
+
+    P2-C: ``agent_run_id`` (the parent invocation) and ``execution_key``
+    (the logical operation identity — stable across retries) are persisted
+    with the ToolExecution row, so every attempt joins back to its parent
+    request and run without log parsing. ``idempotency_key`` is set
+    dynamically by the executor (the provider-facing key derived from the
+    execution key).
+    """
 
     def __init__(
         self,
         session_id: uuid.UUID,
         agent_run_id: uuid.UUID | None = None,
+        execution_key: str | None = None,
     ) -> None:
         self.session_id = session_id
         self.agent_run_id = agent_run_id
+        self.execution_key = execution_key
 
 
 class ToolExecutor:
@@ -1091,7 +1105,24 @@ class ToolExecutor:
         result: ToolResult,
         inputs: dict[str, Any],
     ) -> None:
-        """Write a ``ToolExecution`` row to the database and update reliability."""
+        """Write a ``ToolExecution`` row to the database and update reliability.
+
+        FK-REPAIR (P2-E): the row's ``tool_id`` must reference the REGISTRY
+        tool identity. The zero-UUID synthetic stub id (used by the executor
+        when a tool has no registry row) is NOT a registry identity — writing
+        it violates ``fk_tool_execution_tool_id_tool`` and silently loses
+        the execution record. Such rows are SKIPPED with a typed warning
+        (never a crash, never a synthetic FK): an unregistered tool produces
+        no execution row until it is registered, and the observability gap
+        is loud instead of silent.
+        """
+        if str(getattr(tool, "id", "")) == _ZERO_UUID:
+            logger.warning(
+                "tool.persist_skipped_unregistered",
+                tool=tool.name,
+                reason="zero-UUID stub id is not a registry tool identity",
+            )
+            return
         # Normalize empty-string UUIDs to None — asyncpg rejects '' for UUID
         # columns, and a missing run id is valid (nullable).
         agent_run_id = context.agent_run_id
@@ -1101,6 +1132,7 @@ class ToolExecutor:
             tool_id=tool.id,
             session_id=context.session_id,
             agent_run_id=agent_run_id,
+            execution_key=getattr(context, "execution_key", None),
             request_payload=inputs,
             response_payload=result.data,
             status=result.status,
@@ -1111,6 +1143,12 @@ class ToolExecutor:
         )
         session.add(execution)
         await session.flush()
+        # FK-REPAIR (P2-E): COMMIT the write here. The caller's
+        # ``async with session`` context manager does NOT commit on clean
+        # exit in this stack (verified: flushed rows were rolled back on
+        # close — tool_execution stayed empty while execution succeeded).
+        # The persist function owns the write; it must complete it.
+        await session.commit()
 
         # Fire-and-forget EWMA reliability update (non-blocking)
         # Uses tool name as the provider proxy — the capability resolver
