@@ -305,27 +305,22 @@ class GlobalContext(BaseModel):
 
         if hasattr(graph, "nodes"):
             for cap_name, node in graph.nodes.items():
-                # Derive keywords from capability name, tags, and produces fields
+                # Derive keywords from the capability NAME tokens only.
+                # NOTE (P3R): description/purpose WORDS and
+                # produces/consumes FIELD parts are deliberately NOT added
+                # to the keyword pool. Incidental free-text words and field
+                # names (e.g. "list" from "anime_list"/"product_list")
+                # over-match every query containing them — the F8
+                # regression class ("list Valorant agents" matched every
+                # tool producing a *_list field, falsely marking the unit
+                # served). The authoritative signals are the curated tool
+                # keywords + aliases (with_tool_metadata) and the
+                # capability-name tokens.
                 cap_keywords = set()
                 parts = cap_name.replace("_", " ").lower().split()
                 for p in parts:
                     if len(p) > 2:
                         cap_keywords.add(p)
-                if hasattr(node, "produces"):
-                    for prod in (node.produces or []):
-                        for p in prod.replace("_", " ").lower().split():
-                            if len(p) > 2:
-                                cap_keywords.add(p)
-                if hasattr(node, "consumes"):
-                    for con in (node.consumes or []):
-                        for p in con.replace("_", " ").lower().split():
-                            if len(p) > 2:
-                                cap_keywords.add(p)
-                # Add keywords from description and purpose
-                for text in [getattr(node, "description", ""), getattr(node, "purpose", "")]:
-                    if text:
-                        for word in re.findall(r"\b[a-z]{3,}\b", text.lower()):
-                            cap_keywords.add(word)
                 for kw in cap_keywords:
                     keywords.setdefault(kw, []).append(cap_name)
 

@@ -1,57 +1,19 @@
 {
   "nodes": {
-    "data_get_country": {
-      "name": "data_get_country",
-      "consumes": [
-        "name"
-      ],
-      "produces": [],
-      "preconditions": [],
-      "postconditions": [],
-      "providers": [
-        {
-          "name": "get_country_provider",
-          "privacy_level": "low",
-          "reliability_score": 1.0,
-          "rate_limit_per_minute": null,
-          "retry_policy": "default",
-          "circuit_breaker_threshold": 5,
-          "endpoints": [
-            {
-              "url": "https://api.restcountries.com/countries/v5/name?q={name}",
-              "http_method": "GET",
-              "auth_type": "bearer",
-              "auth_ref": "",
-              "region": "global",
-              "weight": 1,
-              "latency_p99_ms": null,
-              "cost_per_call": 0.0
-            }
-          ],
-          "auth_ref": ""
-        }
-      ],
-      "version": 1,
-      "description": "Get information about a country by name",
-      "purpose": "",
-      "tags": [
-        "data",
-        "geography"
-      ],
-      "logical_op_name": "get_country"
-    },
-    "weather_get_weather": {
-      "name": "weather_get_weather",
+    "get_current_weather": {
+      "name": "get_current_weather",
       "consumes": [
         "latitude",
         "longitude"
       ],
-      "produces": [],
+      "produces": [
+        "weather_data"
+      ],
       "preconditions": [],
       "postconditions": [],
       "providers": [
         {
-          "name": "get_weather_provider",
+          "name": "get_current_weather_provider",
           "privacy_level": "low",
           "reliability_score": 1.0,
           "rate_limit_per_minute": null,
@@ -59,33 +21,32 @@
           "circuit_breaker_threshold": 5,
           "endpoints": [
             {
-              "url": "https://api.open-meteo.com/v1/forecast?current_weather=true",
+              "url": "https://api.open-meteo.com/v1/forecast?latitude={latitude}&longitude={longitude}&current_weather={current_weather}",
               "http_method": "GET",
               "auth_type": "none",
               "auth_ref": "",
               "region": "global",
               "weight": 1,
               "latency_p99_ms": null,
-              "cost_per_call": 0.0
+              "cost_per_call": 0.0,
+              "supports_batch": false
             }
           ],
           "auth_ref": ""
         }
       ],
-      "version": 1,
-      "description": "Get current weather for a location using latitude and longitude",
+      "version": 12,
+      "description": "Weather tool (verified)",
       "purpose": "",
       "tags": [
         "weather",
-        "data"
+        "open-meteo"
       ],
-      "logical_op_name": "get_weather"
+      "logical_op_name": "get_current_weather"
     },
-    "entertainment_get_pokemon": {
-      "name": "entertainment_get_pokemon",
-      "consumes": [
-        "name"
-      ],
+    "get_pokemon": {
+      "name": "get_pokemon",
+      "consumes": [],
       "produces": [],
       "preconditions": [],
       "postconditions": [],
@@ -99,39 +60,42 @@
           "circuit_breaker_threshold": 5,
           "endpoints": [
             {
-              "url": "https://pokeapi.co/api/v2/pokemon/{name}",
+              "url": "https://pokeapi.co/api/v2/pokemon/{pokemon_name}",
               "http_method": "GET",
               "auth_type": "none",
               "auth_ref": "",
               "region": "global",
               "weight": 1,
               "latency_p99_ms": null,
-              "cost_per_call": 0.0
+              "cost_per_call": 0.0,
+              "supports_batch": false
             }
           ],
           "auth_ref": ""
         }
       ],
       "version": 1,
-      "description": "Get information about a Pokemon by name",
+      "description": "Fetch Pokemon details by name",
       "purpose": "",
       "tags": [
-        "entertainment",
-        "games"
+        "pokemon",
+        "game_data"
       ],
       "logical_op_name": "get_pokemon"
     },
-    "data_get_coordinates": {
-      "name": "data_get_coordinates",
+    "get_exchange_rates": {
+      "name": "get_exchange_rates",
       "consumes": [
-        "q"
+        "base_currency"
       ],
-      "produces": [],
+      "produces": [
+        "exchange_rates"
+      ],
       "preconditions": [],
       "postconditions": [],
       "providers": [
         {
-          "name": "get_coordinates_provider",
+          "name": "get_exchange_rates_provider",
           "privacy_level": "low",
           "reliability_score": 1.0,
           "rate_limit_per_minute": null,
@@ -139,36 +103,46 @@
           "circuit_breaker_threshold": 5,
           "endpoints": [
             {
-              "url": "https://nominatim.openstreetmap.org/search.php?format=json",
+              "url": "https://open.er-api.com/v6/latest/{base_currency}",
               "http_method": "GET",
               "auth_type": "none",
               "auth_ref": "",
               "region": "global",
               "weight": 1,
               "latency_p99_ms": null,
-              "cost_per_call": 0.0
+              "cost_per_call": 0.0,
+              "supports_batch": false
             }
           ],
           "auth_ref": ""
         }
       ],
       "version": 2,
-      "description": "Geocode a city name to coordinates",
+      "description": "Retrieve latest currency exchange rates for a base currency.",
       "purpose": "",
       "tags": [
-        "geocoding,maps"
+        "currency",
+        "exchange",
+        "forex",
+        "rates"
       ],
-      "logical_op_name": "get_coordinates"
+      "logical_op_name": "get_exchange_rates"
     },
-    "entertainment_get_joke": {
-      "name": "entertainment_get_joke",
-      "consumes": [],
-      "produces": [],
+    "search_products": {
+      "name": "search_products",
+      "consumes": [
+        "category",
+        "id"
+      ],
+      "produces": [
+        "product_list",
+        "product"
+      ],
       "preconditions": [],
       "postconditions": [],
       "providers": [
         {
-          "name": "get_joke_provider",
+          "name": "search_products_provider",
           "privacy_level": "low",
           "reliability_score": 1.0,
           "rate_limit_per_minute": null,
@@ -176,221 +150,358 @@
           "circuit_breaker_threshold": 5,
           "endpoints": [
             {
-              "url": "https://v2.jokeapi.dev/joke/Any?safe-mode",
+              "url": "https://fakestoreapi.com/products",
               "http_method": "GET",
               "auth_type": "none",
               "auth_ref": "",
               "region": "global",
               "weight": 1,
               "latency_p99_ms": null,
-              "cost_per_call": 0.0
+              "cost_per_call": 0.0,
+              "supports_batch": false
             }
           ],
           "auth_ref": ""
         }
       ],
       "version": 1,
-      "description": "Get a random safe joke",
+      "description": "Retrieve products, categories, and product details from Fake Store API.",
       "purpose": "",
       "tags": [
-        "fun",
+        "ecommerce",
+        "products",
+        "shopping",
+        "fakestore"
+      ],
+      "logical_op_name": "search_products"
+    },
+    "reverse_geocode": {
+      "name": "reverse_geocode",
+      "consumes": [
+        "latitude",
+        "longitude"
+      ],
+      "produces": [
+        "address",
+        "display_name",
+        "location_details"
+      ],
+      "preconditions": [],
+      "postconditions": [],
+      "providers": [
+        {
+          "name": "reverse_geocode_provider",
+          "privacy_level": "low",
+          "reliability_score": 1.0,
+          "rate_limit_per_minute": null,
+          "retry_policy": "default",
+          "circuit_breaker_threshold": 5,
+          "endpoints": [
+            {
+              "url": "https://nominatim.openstreetmap.org/reverse?lat={latitude}&lon={longitude}&format=jsonv2",
+              "http_method": "GET",
+              "auth_type": "none",
+              "auth_ref": "",
+              "region": "global",
+              "weight": 1,
+              "latency_p99_ms": null,
+              "cost_per_call": 0.0,
+              "supports_batch": false
+            }
+          ],
+          "auth_ref": ""
+        }
+      ],
+      "version": 4,
+      "description": "Convert latitude/longitude into a human-readable OpenStreetMap address.",
+      "purpose": "",
+      "tags": [
+        "reverse_geocoding",
+        "maps",
+        "coordinates",
+        "address",
+        "location",
+        "openstreetmap",
+        "nominatim"
+      ],
+      "logical_op_name": "reverse_geocode"
+    },
+    "search_universities": {
+      "name": "search_universities",
+      "consumes": [
+        "name"
+      ],
+      "produces": [
+        "university_list",
+        "country"
+      ],
+      "preconditions": [],
+      "postconditions": [],
+      "providers": [
+        {
+          "name": "search_universities_provider",
+          "privacy_level": "low",
+          "reliability_score": 1.0,
+          "rate_limit_per_minute": null,
+          "retry_policy": "default",
+          "circuit_breaker_threshold": 5,
+          "endpoints": [
+            {
+              "url": "http://universities.hipolabs.com/search?name={name}",
+              "http_method": "GET",
+              "auth_type": "none",
+              "auth_ref": "",
+              "region": "global",
+              "weight": 1,
+              "latency_p99_ms": null,
+              "cost_per_call": 0.0,
+              "supports_batch": false
+            }
+          ],
+          "auth_ref": ""
+        }
+      ],
+      "version": 2,
+      "description": "Search universities by name via the Hipolabs API.",
+      "purpose": "",
+      "tags": [
+        "education",
+        "universities",
+        "colleges"
+      ],
+      "logical_op_name": "search_universities"
+    },
+    "get_country_info": {
+      "name": "get_country_info",
+      "consumes": [
+        "country"
+      ],
+      "produces": [
+        "country_details",
+        "country_summary"
+      ],
+      "preconditions": [],
+      "postconditions": [],
+      "providers": [
+        {
+          "name": "get_country_info_provider",
+          "privacy_level": "low",
+          "reliability_score": 1.0,
+          "rate_limit_per_minute": null,
+          "retry_policy": "default",
+          "circuit_breaker_threshold": 5,
+          "endpoints": [
+            {
+              "url": "https://en.wikipedia.org/api/rest_v1/page/summary/{country}",
+              "http_method": "GET",
+              "auth_type": "none",
+              "auth_ref": "",
+              "region": "global",
+              "weight": 1,
+              "latency_p99_ms": null,
+              "cost_per_call": 0.0,
+              "supports_batch": false
+            }
+          ],
+          "auth_ref": ""
+        }
+      ],
+      "version": 3,
+      "description": "Retrieve country information via the Wikipedia summary endpoint.",
+      "purpose": "",
+      "tags": [
+        "geography",
+        "country",
+        "countries",
+        "wikipedia"
+      ],
+      "logical_op_name": "get_country_info"
+    },
+    "get_ghibli_films": {
+      "name": "get_ghibli_films",
+      "consumes": [],
+      "produces": [
+        "film_list"
+      ],
+      "preconditions": [],
+      "postconditions": [],
+      "providers": [
+        {
+          "name": "get_ghibli_films_provider",
+          "privacy_level": "low",
+          "reliability_score": 1.0,
+          "rate_limit_per_minute": null,
+          "retry_policy": "default",
+          "circuit_breaker_threshold": 5,
+          "endpoints": [
+            {
+              "url": "https://ghibliapi.vercel.app/films",
+              "http_method": "GET",
+              "auth_type": "none",
+              "auth_ref": "",
+              "region": "global",
+              "weight": 1,
+              "latency_p99_ms": null,
+              "cost_per_call": 0.0,
+              "supports_batch": false
+            }
+          ],
+          "auth_ref": ""
+        }
+      ],
+      "version": 1,
+      "description": "Retrieve Studio Ghibli films from the Ghibli API.",
+      "purpose": "",
+      "tags": [
+        "movies",
+        "ghibli",
+        "animation"
+      ],
+      "logical_op_name": "get_ghibli_films"
+    },
+    "get_valorant_agents": {
+      "name": "get_valorant_agents",
+      "consumes": [],
+      "produces": [
+        "agent_list"
+      ],
+      "preconditions": [],
+      "postconditions": [],
+      "providers": [
+        {
+          "name": "get_valorant_agents_provider",
+          "privacy_level": "low",
+          "reliability_score": 1.0,
+          "rate_limit_per_minute": null,
+          "retry_policy": "default",
+          "circuit_breaker_threshold": 5,
+          "endpoints": [
+            {
+              "url": "https://valorant-api.com/v1/agents",
+              "http_method": "GET",
+              "auth_type": "none",
+              "auth_ref": "",
+              "region": "global",
+              "weight": 1,
+              "latency_p99_ms": null,
+              "cost_per_call": 0.0,
+              "supports_batch": false
+            }
+          ],
+          "auth_ref": ""
+        }
+      ],
+      "version": 1,
+      "description": "Retrieve Valorant agents from the Valorant API.",
+      "purpose": "",
+      "tags": [
+        "valorant",
+        "gaming",
+        "agents"
+      ],
+      "logical_op_name": "get_valorant_agents"
+    },
+    "jsonplaceholder_request": {
+      "name": "jsonplaceholder_request",
+      "consumes": [
+        "resource",
+        "id"
+      ],
+      "produces": [
+        "mock_data"
+      ],
+      "preconditions": [],
+      "postconditions": [],
+      "providers": [
+        {
+          "name": "jsonplaceholder_request_provider",
+          "privacy_level": "low",
+          "reliability_score": 1.0,
+          "rate_limit_per_minute": null,
+          "retry_policy": "default",
+          "circuit_breaker_threshold": 5,
+          "endpoints": [
+            {
+              "url": "https://jsonplaceholder.typicode.com/{resource}/{id}",
+              "http_method": "GET",
+              "auth_type": "none",
+              "auth_ref": "",
+              "region": "global",
+              "weight": 1,
+              "latency_p99_ms": null,
+              "cost_per_call": 0.0,
+              "supports_batch": false
+            }
+          ],
+          "auth_ref": ""
+        }
+      ],
+      "version": 2,
+      "description": "Fake REST API for testing CRUD-style reads (GET).",
+      "purpose": "",
+      "tags": [
+        "jsonplaceholder",
+        "testing",
+        "crud",
+        "mock"
+      ],
+      "logical_op_name": "jsonplaceholder_request"
+    },
+    "search_manga": {
+      "name": "search_manga",
+      "consumes": [
+        "search"
+      ],
+      "produces": [
+        "manga_list"
+      ],
+      "preconditions": [],
+      "postconditions": [],
+      "providers": [
+        {
+          "name": "search_manga_provider",
+          "privacy_level": "low",
+          "reliability_score": 1.0,
+          "rate_limit_per_minute": null,
+          "retry_policy": "default",
+          "circuit_breaker_threshold": 5,
+          "endpoints": [
+            {
+              "url": "https://graphql.anilist.co",
+              "http_method": "POST",
+              "auth_type": "none",
+              "auth_ref": "",
+              "region": "global",
+              "weight": 1,
+              "latency_p99_ms": null,
+              "cost_per_call": 0.0,
+              "supports_batch": false
+            }
+          ],
+          "auth_ref": ""
+        }
+      ],
+      "version": 6,
+      "description": "Search manga on AniList (GraphQL).",
+      "purpose": "",
+      "tags": [
+        "anime",
+        "manga",
+        "anilist",
+        "graphql",
         "entertainment"
       ],
-      "logical_op_name": "get_joke"
+      "logical_op_name": "search_manga"
     },
-    "entertainment_get_cat_fact": {
-      "name": "entertainment_get_cat_fact",
-      "consumes": [],
-      "produces": [],
-      "preconditions": [],
-      "postconditions": [],
-      "providers": [
-        {
-          "name": "get_cat_fact_provider",
-          "privacy_level": "low",
-          "reliability_score": 1.0,
-          "rate_limit_per_minute": null,
-          "retry_policy": "default",
-          "circuit_breaker_threshold": 5,
-          "endpoints": [
-            {
-              "url": "https://catfact.ninja/fact",
-              "http_method": "GET",
-              "auth_type": "none",
-              "auth_ref": "",
-              "region": "global",
-              "weight": 1,
-              "latency_p99_ms": null,
-              "cost_per_call": 0.0
-            }
-          ],
-          "auth_ref": ""
-        }
-      ],
-      "version": 1,
-      "description": "Get a random cat fact",
-      "purpose": "",
-      "tags": [
-        "cats,fun"
-      ],
-      "logical_op_name": "get_cat_fact"
-    },
-    "entertainment_get_dog_image": {
-      "name": "entertainment_get_dog_image",
-      "consumes": [],
-      "produces": [],
-      "preconditions": [],
-      "postconditions": [],
-      "providers": [
-        {
-          "name": "get_dog_image_provider",
-          "privacy_level": "low",
-          "reliability_score": 1.0,
-          "rate_limit_per_minute": null,
-          "retry_policy": "default",
-          "circuit_breaker_threshold": 5,
-          "endpoints": [
-            {
-              "url": "https://dog.ceo/api/breeds/image/random",
-              "http_method": "GET",
-              "auth_type": "none",
-              "auth_ref": "",
-              "region": "global",
-              "weight": 1,
-              "latency_p99_ms": null,
-              "cost_per_call": 0.0
-            }
-          ],
-          "auth_ref": ""
-        }
-      ],
-      "version": 1,
-      "description": "Get a random dog image URL",
-      "purpose": "",
-      "tags": [
-        "dogs,fun"
-      ],
-      "logical_op_name": "get_dog_image"
-    },
-    "utility_get_random_user": {
-      "name": "utility_get_random_user",
-      "consumes": [],
-      "produces": [],
-      "preconditions": [],
-      "postconditions": [],
-      "providers": [
-        {
-          "name": "get_random_user_provider",
-          "privacy_level": "low",
-          "reliability_score": 1.0,
-          "rate_limit_per_minute": null,
-          "retry_policy": "default",
-          "circuit_breaker_threshold": 5,
-          "endpoints": [
-            {
-              "url": "https://randomuser.me/api/",
-              "http_method": "GET",
-              "auth_type": "none",
-              "auth_ref": "",
-              "region": "global",
-              "weight": 1,
-              "latency_p99_ms": null,
-              "cost_per_call": 0.0
-            }
-          ],
-          "auth_ref": ""
-        }
-      ],
-      "version": 1,
-      "description": "Generate a random user profile",
-      "purpose": "",
-      "tags": [
-        "testing,data"
-      ],
-      "logical_op_name": "get_random_user"
-    },
-    "entertainment_get_quote": {
-      "name": "entertainment_get_quote",
-      "consumes": [],
-      "produces": [],
-      "preconditions": [],
-      "postconditions": [],
-      "providers": [
-        {
-          "name": "get_quote_provider",
-          "privacy_level": "low",
-          "reliability_score": 1.0,
-          "rate_limit_per_minute": null,
-          "retry_policy": "default",
-          "circuit_breaker_threshold": 5,
-          "endpoints": [
-            {
-              "url": "https://zenquotes.io/api/random",
-              "http_method": "GET",
-              "auth_type": "none",
-              "auth_ref": "",
-              "region": "global",
-              "weight": 1,
-              "latency_p99_ms": null,
-              "cost_per_call": 0.0
-            }
-          ],
-          "auth_ref": ""
-        }
-      ],
-      "version": 1,
-      "description": "Get a random inspirational quote",
-      "purpose": "",
-      "tags": [
-        "quotes,inspiration"
-      ],
-      "logical_op_name": "get_quote"
-    },
-    "education_get_astronomy_pic": {
-      "name": "education_get_astronomy_pic",
+    "search_books": {
+      "name": "search_books",
       "consumes": [
-        "date"
+        "query"
       ],
-      "produces": [],
-      "preconditions": [],
-      "postconditions": [],
-      "providers": [
-        {
-          "name": "get_astronomy_pic_provider",
-          "privacy_level": "low",
-          "reliability_score": 1.0,
-          "rate_limit_per_minute": null,
-          "retry_policy": "default",
-          "circuit_breaker_threshold": 5,
-          "endpoints": [
-            {
-              "url": "https://api.nasa.gov/planetary/apod?api_key=DEMO_KEY",
-              "http_method": "GET",
-              "auth_type": "none",
-              "auth_ref": "",
-              "region": "global",
-              "weight": 1,
-              "latency_p99_ms": null,
-              "cost_per_call": 0.0
-            }
-          ],
-          "auth_ref": ""
-        }
+      "produces": [
+        "book_list",
+        "book"
       ],
-      "version": 1,
-      "description": "Get NASA Astronomy Picture of the Day",
-      "purpose": "",
-      "tags": [
-        "space,science"
-      ],
-      "logical_op_name": "get_astronomy_pic"
-    },
-    "education_search_books": {
-      "name": "education_search_books",
-      "consumes": [
-        "q"
-      ],
-      "produces": [],
       "preconditions": [],
       "postconditions": [],
       "providers": [
@@ -403,27 +514,255 @@
           "circuit_breaker_threshold": 5,
           "endpoints": [
             {
-              "url": "https://openlibrary.org/search.json",
+              "url": "https://gutendex.com/books?search={query}",
               "http_method": "GET",
               "auth_type": "none",
               "auth_ref": "",
               "region": "global",
               "weight": 1,
               "latency_p99_ms": null,
-              "cost_per_call": 0.0
+              "cost_per_call": 0.0,
+              "supports_batch": false
             }
           ],
           "auth_ref": ""
         }
       ],
-      "version": 1,
-      "description": "Search for books by query string",
+      "version": 4,
+      "description": "Search books from Gutendex (Project Gutenberg).",
       "purpose": "",
       "tags": [
         "books",
-        "library"
+        "literature",
+        "gutenberg"
       ],
       "logical_op_name": "search_books"
+    },
+    "get_docker_images": {
+      "name": "get_docker_images",
+      "consumes": [
+        "namespace",
+        "repository"
+      ],
+      "produces": [
+        "docker_image_info"
+      ],
+      "preconditions": [],
+      "postconditions": [],
+      "providers": [
+        {
+          "name": "get_docker_images_provider",
+          "privacy_level": "low",
+          "reliability_score": 1.0,
+          "rate_limit_per_minute": null,
+          "retry_policy": "default",
+          "circuit_breaker_threshold": 5,
+          "endpoints": [
+            {
+              "url": "https://hub.docker.com/v2/repositories/{namespace}/{repository}",
+              "http_method": "GET",
+              "auth_type": "none",
+              "auth_ref": "",
+              "region": "global",
+              "weight": 1,
+              "latency_p99_ms": null,
+              "cost_per_call": 0.0,
+              "supports_batch": false
+            }
+          ],
+          "auth_ref": ""
+        }
+      ],
+      "version": 4,
+      "description": "Retrieve Docker Hub image information for a repository.",
+      "purpose": "",
+      "tags": [
+        "docker",
+        "containers",
+        "devops"
+      ],
+      "logical_op_name": "get_docker_images"
+    },
+    "search_anime": {
+      "name": "search_anime",
+      "consumes": [
+        "search"
+      ],
+      "produces": [
+        "anime_list"
+      ],
+      "preconditions": [],
+      "postconditions": [],
+      "providers": [
+        {
+          "name": "search_anime_provider",
+          "privacy_level": "low",
+          "reliability_score": 1.0,
+          "rate_limit_per_minute": null,
+          "retry_policy": "default",
+          "circuit_breaker_threshold": 5,
+          "endpoints": [
+            {
+              "url": "https://graphql.anilist.co",
+              "http_method": "POST",
+              "auth_type": "none",
+              "auth_ref": "",
+              "region": "global",
+              "weight": 1,
+              "latency_p99_ms": null,
+              "cost_per_call": 0.0,
+              "supports_batch": false
+            }
+          ],
+          "auth_ref": ""
+        }
+      ],
+      "version": 6,
+      "description": "Search anime on AniList (GraphQL).",
+      "purpose": "",
+      "tags": [
+        "anime",
+        "manga",
+        "anilist",
+        "graphql",
+        "entertainment"
+      ],
+      "logical_op_name": "search_anime"
+    },
+    "search_authors": {
+      "name": "search_authors",
+      "consumes": [
+        "author"
+      ],
+      "produces": [
+        "book_list"
+      ],
+      "preconditions": [],
+      "postconditions": [],
+      "providers": [
+        {
+          "name": "search_authors_provider",
+          "privacy_level": "low",
+          "reliability_score": 1.0,
+          "rate_limit_per_minute": null,
+          "retry_policy": "default",
+          "circuit_breaker_threshold": 5,
+          "endpoints": [
+            {
+              "url": "https://gutendex.com/books?search={author}",
+              "http_method": "GET",
+              "auth_type": "none",
+              "auth_ref": "",
+              "region": "global",
+              "weight": 1,
+              "latency_p99_ms": null,
+              "cost_per_call": 0.0,
+              "supports_batch": false
+            }
+          ],
+          "auth_ref": ""
+        }
+      ],
+      "version": 5,
+      "description": "Search books by author from Gutendex (Project Gutenberg).",
+      "purpose": "",
+      "tags": [
+        "books",
+        "authors",
+        "literature"
+      ],
+      "logical_op_name": "search_authors"
+    },
+    "define_word": {
+      "name": "define_word",
+      "consumes": [
+        "word"
+      ],
+      "produces": [
+        "definition",
+        "word_meaning"
+      ],
+      "preconditions": [],
+      "postconditions": [],
+      "providers": [
+        {
+          "name": "define_word_provider",
+          "privacy_level": "low",
+          "reliability_score": 1.0,
+          "rate_limit_per_minute": null,
+          "retry_policy": "default",
+          "circuit_breaker_threshold": 5,
+          "endpoints": [
+            {
+              "url": "https://api.dictionaryapi.dev/api/v2/entries/en/{word}",
+              "http_method": "GET",
+              "auth_type": "none",
+              "auth_ref": "",
+              "region": "global",
+              "weight": 1,
+              "latency_p99_ms": null,
+              "cost_per_call": 0.0,
+              "supports_batch": false
+            }
+          ],
+          "auth_ref": ""
+        }
+      ],
+      "version": 3,
+      "description": "Get definitions, pronunciation, and meanings for an English word.",
+      "purpose": "",
+      "tags": [
+        "dictionary",
+        "definitions",
+        "language"
+      ],
+      "logical_op_name": "define_word"
+    },
+    "search_meals": {
+      "name": "search_meals",
+      "consumes": [
+        "query"
+      ],
+      "produces": [
+        "meal_list",
+        "recipe"
+      ],
+      "preconditions": [],
+      "postconditions": [],
+      "providers": [
+        {
+          "name": "search_meals_provider",
+          "privacy_level": "low",
+          "reliability_score": 1.0,
+          "rate_limit_per_minute": null,
+          "retry_policy": "default",
+          "circuit_breaker_threshold": 5,
+          "endpoints": [
+            {
+              "url": "https://www.themealdb.com/api/json/v1/1/search.php?s={query}",
+              "http_method": "GET",
+              "auth_type": "none",
+              "auth_ref": "",
+              "region": "global",
+              "weight": 1,
+              "latency_p99_ms": null,
+              "cost_per_call": 0.0,
+              "supports_batch": false
+            }
+          ],
+          "auth_ref": ""
+        }
+      ],
+      "version": 6,
+      "description": "Search meals and recipes from TheMealDB.",
+      "purpose": "",
+      "tags": [
+        "food",
+        "recipes",
+        "meals",
+        "cooking"
+      ],
+      "logical_op_name": "search_meals"
     },
     "search_web_search": {
       "name": "search_web_search",
@@ -431,12 +770,14 @@
         "q",
         "max_results"
       ],
-      "produces": [],
+      "produces": [
+        "search_results"
+      ],
       "preconditions": [],
       "postconditions": [],
       "providers": [
         {
-          "name": "web_search_provider",
+          "name": "search_web_search_provider",
           "privacy_level": "low",
           "reliability_score": 1.0,
           "rate_limit_per_minute": null,
@@ -451,34 +792,42 @@
               "region": "global",
               "weight": 1,
               "latency_p99_ms": null,
-              "cost_per_call": 0.0
+              "cost_per_call": 0.0,
+              "supports_batch": false
             }
           ],
           "auth_ref": ""
         }
       ],
       "version": 1,
-      "description": "Search the web for information on any topic. Returns title, URL, and snippet.",
+      "description": "Search the web index served by the local mock search server.",
       "purpose": "",
       "tags": [
-        "search",
         "web",
-        "read"
+        "search",
+        "mock"
       ],
-      "logical_op_name": "web_search"
+      "logical_op_name": "search_web_search"
     },
-    "bookmark_create_bookmark": {
-      "name": "bookmark_create_bookmark",
+    "geocode_location": {
+      "name": "geocode_location",
       "consumes": [
-        "url",
-        "title"
+        "query"
       ],
-      "produces": [],
+      "produces": [
+        "location",
+        "coordinates",
+        "latitude",
+        "longitude",
+        "lat",
+        "lon",
+        "place_details"
+      ],
       "preconditions": [],
       "postconditions": [],
       "providers": [
         {
-          "name": "create_bookmark_provider",
+          "name": "geocode_location_provider",
           "privacy_level": "low",
           "reliability_score": 1.0,
           "rate_limit_per_minute": null,
@@ -486,239 +835,50 @@
           "circuit_breaker_threshold": 5,
           "endpoints": [
             {
-              "url": "http://localhost:8081/bookmarks",
-              "http_method": "POST",
-              "auth_type": "none",
-              "auth_ref": "",
-              "region": "global",
-              "weight": 1,
-              "latency_p99_ms": null,
-              "cost_per_call": 0.0
-            }
-          ],
-          "auth_ref": ""
-        }
-      ],
-      "version": 1,
-      "description": "Save a web bookmark with URL, title, and optional tags.",
-      "purpose": "",
-      "tags": [
-        "bookmarks",
-        "write",
-        "create"
-      ],
-      "logical_op_name": "create_bookmark"
-    },
-    "bookmark_update_bookmark": {
-      "name": "bookmark_update_bookmark",
-      "consumes": [
-        "url",
-        "title",
-        "bookmark_id"
-      ],
-      "produces": [],
-      "preconditions": [],
-      "postconditions": [],
-      "providers": [
-        {
-          "name": "update_bookmark_provider",
-          "privacy_level": "low",
-          "reliability_score": 1.0,
-          "rate_limit_per_minute": null,
-          "retry_policy": "default",
-          "circuit_breaker_threshold": 5,
-          "endpoints": [
-            {
-              "url": "http://localhost:8081/bookmarks/{bookmark_id}",
-              "http_method": "PUT",
-              "auth_type": "none",
-              "auth_ref": "",
-              "region": "global",
-              "weight": 1,
-              "latency_p99_ms": null,
-              "cost_per_call": 0.0
-            }
-          ],
-          "auth_ref": ""
-        }
-      ],
-      "version": 1,
-      "description": "Replace ALL fields of an existing bookmark.",
-      "purpose": "",
-      "tags": [
-        "bookmarks",
-        "write",
-        "update"
-      ],
-      "logical_op_name": "update_bookmark"
-    },
-    "bookmark_patch_bookmark": {
-      "name": "bookmark_patch_bookmark",
-      "consumes": [
-        "title",
-        "bookmark_id"
-      ],
-      "produces": [],
-      "preconditions": [],
-      "postconditions": [],
-      "providers": [
-        {
-          "name": "patch_bookmark_provider",
-          "privacy_level": "low",
-          "reliability_score": 1.0,
-          "rate_limit_per_minute": null,
-          "retry_policy": "default",
-          "circuit_breaker_threshold": 5,
-          "endpoints": [
-            {
-              "url": "http://localhost:8081/bookmarks/{bookmark_id}",
-              "http_method": "PATCH",
-              "auth_type": "none",
-              "auth_ref": "",
-              "region": "global",
-              "weight": 1,
-              "latency_p99_ms": null,
-              "cost_per_call": 0.0
-            }
-          ],
-          "auth_ref": ""
-        }
-      ],
-      "version": 1,
-      "description": "Partially update a bookmark.",
-      "purpose": "",
-      "tags": [
-        "bookmarks",
-        "write",
-        "patch"
-      ],
-      "logical_op_name": "patch_bookmark"
-    },
-    "bookmark_delete_bookmark": {
-      "name": "bookmark_delete_bookmark",
-      "consumes": [
-        "bookmark_id"
-      ],
-      "produces": [],
-      "preconditions": [],
-      "postconditions": [],
-      "providers": [
-        {
-          "name": "delete_bookmark_provider",
-          "privacy_level": "low",
-          "reliability_score": 1.0,
-          "rate_limit_per_minute": null,
-          "retry_policy": "default",
-          "circuit_breaker_threshold": 5,
-          "endpoints": [
-            {
-              "url": "http://localhost:8081/bookmarks/{bookmark_id}",
-              "http_method": "DELETE",
-              "auth_type": "none",
-              "auth_ref": "",
-              "region": "global",
-              "weight": 1,
-              "latency_p99_ms": null,
-              "cost_per_call": 0.0
-            }
-          ],
-          "auth_ref": ""
-        }
-      ],
-      "version": 1,
-      "description": "Permanently delete a bookmark. CANNOT be undone.",
-      "purpose": "",
-      "tags": [
-        "bookmarks",
-        "admin",
-        "delete"
-      ],
-      "logical_op_name": "delete_bookmark"
-    },
-    "utility_echo_delete": {
-      "name": "utility_echo_delete",
-      "consumes": [],
-      "produces": [],
-      "preconditions": [],
-      "postconditions": [],
-      "providers": [
-        {
-          "name": "echo_delete_provider",
-          "privacy_level": "low",
-          "reliability_score": 1.0,
-          "rate_limit_per_minute": null,
-          "retry_policy": "default",
-          "circuit_breaker_threshold": 5,
-          "endpoints": [
-            {
-              "url": "https://httpbin.org/delete",
-              "http_method": "DELETE",
-              "auth_type": "none",
-              "auth_ref": "",
-              "region": "global",
-              "weight": 1,
-              "latency_p99_ms": null,
-              "cost_per_call": 0.0
-            }
-          ],
-          "auth_ref": ""
-        }
-      ],
-      "version": 2,
-      "description": "Simulate a DELETE operation",
-      "purpose": "",
-      "tags": [
-        "testing,approval"
-      ],
-      "logical_op_name": "echo_delete"
-    },
-    "general_list_datasources": {
-      "name": "general_list_datasources",
-      "consumes": [],
-      "produces": [],
-      "preconditions": [],
-      "postconditions": [],
-      "providers": [
-        {
-          "name": "list_datasources_provider",
-          "privacy_level": "low",
-          "reliability_score": 1.0,
-          "rate_limit_per_minute": null,
-          "retry_policy": "default",
-          "circuit_breaker_threshold": 5,
-          "endpoints": [
-            {
-              "url": "http://localhost:8001/datasources",
+              "url": "https://nominatim.openstreetmap.org/search?q={query}&format=jsonv2",
               "http_method": "GET",
               "auth_type": "none",
               "auth_ref": "",
               "region": "global",
               "weight": 1,
               "latency_p99_ms": null,
-              "cost_per_call": 0.0
+              "cost_per_call": 0.0,
+              "supports_batch": false
             }
           ],
           "auth_ref": ""
         }
       ],
-      "version": 1,
-      "description": "Fetches a list of available data sources (databases).",
+      "version": 6,
+      "description": "Search for a place by name using OpenStreetMap Nominatim and return matching locations with their latitude, longitude, place ID, and display name.",
       "purpose": "",
       "tags": [
-        "data",
-        "database"
+        "geocoding",
+        "location",
+        "maps",
+        "coordinates",
+        "latitude",
+        "longitude",
+        "openstreetmap",
+        "nominatim",
+        "place_search",
+        "address_search"
       ],
-      "logical_op_name": "list_datasources"
+      "logical_op_name": "geocode_location"
     },
-    "general_get_config": {
-      "name": "general_get_config",
-      "consumes": [],
-      "produces": [],
+    "get_product": {
+      "name": "get_product",
+      "consumes": [
+        "id"
+      ],
+      "produces": [
+        "product"
+      ],
       "preconditions": [],
       "postconditions": [],
       "providers": [
         {
-          "name": "get_config_provider",
+          "name": "get_product_provider",
           "privacy_level": "low",
           "reliability_score": 1.0,
           "rate_limit_per_minute": null,
@@ -726,36 +886,39 @@
           "circuit_breaker_threshold": 5,
           "endpoints": [
             {
-              "url": "http://localhost:8001/config/{key}",
+              "url": "https://fakestoreapi.com/products/{id}",
               "http_method": "GET",
               "auth_type": "none",
               "auth_ref": "",
               "region": "global",
               "weight": 1,
               "latency_p99_ms": null,
-              "cost_per_call": 0.0
+              "cost_per_call": 0.0,
+              "supports_batch": false
             }
           ],
           "auth_ref": ""
         }
       ],
       "version": 1,
-      "description": "Retrieves a system configuration value.",
+      "description": "Retrieve a single product by id from the Fake Store API.",
       "purpose": "",
-      "tags": [
-        "config"
-      ],
-      "logical_op_name": "get_config"
+      "tags": [],
+      "logical_op_name": "get_product"
     },
-    "general_fetch_timeout_data": {
-      "name": "general_fetch_timeout_data",
-      "consumes": [],
-      "produces": [],
+    "get_products_by_category": {
+      "name": "get_products_by_category",
+      "consumes": [
+        "category"
+      ],
+      "produces": [
+        "product_list"
+      ],
       "preconditions": [],
       "postconditions": [],
       "providers": [
         {
-          "name": "fetch_timeout_data_provider",
+          "name": "get_products_by_category_provider",
           "privacy_level": "low",
           "reliability_score": 1.0,
           "rate_limit_per_minute": null,
@@ -763,371 +926,62 @@
           "circuit_breaker_threshold": 5,
           "endpoints": [
             {
-              "url": "http://localhost:8001/error/timeout",
+              "url": "https://fakestoreapi.com/products/category/{category}",
               "http_method": "GET",
               "auth_type": "none",
               "auth_ref": "",
               "region": "global",
               "weight": 1,
               "latency_p99_ms": null,
-              "cost_per_call": 0.0
+              "cost_per_call": 0.0,
+              "supports_batch": false
             }
           ],
           "auth_ref": ""
         }
       ],
       "version": 1,
-      "description": "Fetches data from a notoriously slow external service.",
+      "description": "Retrieve products in a category from the Fake Store API.",
       "purpose": "",
-      "tags": [
-        "data",
-        "error"
-      ],
-      "logical_op_name": "fetch_timeout_data"
-    },
-    "general_list_tables": {
-      "name": "general_list_tables",
-      "consumes": [
-        "datasource"
-      ],
-      "produces": [],
-      "preconditions": [],
-      "postconditions": [],
-      "providers": [
-        {
-          "name": "list_tables_provider",
-          "privacy_level": "low",
-          "reliability_score": 1.0,
-          "rate_limit_per_minute": null,
-          "retry_policy": "default",
-          "circuit_breaker_threshold": 5,
-          "endpoints": [
-            {
-              "url": "http://localhost:8001/datasources/{datasource}/tables",
-              "http_method": "GET",
-              "auth_type": "none",
-              "auth_ref": "",
-              "region": "global",
-              "weight": 1,
-              "latency_p99_ms": null,
-              "cost_per_call": 0.0
-            }
-          ],
-          "auth_ref": ""
-        }
-      ],
-      "version": 1,
-      "description": "Fetches tables for a specific datasource.",
-      "purpose": "",
-      "tags": [
-        "data",
-        "database"
-      ],
-      "logical_op_name": "list_tables"
-    },
-    "general_query_table_data": {
-      "name": "general_query_table_data",
-      "consumes": [
-        "table",
-        "columns"
-      ],
-      "produces": [],
-      "preconditions": [],
-      "postconditions": [],
-      "providers": [
-        {
-          "name": "query_table_data_provider",
-          "privacy_level": "low",
-          "reliability_score": 1.0,
-          "rate_limit_per_minute": null,
-          "retry_policy": "default",
-          "circuit_breaker_threshold": 5,
-          "endpoints": [
-            {
-              "url": "http://localhost:8001/query",
-              "http_method": "POST",
-              "auth_type": "none",
-              "auth_ref": "",
-              "region": "global",
-              "weight": 1,
-              "latency_p99_ms": null,
-              "cost_per_call": 0.0
-            }
-          ],
-          "auth_ref": ""
-        }
-      ],
-      "version": 1,
-      "description": "Executes a query against a table to retrieve data rows.",
-      "purpose": "",
-      "tags": [
-        "data",
-        "database"
-      ],
-      "logical_op_name": "query_table_data"
-    },
-    "general_create_dashboard": {
-      "name": "general_create_dashboard",
-      "consumes": [
-        "title",
-        "widgets"
-      ],
-      "produces": [],
-      "preconditions": [],
-      "postconditions": [],
-      "providers": [
-        {
-          "name": "create_dashboard_provider",
-          "privacy_level": "low",
-          "reliability_score": 1.0,
-          "rate_limit_per_minute": null,
-          "retry_policy": "default",
-          "circuit_breaker_threshold": 5,
-          "endpoints": [
-            {
-              "url": "http://localhost:8001/dashboards",
-              "http_method": "POST",
-              "auth_type": "none",
-              "auth_ref": "",
-              "region": "global",
-              "weight": 1,
-              "latency_p99_ms": null,
-              "cost_per_call": 0.0
-            }
-          ],
-          "auth_ref": ""
-        }
-      ],
-      "version": 1,
-      "description": "Creates a new dashboard with specified widgets.",
-      "purpose": "",
-      "tags": [
-        "artifact",
-        "dashboard",
-        "workflow"
-      ],
-      "logical_op_name": "create_dashboard"
-    },
-    "general_set_config": {
-      "name": "general_set_config",
-      "consumes": [
-        "key",
-        "value"
-      ],
-      "produces": [],
-      "preconditions": [],
-      "postconditions": [],
-      "providers": [
-        {
-          "name": "set_config_provider",
-          "privacy_level": "low",
-          "reliability_score": 1.0,
-          "rate_limit_per_minute": null,
-          "retry_policy": "default",
-          "circuit_breaker_threshold": 5,
-          "endpoints": [
-            {
-              "url": "http://localhost:8001/config/{key}",
-              "http_method": "POST",
-              "auth_type": "none",
-              "auth_ref": "",
-              "region": "global",
-              "weight": 1,
-              "latency_p99_ms": null,
-              "cost_per_call": 0.0
-            }
-          ],
-          "auth_ref": ""
-        }
-      ],
-      "version": 1,
-      "description": "Updates a system configuration value.",
-      "purpose": "",
-      "tags": [
-        "config"
-      ],
-      "logical_op_name": "set_config"
-    },
-    "general_fetch_unstable_data": {
-      "name": "general_fetch_unstable_data",
-      "consumes": [],
-      "produces": [],
-      "preconditions": [],
-      "postconditions": [],
-      "providers": [
-        {
-          "name": "fetch_unstable_data_provider",
-          "privacy_level": "low",
-          "reliability_score": 1.0,
-          "rate_limit_per_minute": null,
-          "retry_policy": "default",
-          "circuit_breaker_threshold": 5,
-          "endpoints": [
-            {
-              "url": "http://localhost:8001/error/server",
-              "http_method": "GET",
-              "auth_type": "none",
-              "auth_ref": "",
-              "region": "global",
-              "weight": 1,
-              "latency_p99_ms": null,
-              "cost_per_call": 0.0
-            }
-          ],
-          "auth_ref": ""
-        }
-      ],
-      "version": 1,
-      "description": "Fetches data from an unstable service that returns 500s.",
-      "purpose": "",
-      "tags": [
-        "data",
-        "error"
-      ],
-      "logical_op_name": "fetch_unstable_data"
-    },
-    "general_get_table_columns": {
-      "name": "general_get_table_columns",
-      "consumes": [
-        "table_name"
-      ],
-      "produces": [],
-      "preconditions": [],
-      "postconditions": [],
-      "providers": [
-        {
-          "name": "get_table_columns_provider",
-          "privacy_level": "low",
-          "reliability_score": 1.0,
-          "rate_limit_per_minute": null,
-          "retry_policy": "default",
-          "circuit_breaker_threshold": 5,
-          "endpoints": [
-            {
-              "url": "http://localhost:8001/tables/{table_name}/columns",
-              "http_method": "GET",
-              "auth_type": "none",
-              "auth_ref": "",
-              "region": "global",
-              "weight": 1,
-              "latency_p99_ms": null,
-              "cost_per_call": 0.0
-            }
-          ],
-          "auth_ref": ""
-        }
-      ],
-      "version": 1,
-      "description": "Fetches schema/columns for a specific table.",
-      "purpose": "",
-      "tags": [
-        "data",
-        "database"
-      ],
-      "logical_op_name": "get_table_columns"
+      "tags": [],
+      "logical_op_name": "get_products_by_category"
     }
   },
   "goal_templates": {},
-  "adjacency": {},
-  "ontology_parents": {
-    "data_get_country": "data_services",
-    "entertainment_get_pokemon": "media",
-    "data_get_coordinates": "data_services",
-    "entertainment_get_joke": "media",
-    "entertainment_get_cat_fact": "media",
-    "entertainment_get_dog_image": "media",
-    "utility_get_random_user": "utility",
-    "entertainment_get_quote": "media",
-    "search_web_search": "search",
-    "bookmark_create_bookmark": "storage",
-    "bookmark_update_bookmark": "storage",
-    "bookmark_patch_bookmark": "storage",
-    "bookmark_delete_bookmark": "storage",
-    "utility_echo_delete": "utility"
+  "adjacency": {
+    "search_universities": [
+      "get_country_info"
+    ],
+    "geocode_location": [
+      "get_current_weather",
+      "reverse_geocode"
+    ]
   },
+  "ontology_parents": {},
   "missing_producers": [
-    "bookmark_id",
-    "columns",
-    "datasource",
-    "date",
-    "key",
-    "latitude",
-    "longitude",
+    "author",
+    "base_currency",
+    "category",
+    "id",
     "max_results",
     "name",
+    "namespace",
     "q",
-    "table",
-    "table_name",
-    "title",
-    "url",
-    "value",
-    "widgets"
+    "query",
+    "repository",
+    "resource",
+    "search",
+    "word"
   ],
   "cycles": [],
-  "compiled_at": "2026-08-01T17:34:03.908329+00:00",
+  "compiled_at": "2026-08-10T20:47:51.180710+00:00",
   "source_registry_version": 0,
-  "registry_checksum": "efc9a9764115b407",
+  "registry_checksum": "c4c0b4da1bf8d6b7",
   "capability_providers": {
-    "data_get_country": [
+    "get_current_weather": [
       {
-        "provider_name": "get_country_provider",
-        "url": "https://api.restcountries.com/countries/v5/name?q={name}",
-        "http_method": "GET",
-        "auth_type": "bearer",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "get_country": [
-      {
-        "provider_name": "get_country_provider",
-        "url": "https://api.restcountries.com/countries/v5/name?q={name}",
-        "http_method": "GET",
-        "auth_type": "bearer",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "weather_get_weather": [
-      {
-        "provider_name": "get_weather_provider",
-        "url": "https://api.open-meteo.com/v1/forecast?current_weather=true",
-        "http_method": "GET",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "get_weather": [
-      {
-        "provider_name": "get_weather_provider",
-        "url": "https://api.open-meteo.com/v1/forecast?current_weather=true",
-        "http_method": "GET",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "entertainment_get_pokemon": [
-      {
-        "provider_name": "get_pokemon_provider",
-        "url": "https://pokeapi.co/api/v2/pokemon/{name}",
+        "provider_name": "get_current_weather_provider",
+        "url": "https://api.open-meteo.com/v1/forecast?latitude={latitude}&longitude={longitude}&current_weather={current_weather}",
         "http_method": "GET",
         "auth_type": "none",
         "auth_ref": "",
@@ -1141,7 +995,7 @@
     "get_pokemon": [
       {
         "provider_name": "get_pokemon_provider",
-        "url": "https://pokeapi.co/api/v2/pokemon/{name}",
+        "url": "https://pokeapi.co/api/v2/pokemon/{pokemon_name}",
         "http_method": "GET",
         "auth_type": "none",
         "auth_ref": "",
@@ -1152,10 +1006,10 @@
         "weight": 1
       }
     ],
-    "data_get_coordinates": [
+    "get_exchange_rates": [
       {
-        "provider_name": "get_coordinates_provider",
-        "url": "https://nominatim.openstreetmap.org/search.php?format=json",
+        "provider_name": "get_exchange_rates_provider",
+        "url": "https://open.er-api.com/v6/latest/{base_currency}",
         "http_method": "GET",
         "auth_type": "none",
         "auth_ref": "",
@@ -1166,10 +1020,10 @@
         "weight": 1
       }
     ],
-    "get_coordinates": [
+    "search_products": [
       {
-        "provider_name": "get_coordinates_provider",
-        "url": "https://nominatim.openstreetmap.org/search.php?format=json",
+        "provider_name": "search_products_provider",
+        "url": "https://fakestoreapi.com/products",
         "http_method": "GET",
         "auth_type": "none",
         "auth_ref": "",
@@ -1180,10 +1034,10 @@
         "weight": 1
       }
     ],
-    "entertainment_get_joke": [
+    "reverse_geocode": [
       {
-        "provider_name": "get_joke_provider",
-        "url": "https://v2.jokeapi.dev/joke/Any?safe-mode",
+        "provider_name": "reverse_geocode_provider",
+        "url": "https://nominatim.openstreetmap.org/reverse?lat={latitude}&lon={longitude}&format=jsonv2",
         "http_method": "GET",
         "auth_type": "none",
         "auth_ref": "",
@@ -1194,10 +1048,10 @@
         "weight": 1
       }
     ],
-    "get_joke": [
+    "search_universities": [
       {
-        "provider_name": "get_joke_provider",
-        "url": "https://v2.jokeapi.dev/joke/Any?safe-mode",
+        "provider_name": "search_universities_provider",
+        "url": "http://universities.hipolabs.com/search?name={name}",
         "http_method": "GET",
         "auth_type": "none",
         "auth_ref": "",
@@ -1208,10 +1062,10 @@
         "weight": 1
       }
     ],
-    "entertainment_get_cat_fact": [
+    "get_country_info": [
       {
-        "provider_name": "get_cat_fact_provider",
-        "url": "https://catfact.ninja/fact",
+        "provider_name": "get_country_info_provider",
+        "url": "https://en.wikipedia.org/api/rest_v1/page/summary/{country}",
         "http_method": "GET",
         "auth_type": "none",
         "auth_ref": "",
@@ -1222,10 +1076,10 @@
         "weight": 1
       }
     ],
-    "get_cat_fact": [
+    "get_ghibli_films": [
       {
-        "provider_name": "get_cat_fact_provider",
-        "url": "https://catfact.ninja/fact",
+        "provider_name": "get_ghibli_films_provider",
+        "url": "https://ghibliapi.vercel.app/films",
         "http_method": "GET",
         "auth_type": "none",
         "auth_ref": "",
@@ -1236,10 +1090,10 @@
         "weight": 1
       }
     ],
-    "entertainment_get_dog_image": [
+    "get_valorant_agents": [
       {
-        "provider_name": "get_dog_image_provider",
-        "url": "https://dog.ceo/api/breeds/image/random",
+        "provider_name": "get_valorant_agents_provider",
+        "url": "https://valorant-api.com/v1/agents",
         "http_method": "GET",
         "auth_type": "none",
         "auth_ref": "",
@@ -1250,10 +1104,10 @@
         "weight": 1
       }
     ],
-    "get_dog_image": [
+    "jsonplaceholder_request": [
       {
-        "provider_name": "get_dog_image_provider",
-        "url": "https://dog.ceo/api/breeds/image/random",
+        "provider_name": "jsonplaceholder_request_provider",
+        "url": "https://jsonplaceholder.typicode.com/{resource}/{id}",
         "http_method": "GET",
         "auth_type": "none",
         "auth_ref": "",
@@ -1264,95 +1118,11 @@
         "weight": 1
       }
     ],
-    "utility_get_random_user": [
+    "search_manga": [
       {
-        "provider_name": "get_random_user_provider",
-        "url": "https://randomuser.me/api/",
-        "http_method": "GET",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "get_random_user": [
-      {
-        "provider_name": "get_random_user_provider",
-        "url": "https://randomuser.me/api/",
-        "http_method": "GET",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "entertainment_get_quote": [
-      {
-        "provider_name": "get_quote_provider",
-        "url": "https://zenquotes.io/api/random",
-        "http_method": "GET",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "get_quote": [
-      {
-        "provider_name": "get_quote_provider",
-        "url": "https://zenquotes.io/api/random",
-        "http_method": "GET",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "education_get_astronomy_pic": [
-      {
-        "provider_name": "get_astronomy_pic_provider",
-        "url": "https://api.nasa.gov/planetary/apod?api_key=DEMO_KEY",
-        "http_method": "GET",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "get_astronomy_pic": [
-      {
-        "provider_name": "get_astronomy_pic_provider",
-        "url": "https://api.nasa.gov/planetary/apod?api_key=DEMO_KEY",
-        "http_method": "GET",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "education_search_books": [
-      {
-        "provider_name": "search_books_provider",
-        "url": "https://openlibrary.org/search.json",
-        "http_method": "GET",
+        "provider_name": "search_manga_provider",
+        "url": "https://graphql.anilist.co",
+        "http_method": "POST",
         "auth_type": "none",
         "auth_ref": "",
         "latency_p99_ms": null,
@@ -1365,7 +1135,77 @@
     "search_books": [
       {
         "provider_name": "search_books_provider",
-        "url": "https://openlibrary.org/search.json",
+        "url": "https://gutendex.com/books?search={query}",
+        "http_method": "GET",
+        "auth_type": "none",
+        "auth_ref": "",
+        "latency_p99_ms": null,
+        "cost_per_call": 0.0,
+        "reliability_score": 1.0,
+        "region": "global",
+        "weight": 1
+      }
+    ],
+    "get_docker_images": [
+      {
+        "provider_name": "get_docker_images_provider",
+        "url": "https://hub.docker.com/v2/repositories/{namespace}/{repository}",
+        "http_method": "GET",
+        "auth_type": "none",
+        "auth_ref": "",
+        "latency_p99_ms": null,
+        "cost_per_call": 0.0,
+        "reliability_score": 1.0,
+        "region": "global",
+        "weight": 1
+      }
+    ],
+    "search_anime": [
+      {
+        "provider_name": "search_anime_provider",
+        "url": "https://graphql.anilist.co",
+        "http_method": "POST",
+        "auth_type": "none",
+        "auth_ref": "",
+        "latency_p99_ms": null,
+        "cost_per_call": 0.0,
+        "reliability_score": 1.0,
+        "region": "global",
+        "weight": 1
+      }
+    ],
+    "search_authors": [
+      {
+        "provider_name": "search_authors_provider",
+        "url": "https://gutendex.com/books?search={author}",
+        "http_method": "GET",
+        "auth_type": "none",
+        "auth_ref": "",
+        "latency_p99_ms": null,
+        "cost_per_call": 0.0,
+        "reliability_score": 1.0,
+        "region": "global",
+        "weight": 1
+      }
+    ],
+    "define_word": [
+      {
+        "provider_name": "define_word_provider",
+        "url": "https://api.dictionaryapi.dev/api/v2/entries/en/{word}",
+        "http_method": "GET",
+        "auth_type": "none",
+        "auth_ref": "",
+        "latency_p99_ms": null,
+        "cost_per_call": 0.0,
+        "reliability_score": 1.0,
+        "region": "global",
+        "weight": 1
+      }
+    ],
+    "search_meals": [
+      {
+        "provider_name": "search_meals_provider",
+        "url": "https://www.themealdb.com/api/json/v1/1/search.php?s={query}",
         "http_method": "GET",
         "auth_type": "none",
         "auth_ref": "",
@@ -1378,7 +1218,7 @@
     ],
     "search_web_search": [
       {
-        "provider_name": "web_search_provider",
+        "provider_name": "search_web_search_provider",
         "url": "http://localhost:8081/search",
         "http_method": "GET",
         "auth_type": "none",
@@ -1390,10 +1230,10 @@
         "weight": 1
       }
     ],
-    "web_search": [
+    "geocode_location": [
       {
-        "provider_name": "web_search_provider",
-        "url": "http://localhost:8081/search",
+        "provider_name": "geocode_location_provider",
+        "url": "https://nominatim.openstreetmap.org/search?q={query}&format=jsonv2",
         "http_method": "GET",
         "auth_type": "none",
         "auth_ref": "",
@@ -1404,150 +1244,10 @@
         "weight": 1
       }
     ],
-    "bookmark_create_bookmark": [
+    "get_product": [
       {
-        "provider_name": "create_bookmark_provider",
-        "url": "http://localhost:8081/bookmarks",
-        "http_method": "POST",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "create_bookmark": [
-      {
-        "provider_name": "create_bookmark_provider",
-        "url": "http://localhost:8081/bookmarks",
-        "http_method": "POST",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "bookmark_update_bookmark": [
-      {
-        "provider_name": "update_bookmark_provider",
-        "url": "http://localhost:8081/bookmarks/{bookmark_id}",
-        "http_method": "PUT",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "update_bookmark": [
-      {
-        "provider_name": "update_bookmark_provider",
-        "url": "http://localhost:8081/bookmarks/{bookmark_id}",
-        "http_method": "PUT",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "bookmark_patch_bookmark": [
-      {
-        "provider_name": "patch_bookmark_provider",
-        "url": "http://localhost:8081/bookmarks/{bookmark_id}",
-        "http_method": "PATCH",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "patch_bookmark": [
-      {
-        "provider_name": "patch_bookmark_provider",
-        "url": "http://localhost:8081/bookmarks/{bookmark_id}",
-        "http_method": "PATCH",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "bookmark_delete_bookmark": [
-      {
-        "provider_name": "delete_bookmark_provider",
-        "url": "http://localhost:8081/bookmarks/{bookmark_id}",
-        "http_method": "DELETE",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "delete_bookmark": [
-      {
-        "provider_name": "delete_bookmark_provider",
-        "url": "http://localhost:8081/bookmarks/{bookmark_id}",
-        "http_method": "DELETE",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "utility_echo_delete": [
-      {
-        "provider_name": "echo_delete_provider",
-        "url": "https://httpbin.org/delete",
-        "http_method": "DELETE",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "echo_delete": [
-      {
-        "provider_name": "echo_delete_provider",
-        "url": "https://httpbin.org/delete",
-        "http_method": "DELETE",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "general_list_datasources": [
-      {
-        "provider_name": "list_datasources_provider",
-        "url": "http://localhost:8001/datasources",
+        "provider_name": "get_product_provider",
+        "url": "https://fakestoreapi.com/products/{id}",
         "http_method": "GET",
         "auth_type": "none",
         "auth_ref": "",
@@ -1558,234 +1258,10 @@
         "weight": 1
       }
     ],
-    "list_datasources": [
+    "get_products_by_category": [
       {
-        "provider_name": "list_datasources_provider",
-        "url": "http://localhost:8001/datasources",
-        "http_method": "GET",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "general_get_config": [
-      {
-        "provider_name": "get_config_provider",
-        "url": "http://localhost:8001/config/{key}",
-        "http_method": "GET",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "get_config": [
-      {
-        "provider_name": "get_config_provider",
-        "url": "http://localhost:8001/config/{key}",
-        "http_method": "GET",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "general_fetch_timeout_data": [
-      {
-        "provider_name": "fetch_timeout_data_provider",
-        "url": "http://localhost:8001/error/timeout",
-        "http_method": "GET",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "fetch_timeout_data": [
-      {
-        "provider_name": "fetch_timeout_data_provider",
-        "url": "http://localhost:8001/error/timeout",
-        "http_method": "GET",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "general_list_tables": [
-      {
-        "provider_name": "list_tables_provider",
-        "url": "http://localhost:8001/datasources/{datasource}/tables",
-        "http_method": "GET",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "list_tables": [
-      {
-        "provider_name": "list_tables_provider",
-        "url": "http://localhost:8001/datasources/{datasource}/tables",
-        "http_method": "GET",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "general_query_table_data": [
-      {
-        "provider_name": "query_table_data_provider",
-        "url": "http://localhost:8001/query",
-        "http_method": "POST",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "query_table_data": [
-      {
-        "provider_name": "query_table_data_provider",
-        "url": "http://localhost:8001/query",
-        "http_method": "POST",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "general_create_dashboard": [
-      {
-        "provider_name": "create_dashboard_provider",
-        "url": "http://localhost:8001/dashboards",
-        "http_method": "POST",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "create_dashboard": [
-      {
-        "provider_name": "create_dashboard_provider",
-        "url": "http://localhost:8001/dashboards",
-        "http_method": "POST",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "general_set_config": [
-      {
-        "provider_name": "set_config_provider",
-        "url": "http://localhost:8001/config/{key}",
-        "http_method": "POST",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "set_config": [
-      {
-        "provider_name": "set_config_provider",
-        "url": "http://localhost:8001/config/{key}",
-        "http_method": "POST",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "general_fetch_unstable_data": [
-      {
-        "provider_name": "fetch_unstable_data_provider",
-        "url": "http://localhost:8001/error/server",
-        "http_method": "GET",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "fetch_unstable_data": [
-      {
-        "provider_name": "fetch_unstable_data_provider",
-        "url": "http://localhost:8001/error/server",
-        "http_method": "GET",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "general_get_table_columns": [
-      {
-        "provider_name": "get_table_columns_provider",
-        "url": "http://localhost:8001/tables/{table_name}/columns",
-        "http_method": "GET",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
-    "get_table_columns": [
-      {
-        "provider_name": "get_table_columns_provider",
-        "url": "http://localhost:8001/tables/{table_name}/columns",
+        "provider_name": "get_products_by_category_provider",
+        "url": "https://fakestoreapi.com/products/category/{category}",
         "http_method": "GET",
         "auth_type": "none",
         "auth_ref": "",

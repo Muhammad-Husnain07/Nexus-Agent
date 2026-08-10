@@ -34,9 +34,14 @@ TOOLS: list[dict] = [
             "type": "object",
             "properties": {
                 "display_name": {"type": "string"},
+                "type": {"type": "string"},
                 "lat": {"type": "string"},
                 "lon": {"type": "string"},
                 "address": {"type": "object"},
+            },
+            "x-artifact-fields": {
+                "place_name": "display_name",
+                "place_type": "type",
             },
         },
         "examples": [
@@ -50,21 +55,19 @@ TOOLS: list[dict] = [
         "produces": ["address", "display_name", "location_details"],
         "consumes": ["latitude", "longitude"],
         "cacheable": False,
+        "idempotent": True,
         "enabled": True,
     },
     {
         "name": "search_products",
-        "description": "Retrieve products, categories, and product details from Fake Store API.",
-        "purpose": "Use when the user wants to browse or search products, product prices, or product categories.",
+        "description": "Retrieve the full product catalog from the Fake Store API.",
+        "purpose": "Use when the user wants to browse the product catalog, product prices, or product categories. For a SPECIFIC product id use get_product; for a category use get_products_by_category.",
         "endpoint_url": "https://fakestoreapi.com/products",
         "http_method": "GET",
         "auth_type": "none",
         "input_schema": {
             "type": "object",
-            "properties": {
-                "category": {"type": "string", "x-aliases": ["product category"], "description": "Optional category filter"},
-                "id": {"type": "integer", "description": "Optional product id"},
-            },
+            "properties": {},
         },
         "output_schema": {
             "type": "array",
@@ -81,16 +84,17 @@ TOOLS: list[dict] = [
             },
         },
         "examples": [
-            {"user_prompt": "Show me products in the electronics category", "expected_tool": "search_products", "sample_input": {"category": "electronics"}}
+            {"user_prompt": "Show me the products", "expected_tool": "search_products", "sample_input": {}}
         ],
         "tags": ["ecommerce", "products", "shopping", "fakestore"],
         "category": "ecommerce",
-        "keywords": ["products", "store", "shop", "item", "catalog"],
-        "aliases": ["browse products", "product search"],
+        "keywords": ["products", "store", "shop", "item", "catalog", "product catalog"],
+        "aliases": ["browse products", "product catalog", "list products"],
         "capabilities": ["retrieve", "products"],
-        "produces": ["product_list", "product"],
-        "consumes": ["category", "id"],
+        "produces": ["product_list"],
+        "consumes": [],
         "cacheable": True,
+        "idempotent": True,
         "enabled": True,
     },
     {
@@ -127,12 +131,13 @@ TOOLS: list[dict] = [
         "produces": ["exchange_rates"],
         "consumes": ["base_currency"],
         "cacheable": False,
+        "idempotent": True,
         "enabled": True,
     },
     {
         "name": "get_country_info",
-        "description": "Retrieve country information via the Wikipedia summary endpoint.",
-        "purpose": "Use when the user asks for country facts, capital, population, or a general country overview. (restcountries.com v1-v4 are decommissioned; v5 requires an API key — Wikipedia REST is the no-auth substitute.)",
+        "description": "Retrieve a Wikipedia summary for a country, including general description and any facts the summary mentions (such as capital or population).",
+        "purpose": "Use when the user asks for a general country overview or a Wikipedia-style summary of a country. The output is the Wikipedia page summary text — it does NOT guarantee structured or current population/capital data.",
         "endpoint_url": "https://en.wikipedia.org/api/rest_v1/page/summary/{country}",
         "http_method": "GET",
         "auth_type": "none",
@@ -163,13 +168,14 @@ TOOLS: list[dict] = [
         "produces": ["country_details", "country_summary"],
         "consumes": ["country"],
         "cacheable": True,
+        "idempotent": True,
         "enabled": True,
     },
     {
         "name": "search_universities",
         "description": "Search universities by name via the Hipolabs API.",
         "purpose": "Use when the user asks about universities, colleges, or higher education institutions.",
-        "endpoint_url": "http://universities.hipolabs.com/search?name={name}",
+        "endpoint_url": "https://universities.hipolabs.com/search?name={name}",
         "http_method": "GET",
         "auth_type": "none",
         "input_schema": {
@@ -203,6 +209,7 @@ TOOLS: list[dict] = [
         "produces": ["university_list", "country"],
         "consumes": ["name"],
         "cacheable": True,
+        "idempotent": True,
         "enabled": True,
     },
     {
@@ -238,6 +245,7 @@ TOOLS: list[dict] = [
         "produces": ["film_list"],
         "consumes": [],
         "cacheable": True,
+        "idempotent": True,
         "enabled": True,
     },
     {
@@ -277,6 +285,7 @@ TOOLS: list[dict] = [
         "produces": ["definition", "word_meaning"],
         "consumes": ["word"],
         "cacheable": True,
+        "idempotent": True,
         "enabled": True,
     },
     {
@@ -322,6 +331,7 @@ TOOLS: list[dict] = [
         "produces": ["meal_list", "recipe"],
         "consumes": ["query"],
         "cacheable": False,
+        "idempotent": True,
         "enabled": True,
     },
     {
@@ -391,6 +401,7 @@ TOOLS: list[dict] = [
         "produces": ["anime_list"],
         "consumes": ["search"],
         "cacheable": False,
+        "idempotent": True,
         "enabled": True,
     },
     {
@@ -460,6 +471,7 @@ TOOLS: list[dict] = [
         "produces": ["manga_list"],
         "consumes": ["search"],
         "cacheable": False,
+        "idempotent": True,
         "enabled": True,
     },
     {
@@ -498,6 +510,7 @@ TOOLS: list[dict] = [
         "produces": ["agent_list"],
         "consumes": [],
         "cacheable": True,
+        "idempotent": True,
         "enabled": True,
     },
     {
@@ -542,6 +555,7 @@ TOOLS: list[dict] = [
         "produces": ["book_list", "book"],
         "consumes": ["query"],
         "cacheable": True,
+        "idempotent": True,
         "enabled": True,
     },
     {
@@ -586,6 +600,7 @@ TOOLS: list[dict] = [
         "produces": ["book_list"],
         "consumes": ["author"],
         "cacheable": True,
+        "idempotent": True,
         "enabled": True,
     },
     {
@@ -597,9 +612,9 @@ TOOLS: list[dict] = [
         "auth_type": "none",
         "input_schema": {
             "type": "object",
-            "required": ["namespace", "repository"],
+            "required": ["repository"],
             "properties": {
-                "namespace": {"type": "string", "x-aliases": ["org", "owner"], "description": "Docker namespace/org (e.g. library)"},
+                "namespace": {"type": "string", "default": "library", "x-aliases": ["org", "owner"], "description": "Docker namespace/org (defaults to library for official images)"},
                 "repository": {"type": "string", "x-aliases": ["image", "repo"], "description": "Repository name (e.g. nginx)"},
             },
         },
@@ -614,6 +629,13 @@ TOOLS: list[dict] = [
                 "pull_count": {"type": "integer"},
                 "last_updated": {"type": "string"},
             },
+            "x-artifact-fields": {
+                "stars": "star_count",
+                "image_description": "description",
+                "namespace": "namespace",
+                "image_name": "name",
+                "pull_count": "pull_count",
+            },
         },
         "examples": [
             {"user_prompt": "How many pulls does the nginx docker image have?", "expected_tool": "get_docker_images", "sample_input": {"namespace": "library", "repository": "nginx"}}
@@ -626,6 +648,7 @@ TOOLS: list[dict] = [
         "produces": ["docker_image_info"],
         "consumes": ["namespace", "repository"],
         "cacheable": True,
+        "idempotent": True,
         "enabled": True,
     },
     {
@@ -662,6 +685,7 @@ TOOLS: list[dict] = [
         "produces": ["mock_data"],
         "consumes": ["resource", "id"],
         "cacheable": True,
+        "idempotent": True,
         "enabled": True,
     },
     {
@@ -697,6 +721,88 @@ TOOLS: list[dict] = [
         "produces": ["search_results"],
         "consumes": ["q", "max_results"],
         "cacheable": True,
+        "idempotent": True,
+        "enabled": True,
+    },
+    {
+        "name": "get_product",
+        "description": "Retrieve a single product by id from the Fake Store API.",
+        "purpose": "Use when the user asks about a SPECIFIC product id (e.g. product 1). For the full catalog use search_products; for a category use get_products_by_category.",
+        "endpoint_url": "https://fakestoreapi.com/products/{id}",
+        "http_method": "GET",
+        "auth_type": "none",
+        "input_schema": {
+            "type": "object",
+            "required": ["id"],
+            "properties": {
+                "id": {"type": "integer", "x-aliases": ["product id", "product"], "description": "Product id"},
+            },
+        },
+        "output_schema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "integer"},
+                "title": {"type": "string"},
+                "price": {"type": "number"},
+                "category": {"type": "string"},
+                "description": {"type": "string"},
+                "rating": {"type": "object"},
+            },
+        },
+        "examples": [
+            {"user_prompt": "Get product 1 from the store", "expected_tool": "get_product", "sample_input": {"id": 1}}
+        ],
+        "tags": ["ecommerce", "products", "fakestore"],
+        "category": "ecommerce",
+        "keywords": ["product detail", "product by id"],
+        "aliases": ["get product", "product detail"],
+        "capabilities": ["retrieve", "products"],
+        "produces": ["product"],
+        "consumes": ["id"],
+        "cacheable": True,
+        "idempotent": True,
+        "enabled": True,
+    },
+    {
+        "name": "get_products_by_category",
+        "description": "Retrieve products in a category from the Fake Store API.",
+        "purpose": "Use when the user asks for products in a SPECIFIC category (e.g. electronics, jewelry). For the full catalog use search_products; for a specific id use get_product.",
+        "endpoint_url": "https://fakestoreapi.com/products/category/{category}",
+        "http_method": "GET",
+        "auth_type": "none",
+        "input_schema": {
+            "type": "object",
+            "required": ["category"],
+            "properties": {
+                "category": {"type": "string", "x-aliases": ["product category"], "description": "Product category (e.g. electronics, jewelry, men's clothing)"},
+            },
+        },
+        "output_schema": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer"},
+                    "title": {"type": "string"},
+                    "price": {"type": "number"},
+                    "category": {"type": "string"},
+                    "description": {"type": "string"},
+                    "rating": {"type": "object"},
+                },
+            },
+        },
+        "examples": [
+            {"user_prompt": "Show me products in the electronics category", "expected_tool": "get_products_by_category", "sample_input": {"category": "electronics"}}
+        ],
+        "tags": ["ecommerce", "products", "fakestore"],
+        "category": "ecommerce",
+        "keywords": ["products in category", "category products"],
+        "aliases": ["products by category", "category catalog"],
+        "capabilities": ["retrieve", "products"],
+        "produces": ["product_list"],
+        "consumes": ["category"],
+        "cacheable": True,
+        "idempotent": True,
         "enabled": True,
     },
 ]

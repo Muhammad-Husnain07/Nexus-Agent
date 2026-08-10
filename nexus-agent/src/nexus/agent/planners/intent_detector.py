@@ -171,10 +171,15 @@ def unit_candidates(unit: IntentUnit, gc: Any) -> frozenset[str]:
             candidates.update(gc.match_capabilities(tokens))
         except Exception:
             pass
-        # 2. Alias index.
+        # 2. Alias index. Values are capability-name STRINGS — never
+        # iterate a string as a sequence (a token directly in the alias
+        # index would otherwise add single CHARACTERS as candidates).
         alias_index = getattr(gc, "alias_index", None) or {}
         for token in tokens:
-            for cap in alias_index.get(token, []) or []:
+            aliases = alias_index.get(token, []) or []
+            if isinstance(aliases, str):
+                aliases = [aliases]
+            for cap in aliases:
                 candidates.add(str(cap))
         # 3. Capability-name tokens + meta keywords.
         index = getattr(gc, "capability_index", None) or {}
