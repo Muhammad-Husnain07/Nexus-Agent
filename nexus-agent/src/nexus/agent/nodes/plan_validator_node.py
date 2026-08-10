@@ -92,22 +92,38 @@ class PlanValidatorNode:
         nodes = workflow.get("nodes") or []
         prior_chain = _prior_executed_chain(state)
         user_query = _current_user_query(state)
+        # B3 (engine-score alignment): gather the deterministic resolver's
+        # per-unit SCORES for the SAME intent units validate() detects
+        # (identical deterministic IntentDetector call). Units resolve to
+        # ranked (capability, score) pairs — the validator's alignment
+        # verdict is score-based, never a keyword proxy. Deterministic,
+        # GC-only, bounded by the unit count.
+        engine_scores: dict[str, list[tuple[str, float]]] = {}
+        try:
+            from nexus.agent.planners.intent_detector import IntentDetector  # noqa: PLC0415
+
+            _detected = IntentDetector().detect(user_query) if user_query else None
+            if _detected is not None:
+                for _u in _detected.units:
+                    engine_scores[_u.text] = await _engine_ranked_for_unit(_u.text)
+        except Exception as _esc:
+            logger.warning("plan_validator.engine_scores_failed", error=str(_esc)[:150])
         report = self.validate(
             nodes,
             prior_chain=prior_chain,
             user_query=user_query,
             collections=workflow.get("collections") if isinstance(workflow, dict) else None,
             preferred_tools=state.get("_preferred_tools") or None,
+            engine_scores=engine_scores,
         )
         rounds = int(state.get("_plan_validator_rounds", 0) or 0)
 
-        # Gate: PROCEED when the report is valid (no CRITICAL/ERROR). Note:
-        # capability_alignment stays WARNING-grade (B3/P0-B) — the keyword
-        # bridge demonstrably disagrees with the engine's semantic ranking
-        # on correct plans (scenarios 8/20/38/47), so alignment must never
-        # block execution with the current signals. It rides the report as
-        # per-intent EVIDENCE (I4) + the refine loop; engine-score-based
-        # blocking is the documented follow-up.
+        # Gate: PROCEED when the report is valid (no CRITICAL/ERROR).
+        # capability_alignment (B3, engine-score based) BLOCKS only on
+        # STRONG deterministic evidence (unique/dominant engine top vs a
+        # different pick); ambiguous/weak evidence is evidence-only and
+        # never blocks (the historical false-positive class: scenarios
+        # 8/20/38/47 lived in weak-signal territory).
         if report.valid:
             logger.info("plan_validator.passed", nodes=len(nodes))
             return {
@@ -216,6 +232,7 @@ class PlanValidatorNode:
         user_query: str | None = None,
         collections: dict[str, Any] | None = None,
         preferred_tools: list[str] | None = None,
+        engine_scores: dict[str, list[tuple[str, float]]] | None = None,
     ) -> PlanValidatorReport:
         violations: list[Violation] = []
         errors: list[str] = []
@@ -569,18 +586,10 @@ class PlanValidatorNode:
             # capability, alignment and served status. The scalar
             # intent_coverage metric stays for dashboards; the evidence is
             # the debuggable truth the validator and telemetry consume.
-            # ALIGNMENT SEMANTICS (B3/P0-B): the authoritative ranking is
-            # the ENGINE's ranked candidate list (preferred_tools — the
-            # exact order the planner saw in its catalog). A unit is
-            # misaligned when the plan picked a candidate ranked >=2
-            # positions below the unit's best-ranked candidate (or picked
-            # an op the engine did not rank at all). Adjacent positions are
-            # near-ties the engine itself treats as ambiguous — never
-            # blocking. This aligns the validator WITH the engine instead
-            # of a home-grown keyword-strength score.
-            _engine_order = [
-                c for c in (preferred_tools or []) if isinstance(c, str)
-            ]
+            # ALIGNMENT SEMANTICS (B3, engine-score based): the alignment
+            # verdict comes from the DETERMINISTIC resolver's per-unit
+            # SCORES (engine_top/engine_dominant/engine_verdict) — never a
+            # keyword-bridge proxy, never whole-query rank positions alone.
             coverage_evidence: list[dict[str, Any]] = []
             for u in detected.units:
                 candidates = _unit_candidates(u)
@@ -591,20 +600,10 @@ class PlanValidatorNode:
                     _best_capability(u, matches)
                     if matches else None
                 )
-                engine_best = next(
-                    (c for c in _engine_order if c in candidates), None
-                )
-                misaligned_pick = bool(
-                    chosen
-                    and engine_best
-                    and chosen != engine_best
-                    and (
-                        chosen not in _engine_order
-                        or _engine_order.index(chosen)
-                        - _engine_order.index(engine_best)
-                        >= 2
-                    )
-                )
+                engine_ranked = (engine_scores or {}).get(u.text, [])
+                engine_verdict = _alignment_verdict(chosen, engine_ranked)
+                engine_top = engine_ranked[0][0] if engine_ranked else None
+                engine_dominant = _engine_dominant(engine_ranked)
                 coverage_evidence.append({
                     "unit": u.text,
                     "negated": u.negated,
@@ -614,8 +613,10 @@ class PlanValidatorNode:
                     "planned_matches": sorted(matches),
                     "best": best,
                     "chosen": chosen,
-                    "engine_best": engine_best,
-                    "aligned": not misaligned_pick,
+                    "engine_top": engine_top,
+                    "engine_dominant": engine_dominant,
+                    "engine_verdict": engine_verdict,
+                    "aligned": engine_verdict == "aligned",
                     "served": None,  # filled below for executable units
                 })
             for u in executable:
@@ -637,18 +638,14 @@ class PlanValidatorNode:
             metrics["intent_coverage"] = (
                 round(len(served) / len(executable), 3) if executable else 1.0
             )
-            # CAPABILITY ALIGNMENT (P0): a served unit may still be served
-            # by the WRONG capability when several candidates matched its
-            # keywords. Alignment = did the plan pick the unit's BEST
-            # candidate? Ranked by the keyword/name/alias match strength.
-            # ALIGNMENT (B3/P0-B): a served unit's chosen capability is
-            # misaligned when it carries ZERO keyword/alias/name-token
-            # signal while the unit has candidates with positive signal —
-            # the plan mapped the intent to an unrelated capability. Weak
-            # but positive signals (engine ranking vs keyword-overlap
-            # disagreements) are NOT violations: the planner follows the
-            # engine-ranked catalog, and tie/weak-gap arbitration belongs
-            # to the engine, never to a blocking validator rule.
+            # CAPABILITY ALIGNMENT (B3, engine-score based): a served unit
+            # may still be served by the WRONG capability. The alignment
+            # verdict comes from the DETERMINISTIC resolver's per-unit
+            # SCORES: a pick that differs from the engine's top candidate
+            # BLOCKS (ERROR/REFINE) only when the engine evidence is STRONG
+            # (unique or dominant top). Close/weak signals are ambiguous —
+            # evidence only, never blocking (the historical false-positive
+            # class: scenarios 8/20/38/47 lived in weak-signal territory).
             misaligned: list[str] = []
             alignments: list[float] = []
             for u in executable:
@@ -656,42 +653,29 @@ class PlanValidatorNode:
                 matches = planned_ops & candidates
                 if not matches:
                     continue
-                best = _best_capability(u, candidates)
                 chosen = _best_capability(u, matches)
-                engine_best = next(
-                    (c for c in _engine_order if c in candidates), None
-                )
-                # ENGINE-ORDER ALIGNMENT (B3/P0-B): the planner was handed
-                # the engine-ranked catalog; picking a candidate ranked >=2
-                # positions below the unit's best-ranked candidate (or an
-                # op the engine never ranked) is a genuine wrong pick.
-                if (
-                    chosen
-                    and engine_best
-                    and chosen != engine_best
-                    and (
-                        chosen not in _engine_order
-                        or _engine_order.index(chosen)
-                        - _engine_order.index(engine_best)
-                        >= 2
-                    )
-                ):
-                    misaligned.append(f"{u.text[:40]} -> {chosen} (best: {engine_best})")
+                engine_ranked = (engine_scores or {}).get(u.text, [])
+                verdict = _alignment_verdict(chosen, engine_ranked)
+                if verdict == "misaligned":
+                    top = engine_ranked[0][0] if engine_ranked else "?"
+                    misaligned.append(f"{u.text[:40]} -> {chosen} (engine best: {top})")
                     alignments.append(0.0)
-                else:
+                elif verdict == "aligned":
                     alignments.append(1.0)
+                else:
+                    alignments.append(1.0)  # ambiguous/no_signal: not a defect
             metrics["capability_alignment"] = (
                 round(sum(alignments) / len(alignments), 3) if alignments else 1.0
             )
             if misaligned:
                 violations.append(Violation(
                     code="capability_alignment",
-                    severity=ViolationSeverity.WARNING,
+                    severity=ViolationSeverity.ERROR,
                     action=ViolationAction.REFINE,
                     node="plan",
                     message=(
-                        "planned capability is not the best match for the "
-                        f"intent unit: {'; '.join(misaligned[:4])}"
+                        "planned capability is not the engine's dominant "
+                        f"candidate for the intent unit: {'; '.join(misaligned[:4])}"
                     ),
                 ))
                 errors.append(
@@ -943,6 +927,91 @@ def _is_chain_expression(value: str) -> bool:
     if s.startswith("RESOLVE(") and s.endswith(")"):
         return True
     return s.startswith("{{") and s.endswith("}}")
+
+
+# B3 (P0-B deferred, now landed): ENGINE-SCORE ALIGNMENT.
+# The engine's top candidate must constitute STRONG evidence to BLOCK:
+# - with a runner-up: top outscores it by ``_ALIGNMENT_DOMINANCE_RATIO``;
+# - UNIQUE top (no runner-up): its score must reach
+#   ``_ALIGNMENT_STRONG_MIN_SCORE`` — a lone weak keyword hit (e.g. a
+#   single ``keyword:day`` noise candidate at score 3.0) is NOT strong
+#   evidence (the Bitcoin-price class: the engine's only hit was an
+#   astronomy-pic noise match while the correct capability was absent).
+# Anything else is ambiguous (evidence only) — the historical false
+# positives (scenarios 8/20/38/47) all lived in weak/close territory.
+_ALIGNMENT_DOMINANCE_RATIO = 2.0
+_ALIGNMENT_STRONG_MIN_SCORE = 5.0
+
+
+def _engine_dominant(engine_ranked: list[tuple[str, float]]) -> bool:
+    """True when the engine's top candidate is STRONG evidence (unique
+    high-score, or dominant over the runner-up)."""
+    if not engine_ranked:
+        return False
+    top_score = engine_ranked[0][1]
+    if len(engine_ranked) == 1:
+        return top_score >= _ALIGNMENT_STRONG_MIN_SCORE
+    runner_up = engine_ranked[1][1]
+    return top_score >= runner_up * _ALIGNMENT_DOMINANCE_RATIO
+
+
+def _alignment_verdict(
+    chosen: str | None,
+    engine_ranked: list[tuple[str, float]],
+) -> str:
+    """Pure B3 verdict for one intent unit.
+
+    Args:
+        chosen: The capability the plan assigned to the unit (its best
+            planned match), or None when the unit is unserved.
+        engine_ranked: The deterministic resolver's ranked candidates for
+            the unit as ``(name, score)`` pairs (highest first).
+
+    Returns:
+        One of:
+        - ``aligned``: the plan's pick is the engine's top candidate
+          (never blocks).
+        - ``misaligned``: the plan's pick differs from the engine's top
+          AND the engine evidence is STRONG (dominant over the runner-up,
+          or a unique top at/above ``_ALIGNMENT_STRONG_MIN_SCORE``; this
+          covers a pick absent from the candidate set when the evidence
+          is strong). BLOCKING grade.
+        - ``ambiguous``: the pick differs but the engine evidence is
+          CLOSE or weak (no dominance, or a unique sub-floor noise hit) —
+          evidence only, never blocks.
+        - ``no_signal``: no pick or no engine candidates — the existing
+          unresolved/coverage behavior applies untouched.
+    """
+    if not chosen or not engine_ranked:
+        return "no_signal"
+    top_name, _top_score = engine_ranked[0]
+    if chosen == top_name:
+        return "aligned"
+    if _engine_dominant(engine_ranked):
+        return "misaligned"
+    return "ambiguous"
+
+
+async def _engine_ranked_for_unit(unit_text: str) -> list[tuple[str, float]]:
+    """Deterministic resolver ranking for a single intent unit.
+
+    The engine is GC-only (no DB, no LLM) — a few extra deterministic
+    calls per validation are bounded by the repair-round cap. Scores are
+    the ACTUAL resolver scores (exact_alias=100, keyword/example signals),
+    never a keyword-strength proxy. Degrades to ``[]`` (no_signal) on any
+    failure — B3 must never break validation.
+    """
+    try:
+        from nexus.capabilities.resolution_engine import get_resolution_engine  # noqa: PLC0415
+
+        res = await get_resolution_engine().resolve(unit_text, top_k=15)
+        return [
+            (c.name, float(c.score))
+            for c in res.capability_candidates
+        ]
+    except Exception as exc:
+        logger.warning("plan_validator.engine_rank_failed", error=str(exc)[:150])
+        return []
 
 
 def _current_user_query(state: dict[str, Any]) -> str | None:
