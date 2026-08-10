@@ -20,32 +20,34 @@ Closes the persisted join chain without log parsing:
 Reversible: downgrade drops both columns.
 
 """
-from typing import Sequence, Union
 
-from alembic import op
+from collections.abc import Sequence
+
 import sqlalchemy as sa
 
+from alembic import op
+
 # revision identifiers, used by Alembic.
-revision: str = 'c2d3e4f5a6b7'
-down_revision: Union[str, None] = 'f1a2b3c4d5e6'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision: str = "c2d3e4f5a6b7"
+down_revision: str | None = "f1a2b3c4d5e6"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
     op.add_column(
-        'tool_execution',
+        "tool_execution",
         sa.Column(
-            'execution_key',
+            "execution_key",
             sa.String(64),
             nullable=True,
             comment="Logical operation execution key (stable across attempts)",
         ),
     )
     op.add_column(
-        'completed_executions',
+        "completed_executions",
         sa.Column(
-            'agent_run_id',
+            "agent_run_id",
             sa.String(64),
             nullable=True,
             comment="Run that claimed/completed the operation (P2-C)",
@@ -54,5 +56,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column('tool_execution', 'execution_key')
-    op.drop_column('completed_executions', 'agent_run_id')
+    op.drop_column("tool_execution", "execution_key")
+    op.drop_column("completed_executions", "agent_run_id")

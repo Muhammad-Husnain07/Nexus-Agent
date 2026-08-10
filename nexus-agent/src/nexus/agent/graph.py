@@ -1,31 +1,59 @@
 """
-Deterministic Workflow Compiler Graph — 13-node deterministic pipeline.
+Deterministic Workflow Compiler Graph — 19-node intent-first pipeline.
 
 Nodes
 =====
-1.  **RouterNode** — Query classifier. Routes conversational → ResponseNode; workflow → SemanticPlannerNode.
-2.  **SemanticPlannerNode** — LLM → ``LogicalWorkflow`` via capability catalog.
-3.  **CompilerNode** — Deterministic codegen: LogicalWorkflow → ExecutionGraph.
-4.  **OptimizerNode** — PassManager fixpoint optimizer on ExecutionGraph.
-5.  **EstimatorNode** — Cost/latency estimation & budget check.
-6.  **ValidationNode** — Schema/constraint validation of the optimized graph.
-7.  **ClarificationNode** — Asks for missing info, ends graph.
-8.  **ApprovalGateNode** — HITL check per tool risk level.
-9.  **ExecutorNode** — Wave-based concurrent tool execution with retry.
-10. **AggregatorNode** — Pure Python ReduceNode execution.
-11. **ReflectionNode** — Graph diffing & patching for failed tasks.
-12. **ResponseNode** — LLM narrative from tool results.
-13. **MemoryHelperNode** — Persist to pgvector long-term memory.
+1.  **RouterNode** — Query classifier (heuristic + LLM fallback).
+    Routes conversational → ResponseNode; workflow →
+    InteractiveWorkflowNode; needs_requirements →
+    RequirementCollectorNode; action → SemanticPlannerNode.
+2.  **InteractiveWorkflowNode** — Template-driven workflow engine.
+3.  **RequirementCollectorNode** — Iterative clarification loop (ready →
+    SemanticPlannerNode).
+4.  **SemanticPlannerNode** — Cache-first LLM → ``LogicalWorkflow``
+    (intent-unit framing; instructor Literal enforcement; replans bypass
+    the cache).
+5.  **PlanValidatorNode** — Deterministic semantic validation: coverage,
+    capability alignment (engine-score based), provenance, traceability,
+    budget. Also the semantic cache gatekeeper (P2F).
+6.  **CompilerNode** — Deterministic codegen: LogicalWorkflow →
+    ExecutionGraph (+ RESOLVE producer-chain synthesis).
+7.  **OptimizerNode** — PassManager fixpoint optimizer.
+8.  **EstimatorNode** — Cost/latency estimation & budget check.
+9.  **ValidationNode** — Structure/constraint validation.
+10. **ApprovalGateNode** — Semantic-bound HITL approvals (operation hash).
+11. **ApprovalCheckpointResumeNode** — Conversational approve/reject/
+    cancel/modify/clarify.
+12. **ExecutorNode** — Wave-based concurrent tool execution (authorized,
+    idempotency-keyed, cancellable, sandboxed).
+13. **AggregatorNode** — Pure Python ReduceNode execution (on success too).
+14. **ValidatorNode** — Post-execution validation.
+15. **RecoveryManagerNode** — Typed failure classification (retry / replan /
+    partial / fail).
+16. **ReflectionNode** — Structural diffing + bounded retry sub-graph.
+17. **ReplanNode** — Shared-budget replan back to the planner.
+18. **ResponseNode** — Data-incorporation + coverage guards; deterministic
+    renderer floor.
+19. **MemoryHelperNode** — Provenance-stamped memory persistence; never
+    stores failed responses.
 
 Pipeline
 ========
 RouterNode
-  |-> SemanticPlannerNode -> CompilerNode -> OptimizerNode -> EstimatorNode -> ValidationNode
-  |     |-> ApprovalGateNode -> ExecutorNode -> AggregatorNode -> ReflectionNode
-  |     |     |-> ExecutorNode (retry sub-graph)
-  |     |     |-> ResponseNode -> MemoryHelperNode -> END
-  |     |-> ClarificationNode -> END
-  |-> ResponseNode -> MemoryHelperNode -> END
+  |-> (conversational) ResponseNode -> MemoryHelperNode -> END
+  |-> (workflow) InteractiveWorkflowNode
+  |-> (needs_requirements) RequirementCollectorNode -> SemanticPlannerNode
+  |-> (action) SemanticPlannerNode -> PlanValidatorNode
+        |-> (refine) SemanticPlannerNode (bounded)
+        |-> (require_more_info) RequirementCollectorNode
+        |-> CompilerNode -> OptimizerNode -> EstimatorNode -> ValidationNode
+              |-> ApprovalGateNode -> ExecutorNode
+                    |-> AggregatorNode -> ValidatorNode
+                          |-> RecoveryManagerNode
+                                |-> (retry) ReflectionNode -> ExecutorNode
+                                |-> (replan) ReplanNode -> SemanticPlannerNode
+                                |-> (fail) ResponseNode
+                    |-> ResponseNode -> MemoryHelperNode -> END
 """
 
 from __future__ import annotations

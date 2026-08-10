@@ -109,60 +109,34 @@ The AI contains **zero business logic**, **zero hardcoded domain rules**, and **
 
 ---
 
-## Graph Architecture — 18 Nodes, 7 Routing Functions
+## Graph Architecture — 19 Nodes (intent-first workflow compiler)
 
-```mermaid
-graph TD
-    START --> RouterNode
-    RouterNode -->|NO_TOOL_NEEDED| ResponseNode
-    RouterNode -->|tool query| SemanticPlannerNode
-    SemanticPlannerNode --> CompilerNode
-    CompilerNode --> OptimizerNode
-    OptimizerNode --> EstimatorNode
-    EstimatorNode --> ValidationNode
-    ValidationNode -->|valid| ApprovalGateNode
-    ValidationNode -->|invalid| ClarificationNode
-    ClarificationNode --> END
-    ApprovalGateNode -->|approved| ExecutorNode
-    ApprovalGateNode -->|rejected| ResponseNode
-    ExecutorNode --> AggregatorNode
-    AggregatorNode --> ReflectionNode
-    ReflectionNode -->|retry| ExecutorNode
-    ReflectionNode -->|finalize| ResponseNode
-    ResponseNode --> MemoryHelperNode
-    MemoryHelperNode --> END
+The authoritative topology (node list, routing functions, node contracts and
+invariants) lives in [`src/nexus/agent/AGENTS.md`](src/nexus/agent/AGENTS.md)
+and is enforced by the contract/ephemeral drift tests
+(`tests/test_node_contracts.py`, `tests/test_ephemeral_fields.py`) and the
+architecture manifest (`src/nexus/agent/architecture.py`, ADR 0008).
+
+High-level flow:
+
+```text
+RouterNode
+  → ResponseNode (conversational) | InteractiveWorkflowNode (workflow)
+  → RequirementCollectorNode (needs requirements) | SemanticPlannerNode (action)
+SemanticPlannerNode → PlanValidatorNode (coverage/alignment/provenance/traceability)
+  → CompilerNode → OptimizerNode → EstimatorNode → ValidationNode
+  → ApprovalGateNode → ExecutorNode → AggregatorNode → ValidatorNode
+  → RecoveryManagerNode → ReflectionNode (retry) | ReplanNode (replan) | ResponseNode
+  → MemoryHelperNode → END
 ```
 
-### Routing Functions (4)
-
-| Function | Source | Branches |
-|----------|--------|----------|
-| `route_after_router` | RouterNode | conversational → ResponseNode; workflow → SemanticPlannerNode |
-| `route_after_validation` | ValidationNode | empty workflow → ResponseNode; valid → ApprovalGateNode; invalid → ClarificationNode |
-| `route_after_approval` | ApprovalGateNode | approved → ExecutorNode; rejected/unapproved → ResponseNode |
-| `route_after_reflection` | ReflectionNode | retry → ExecutorNode (sub-graph); finalize → ResponseNode |
-
-### Node Details
-
-| Node | Dependencies | Behaviour |
-|------|-------------|-----------|
-| `RouterNode` | `llm`, `model` | Two-stage query classifier (heuristic + LLM fallback). Sets `_query_type`, `_preferred_tools` |
-| `SemanticPlannerNode` | `llm`, `model` | Cache-first LLM call → `LogicalWorkflow` JSON with `instructor` `Literal` enforcement. Uses `@context_node` |
-| `CompilerNode` | `db_session` | Deterministic codegen: `CapabilityResolver` + `Compiler.compile()` maps LogicalWorkflow → ExecutionGraph. Uses `@context_node` |
-| `OptimizerNode` | none | PassManager fixpoint optimizer with 6 passes (InputEnrichment, DeadBranch, DepSimplify, BatchFusion, Constraint, Dedup). Uses `@context_node` |
-| `EstimatorNode` | none | Cost/latency estimation from ToolNode metadata. Budget check from settings. Uses `@context_node` |
-| `ValidationNode` | none | Schema/constraint validation. Empty workflow routes to ResponseNode for conversational follow-up |
-| `ClarificationNode` | none | Asks for missing info, ends graph |
-| `ApprovalGateNode` | none | HITL check per tool `risk_level`. Routes rejected execution to ResponseNode |
-| `ExecutorNode` | `tool_executor` | Wave-based concurrent execution with per-domain adaptive concurrency + `execution_key` idempotency |
-| `AggregatorNode` | none | Pure Python ReduceNode execution (sort, group, average, top-k, filter, summary). Uses `@context_node` |
-| `ReflectionNode` | none | Structural graph diffing — builds sub-graph patch for failed tasks, quorum check. Uses `@context_node` |
-| `ResponseNode` | `llm`, `model` | Composes final response from tool results or conversation history (native chat for follow-ups) |
-| `MemoryHelperNode` | none | Persists session artifacts to pgvector long-term memory. Uses `@context_node` |
-| `ApprovalGateNode` | HITL | Reads tool `risk_level`/`requires_approval`. Per-call scope with inputs, expiry |
-| `ExecutorNode` | Execution | Wave-based concurrent tool execution via `ConcurrentExecutor` with placeholder resolution |
-| `ReflectionNode` | Reflection | Checks failures, sets `_routing_decision` to retry/finalize based on `_total_retry_count` |
-| `ResponseNode` | Response | Composes final response from tool results via LLM or returns existing response |
+The pipeline is intent-first and fully metadata-driven: the planner proposes
+a `LogicalWorkflow`, the deterministic validator proves it (coverage +
+capability alignment + provenance + traceability + budget), the compiler
+verifies structure and resolves `RESOLVE(...)` producer chains, the executor
+performs (authorized, idempotent, cancellable, sandboxed), recovery handles
+every failure through the typed state machine, and the response layer only
+claims what artifacts prove — with the deterministic renderer as the floor.
 
 ---
 

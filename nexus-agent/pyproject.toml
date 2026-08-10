@@ -44,6 +44,8 @@ dependencies = [
     "argon2-cffi>=25.1.0",
     "cryptography>=49.0.0",
     "jsonschema>=4.23",
+    "rapidfuzz>=3.6",
+    "rank-bm25>=0.2.2",
 ]
 
 [dependency-groups]
@@ -67,6 +69,7 @@ dev = [
     "pip-audit>=2.7",
     "locust>=2.32",
     "psycopg2-binary>=2.9.12",
+    "duckduckgo-search>=7.0",
 ]
 
 [tool.ruff]

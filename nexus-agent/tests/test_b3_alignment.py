@@ -25,6 +25,8 @@ Adversarial cases (reviewer-specified):
 
 from __future__ import annotations
 
+from tests.helpers import inject_keyword_gc
+
 import asyncio
 
 from nexus.agent.nodes.plan_validator_node import (
@@ -119,43 +121,14 @@ def _node(op: str) -> dict:
     return {"op": op, "inputs": {}, "depends_on": []}
 
 
-def _inject_keyword_gc(monkeypatch, mapping: dict[str, list[str]]) -> None:
-    """Fake GlobalContext mirroring the real shape (the established pattern
-    from test_planner_p0b — keyword map + O(1) keyword index + aliases)."""
-    cap_names = sorted({c for caps in mapping.values() for c in caps})
-    keyword_map = {kw: [c for c in caps if c in cap_names] for kw, caps in mapping.items()}
 
-    class _GC:
-        capability_index = {
-            name: {"produces": [], "consumes": [], "input_required": [], "keywords": []}
-            for name in cap_names
-        }
-        capability_keywords = keyword_map
-        capability_providers = {}
-        alias_index = {}
-
-        def match_capabilities(self, tokens):
-            matched = set()
-            for kw, caps in keyword_map.items():
-                if kw in tokens:
-                    matched.update(caps)
-            return list(matched)
-
-    monkeypatch.setattr(
-        "nexus.agent.nodes.plan_validator_node._gc_mod.get_global_context",
-        lambda: _GC(),
-    )
-    monkeypatch.setattr(
-        "nexus.context.global_context.get_global_context",
-        lambda: _GC(),
-    )
 
 
 from nexus.agent.nodes.plan_validator_node import PlanValidatorNode  # noqa: E402
 
 
 def test_validate_aligned_plan_passes(monkeypatch):
-    _inject_keyword_gc(
+    inject_keyword_gc(
         monkeypatch,
         {"weather": ["get_current_weather"], "pokemon": ["get_pokemon"]},
     )
@@ -177,7 +150,7 @@ def test_validate_aligned_plan_passes(monkeypatch):
 def test_validate_strong_misalignment_blocks(monkeypatch):
     """Case 2/6 integration: the plan's pick for a unit differs from the
     engine's STRONG top → ERROR violation (blocking)."""
-    _inject_keyword_gc(
+    inject_keyword_gc(
         monkeypatch,
         {
             "weather": ["get_current_weather", "weather_pro"],
@@ -205,7 +178,7 @@ def test_validate_weak_signal_never_blocks(monkeypatch):
     """Case 3/6 weak class: correct pick absent from weak engine candidates
     → ambiguous, report stays VALID (scenario-8-class protection). Uses a
     REGISTERED op (get_exchange_rates) with weak close engine scores."""
-    _inject_keyword_gc(
+    inject_keyword_gc(
         monkeypatch,
         {"exchange rate": ["get_exchange_rates"], "usd": ["get_exchange_rates"], "pkr": ["get_exchange_rates"]},
     )
@@ -229,7 +202,7 @@ def test_validate_weak_signal_never_blocks(monkeypatch):
 def test_validate_no_engine_scores_no_alignment_signal(monkeypatch):
     """Without engine scores the verdict is no_signal — the plan proceeds
     exactly as before (backward compatible for direct validate calls)."""
-    _inject_keyword_gc(
+    inject_keyword_gc(
         monkeypatch,
         {"weather": ["get_current_weather", "weather_pro"], "tokyo": ["get_current_weather"]},
     )
@@ -245,7 +218,7 @@ def test_validate_no_engine_scores_no_alignment_signal(monkeypatch):
 def test_validate_unique_weak_top_never_blocks(monkeypatch):
     """Integration for the unique-weak fix: the engine's lone noise hit
     (3.0) must not block a correct pick absent from that set."""
-    _inject_keyword_gc(
+    inject_keyword_gc(
         monkeypatch,
         {"bitcoin": ["get_exchange_rates"], "exchange": ["get_exchange_rates"]},
     )
@@ -266,7 +239,7 @@ def test_validate_unique_weak_top_never_blocks(monkeypatch):
 def test_node_path_gathers_engine_scores(monkeypatch):
     """The async node resolves per-unit engine scores and passes them into
     validate — a strong misalignment surfaces as a REFINE action."""
-    _inject_keyword_gc(
+    inject_keyword_gc(
         monkeypatch,
         {"weather": ["get_current_weather", "weather_pro"], "tokyo": ["get_current_weather"]},
     )

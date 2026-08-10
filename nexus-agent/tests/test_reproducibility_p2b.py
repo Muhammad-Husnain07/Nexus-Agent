@@ -310,8 +310,11 @@ def _migration_columns() -> set[str]:
         / "alembic" / "versions" / "f1a2b3c4d5e6_p2b_reproducibility.py"
     )
     text = src.read_text(encoding="utf-8")
-    block = text.split("_ADDED_COLUMNS = (", 1)[1].split("\n)\n", 1)[0]
-    return set(re.findall(r"\('(\w+)',", block))
+    # Formatting-robust: the _ADDED_COLUMNS tuple runs from its header to
+    # the upgrade() definition; column names are the first string literal
+    # of each inner tuple.
+    block = text.split("_ADDED_COLUMNS = (", 1)[1].split("def upgrade()", 1)[0]
+    return set(re.findall(r"\(\s*[\"'](\w+)[\"']", block))
 
 
 def test_canonical_ref_deterministic_and_drift_sensitive():

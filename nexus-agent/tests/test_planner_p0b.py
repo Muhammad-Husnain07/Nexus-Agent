@@ -12,6 +12,8 @@ Deterministic — no live server, no LLM, no DB.
 
 from __future__ import annotations
 
+from tests.helpers import inject_keyword_gc
+
 import asyncio
 import json
 
@@ -25,36 +27,7 @@ def _node(op: str, **extra) -> dict:
     return n
 
 
-def _inject_keyword_gc(monkeypatch, keywords: dict) -> None:
-    """Fake GlobalContext mirroring the real shape (keyword map keyed by
-    capability name; O(1) keyword index; alias index)."""
-    cap_names = sorted({c for caps in keywords.values() for c in caps})
-    keyword_map = {kw: [c for c in caps if c in cap_names] for kw, caps in keywords.items()}
 
-    class _GC:
-        capability_index = {
-            name: {"produces": [], "consumes": [], "input_required": [], "keywords": []}
-            for name in cap_names
-        }
-        capability_keywords = keyword_map
-        capability_providers = {}
-        alias_index = {}
-
-        def match_capabilities(self, tokens):
-            matched = set()
-            for kw, caps in keyword_map.items():
-                if kw in tokens:
-                    matched.update(caps)
-            return list(matched)
-
-    monkeypatch.setattr(
-        "nexus.agent.nodes.plan_validator_node._gc_mod.get_global_context",
-        lambda: _GC(),
-    )
-    monkeypatch.setattr(
-        "nexus.context.global_context.get_global_context",
-        lambda: _GC(),
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +67,7 @@ class TestB1DetectorConfidence:
 
 class TestB2IntentCoverageEvidence:
     def test_evidence_emitted_per_unit(self, monkeypatch):
-        _inject_keyword_gc(
+        inject_keyword_gc(
             monkeypatch, {"weather": ["get_current_weather"], "pokemon": ["get_pokemon"]}
         )
         nodes = [_node("get_current_weather"), _node("get_pokemon")]
@@ -119,7 +92,7 @@ class TestB2IntentCoverageEvidence:
         assert weather["served"] is True
 
     def test_evidence_marks_unclassifiable_units(self, monkeypatch):
-        _inject_keyword_gc(monkeypatch, {"weather": ["get_current_weather"]})
+        inject_keyword_gc(monkeypatch, {"weather": ["get_current_weather"]})
         nodes = [_node("get_current_weather")]
         report = PlanValidatorNode().validate(
             nodes, user_query="weather in Lahore and what about the book?"
@@ -133,7 +106,7 @@ class TestB2IntentCoverageEvidence:
     def test_evidence_flags_misalignment(self, monkeypatch):
         """A served unit whose pick differs from the engine's STRONG top
         candidate (score-based, B3) is misaligned."""
-        _inject_keyword_gc(
+        inject_keyword_gc(
             monkeypatch,
             {
                 "weather": ["get_current_weather", "get_weather_clone", "weather_pro"],
@@ -186,7 +159,7 @@ class TestB3AlignmentBlocking:
     def test_strong_misalignment_is_blocking(self, monkeypatch):
         """A pick that differs from the engine's STRONG (unique) top is an
         ERROR violation — the bounded refine loop repairs it (B3)."""
-        _inject_keyword_gc(monkeypatch, self._keywords())
+        inject_keyword_gc(monkeypatch, self._keywords())
 
         class _FakeEngine:
             async def resolve(self, query, top_k=None):
@@ -215,7 +188,7 @@ class TestB3AlignmentBlocking:
     def test_weak_signal_is_not_blocking(self, monkeypatch):
         """Close/weak engine scores never block — the historical false
         positive class stays protected."""
-        _inject_keyword_gc(monkeypatch, self._keywords())
+        inject_keyword_gc(monkeypatch, self._keywords())
 
         class _FakeEngine:
             async def resolve(self, query, top_k=None):
@@ -240,7 +213,7 @@ class TestB3AlignmentBlocking:
         assert rec["engine_verdict"] == "ambiguous"
 
     def test_engine_top_pick_is_aligned(self, monkeypatch):
-        _inject_keyword_gc(monkeypatch, self._keywords())
+        inject_keyword_gc(monkeypatch, self._keywords())
         out = asyncio.run(PlanValidatorNode()(self._state("get_current_weather", rounds=5)))
         assert out["_plan_validator_action"] == "proceed"
         report = out["_plan_validator_report"]
@@ -297,7 +270,7 @@ class TestB4RouterBackstop:
         )
 
     def test_conversational_rerouted_when_executable_evidence(self, monkeypatch):
-        _inject_keyword_gc(monkeypatch, {"weather": ["get_current_weather"]})
+        inject_keyword_gc(monkeypatch, {"weather": ["get_current_weather"]})
         self._patch_classifier(monkeypatch, "conversation")
         from nexus.agent.router import node_classify_query
 
@@ -313,7 +286,7 @@ class TestB4RouterBackstop:
         )
 
     def test_pure_greeting_stays_conversational(self, monkeypatch):
-        _inject_keyword_gc(monkeypatch, {"weather": ["get_current_weather"]})
+        inject_keyword_gc(monkeypatch, {"weather": ["get_current_weather"]})
         self._patch_classifier(monkeypatch, "conversation")
         from nexus.agent.router import node_classify_query
 

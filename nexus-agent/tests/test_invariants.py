@@ -4,13 +4,16 @@ Each invariant has one test class. Statuses:
   I1  GREEN (P0-A)   no unresolved RESOLVE crosses compiler -> executor
   I2  GREEN (P0-A)   no unresolved placeholder reaches a tool
   I3  GREEN (P0-A)   executable intent + empty plan + no artifacts != knowledge answer
-  I4  PENDING (P0-B) per-intent coverage evidence
-  I5  PENDING (P0-D) durable operation identity
-  I6  PENDING (P0-D) terminal checkpoint cannot silently resume
-  I7  PENDING (P0-D/P1-A) cache scope enforced before lookup
-  I8  PENDING (P0-C) approval bound to the exact approved operation
+  I4  GREEN (P0-B/B3) per-intent coverage evidence (engine-score alignment)
+  I5  GREEN (P0-D)   durable operation identity
+  I6  GREEN (P0-D)   terminal checkpoint cannot silently resume
+  I7  GREEN (P1-A)   cache scope enforced before lookup
+  I8  GREEN (P0-C)   approval bound to the exact approved operation
   I9  PARTIAL (P0-A) fail-closed prompt resolution; full boundary in P0-B/P2
-  I10 PENDING (P2)   reproducible identity/versions persisted
+  I10 GREEN (P2-B)   reproducible identity/versions persisted
+  I11 GREEN (P0-D/P1-A) invalid plans cannot be cached or executed
+  I12 GREEN (P1-A)   non-idempotent never auto-retried across uncertainty
+  I13 GREEN (P2F)    semantic cache eligibility (validator verdict gates persistence)
 
 Deterministic — no live server, no LLM, no DB.
 """
@@ -357,16 +360,22 @@ class TestInvariantsPending:
         pytest.skip("COVERED BY test_planner_p0b.py::TestB2IntentCoverageEvidence")
 
     def test_i5_durable_operation_identity(self):
-        pytest.skip("PENDING — P0-D (completed_executions ledger)")
+        """I5 (P0-D/D1): covered by tests/test_idempotency_p0d.py — durable
+        operation identity; attempt_id never participates in dedup."""
+        pytest.skip("COVERED BY test_idempotency_p0d.py")
 
     def test_i6_terminal_checkpoint_cannot_resume(self):
-        pytest.skip("PENDING — P0-D (runner terminal-state gate)")
+        """I6 (P0-D/D2): covered by tests/test_terminal_checkpoint_p0d.py —
+        terminal checkpoints never silently resume."""
+        pytest.skip("COVERED BY test_terminal_checkpoint_p0d.py")
 
     def test_i7_cache_scope_enforced_before_lookup(self):
         pytest.skip("COVERED BY test_cache_scope_p1a.py")
 
     def test_i8_approval_bound_to_exact_operation(self):
-        pytest.skip("PENDING — P0-C (approval hash enforcement)")
+        """I8 (P0-C): covered by tests/test_approval_p0c.py — the approval
+        hash binds the grant to the exact operation."""
+        pytest.skip("COVERED BY test_approval_p0c.py")
 
     def test_i10_reproducible_identity_persisted(self):
         """I10 (P2-B): covered by tests/test_reproducibility_p2b.py — the
@@ -383,3 +392,9 @@ class TestInvariantsPending:
         """I12 (P1-A/A0): covered by tests/test_retry_semantics_p1a.py —
         the F7 discovery (non-idempotent transient retry on 500)."""
         pytest.skip("COVERED BY test_retry_semantics_p1a.py")
+
+    def test_i13_semantic_cache_eligibility(self):
+        """I13 (P2F): covered by tests/test_cache_semantic_p2f.py — a plan
+        persists in the parse cache only under the full semantic
+        eligibility contract; REFINE/ABORT/partial plans are removed."""
+        pytest.skip("COVERED BY test_cache_semantic_p2f.py")

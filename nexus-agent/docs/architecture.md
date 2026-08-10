@@ -287,53 +287,48 @@ sequenceDiagram
 
 ---
 
-## Graph Topology — 18 Nodes, 7 Routing Functions
+## Graph Topology — 19 Nodes (intent-first workflow compiler)
 
+The authoritative topology (node list, routing functions, node contracts
+and invariants) is maintained in
+[`src/nexus/agent/AGENTS.md`](../src/nexus/agent/AGENTS.md) and enforced by
+the contract/ephemeral drift tests (`tests/test_node_contracts.py`,
+`tests/test_ephemeral_fields.py`) plus the architecture manifest
+(`src/nexus/agent/architecture.py`, ADR 0008 — the single cache-key
+fingerprint). The module docstring of `src/nexus/agent/graph.py` carries
+the same pipeline.
+
+High-level flow:
+
+```text
+RouterNode
+  → ResponseNode (conversational) | InteractiveWorkflowNode (workflow)
+  → RequirementCollectorNode (needs requirements) | SemanticPlannerNode (action)
+SemanticPlannerNode → PlanValidatorNode (coverage/alignment/provenance/traceability/budget)
+  → CompilerNode → OptimizerNode → EstimatorNode → ValidationNode
+  → ApprovalGateNode → ExecutorNode → AggregatorNode → ValidatorNode
+  → RecoveryManagerNode → ReflectionNode (retry) | ReplanNode (replan) | ResponseNode
+  → MemoryHelperNode → END
 ```
-START → RouterNode
-  │
-  ├── NO_TOOL_NEEDED → ResponseNode → END
-  │
-  └── SemanticParserNode → GoalExpanderNode → CapabilityResolverNode
-        │                                            │
-        │                          ┌─── candidate found → DependencyResolverNode
-        │                          │                         │
-        │                          │            ┌── ExtractionNode → NormalizationNode
-        │                          │            │   → ContextMergeNode → ValidationNode
-        │                          │            │                         │
-        │                          │            │        ┌── _ready_to_plan + no ops
-        │                          │            │        │   → CapabilityResolverNode (LOOP)
-        │                          │            │        │
-        │                          │            │        └── _ready_to_plan + has ops
-        │                          │            │            → END (skip re-resolution)
-        │                          │            │
-        │                          │            └── TaskGraphBuilderNode → GraphOptimizerNode
-        │                          │                             → PlanValidatorNode
-        │                          │                ┌── clarify → ClarificationNode → END
-        │                          │                │
-        │                          │                └── ApprovalGateNode
-        │                          │                     │
-        │                          │         ┌── rejected → ResponseNode → END
-        │                          │         │
-        │                          │         └── ExecutorNode
-        │                          │              │
-        │                          │   ┌── all_ok → ResponseNode → END
-        │                          │   │
-        │                          │   └── ReflectionNode
-        │                          │        │
-        │                          │  ┌── retry → PlannerNode → ...
-        │                          │  │          (loop if retries remain)
-        │                          │  │
-        │                          │  └── finalize → ResponseNode → END
-        │                          │
-        └── no candidate → PlannerNode → PlanValidatorNode → ...
-```
+
+The pipeline is intent-first and fully metadata-driven: the planner proposes
+a `LogicalWorkflow`, the deterministic validator proves it, the compiler
+verifies structure (including `RESOLVE(...)` producer-chain synthesis), the
+executor performs (authorized, idempotent, cancellable, sandboxed with SSRF
+hardening), recovery handles every failure through the typed state machine,
+the response layer only claims what artifacts prove (with the deterministic
+renderer as the floor), and memory persists with provenance — never failed
+responses.
 
 ---
 
 ## Security Model
 
-No authentication — all requests are treated as the default user (passthrough).
+Authentication is a verified-identity passthrough (P0-C): the auth middleware
+injects a default identity, and the executor's authorization gate enforces
+capability `allowed_roles` against the caller's roles. Tenant isolation is
+enforced via `src/nexus/security/ownership.py`; secrets are resolved through
+`SecretResolver` (`env:VAR_NAME` / `vault:path` / `literal:value` refs).
 
 ### No Python Code Execution
 

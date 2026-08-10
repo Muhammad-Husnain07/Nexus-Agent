@@ -310,7 +310,7 @@ def test_p2c_model_and_migration_column_parity():
         assert re.search(rf"{column}: Mapped", model_src), (
             f"{table}.{column} missing from model"
         )
-        assert re.search(rf"'{column}'", migration), (
+        assert re.search(rf"[\"']{column}[\"']", migration), (
             f"{table}.{column} missing from migration"
         )
     # migration is reversible — downgrade drops exactly the same columns
