@@ -743,6 +743,120 @@ def _has_schema_invalid_nodes(nodes: list[Any]) -> bool:
     return False
 
 
+def _coverage_uncovered_candidates(
+    snapshot: dict[str, Any], valid_ops: list[str]
+) -> list[str]:
+    """F8-B: deterministic candidate capability names for UNCOVERED intents.
+
+    The planner's ``valid_ops`` scope is built from whole-QUERY resolution,
+    which can return too few candidates (the F8 mechanism: the query-level
+    engine scored only the first of two parallel intents, so the instructor
+    ``Literal[valid_ops]`` structurally barred the second capability). The
+    VALIDATOR's per-UNIT resolution (intent_coverage_evidence) knows the
+    correct candidates — this returns them so the replan can widen the
+    structural scope.
+
+    Safety: every returned name is (a) engine-computed by the validator's
+    coverage evidence (never LLM-generated), and (b) verified to exist in
+    the GlobalContext capability index (a registered capability).
+    Deterministic, deduplicated, sorted.
+    """
+    if not valid_ops:
+        return []
+    errors = snapshot.get("_plan_validator_errors") or []
+    if not any("intent coverage" in str(e) for e in errors):
+        return []
+    _report = snapshot.get("_plan_validator_report") or {}
+    if not isinstance(_report, dict):
+        return []
+    evidence = (_report.get("metrics") or {}).get("intent_coverage_evidence")
+    if not isinstance(evidence, list) or not evidence:
+        return []
+    found: set[str] = set()
+    for rec in evidence:
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("served") is not False:
+            continue
+        if rec.get("negated") is True or rec.get("classifiable") is not True:
+            continue
+        for c in rec.get("candidates") or []:
+            if not isinstance(c, str) or not c:
+                continue
+            try:
+                from nexus.agent.nodes.plan_validator_node import _capability_meta  # noqa: PLC0415
+
+                if not _capability_meta(c):
+                    continue  # not a registered capability — never inject
+            except Exception:
+                continue
+            found.add(c)
+    return sorted(found)
+
+
+def _coverage_evidence_feedback(
+    snapshot: dict[str, Any], valid_ops: list[str]
+) -> str | None:
+    """F8-B: deterministic capability candidates for UNCOVERED intents.
+
+    Returns a structured prompt block (or ``None`` when nothing is
+    actionable): for every classifiable, non-negated executable intent the
+    validator marked unserved, list its engine-computed candidate
+    capabilities (NAMES ONLY — never scores, never ranking internals,
+    never LLM-generated capabilities). The evidence is produced by the
+    deterministic validator's own coverage computation and filtered to
+    ``valid_ops`` before injection.
+
+    The planner still decides WHAT operation to construct — this only
+    informs the repair so the model does not have to independently
+    rediscover capability resolution from natural language (the F8
+    failure mode). First-pass planning is untouched: this runs only on
+    the replan path after an intent-coverage rejection.
+    """
+    if not valid_ops:
+        return None
+    errors = snapshot.get("_plan_validator_errors") or []
+    if not any("intent coverage" in str(e) for e in errors):
+        return None
+    _report = snapshot.get("_plan_validator_report") or {}
+    if not isinstance(_report, dict):
+        return None
+    evidence = (_report.get("metrics") or {}).get("intent_coverage_evidence")
+    if not isinstance(evidence, list) or not evidence:
+        return None
+    lines: list[str] = []
+    for rec in evidence:
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("served") is not False:
+            continue  # covered intents need no candidate feedback
+        if rec.get("negated") is True or rec.get("classifiable") is not True:
+            continue  # negative/unclassifiable intents are never planned
+        unit = str(rec.get("unit") or "").strip()
+        candidates = sorted({
+            c for c in (rec.get("candidates") or [])
+            if isinstance(c, str) and c in valid_ops
+        })
+        if not candidates:
+            continue
+        lines.append(
+            f'UNCOVERED INTENT: "{unit}"\n'
+            "DETERMINISTIC CAPABILITY CANDIDATES (registered capabilities only):\n"
+            + "\n".join(f"  - {c}" for c in candidates)
+        )
+    if not lines:
+        return None
+    return (
+        "UNCOVERED INTENTS REQUIRE OPERATIONS\n"
+        + "\n\n".join(lines)
+        + "\n\nREQUIREMENT: create an operation for EACH uncovered intent using one "
+        "of its deterministic candidate capabilities. Do not assign a capability "
+        "that is not among an intent's candidates, and do not reuse a capability "
+        "already assigned to another intent unless it is semantically correct for "
+        "that intent."
+    )
+
+
 async def _repair_ops(
     llm: LLMClient,
     model: str,
@@ -994,6 +1108,31 @@ async def semantic_parser_node(
     if feedback_items:
         note = "Previous plan was rejected:\n  - " + "\n  - ".join(feedback_items)
         capabilities = (capabilities + "\n\n" + note) if capabilities else note
+
+    # F8-B EVIDENCE-DIRECTED REPAIR: an intent-coverage rejection means the
+    # LLM extraction dropped or mis-resolved an intent. Two effects, both
+    # deterministic and evidence-only:
+    #
+    # 1. STRUCTURAL SCOPE WIDENING: valid_ops (the instructor Literal) is
+    #    built from whole-query resolution, which can bar the uncovered
+    #    intent's capabilities outright (F8: query-level resolution scored
+    #    only the first of two parallel intents). The validator's per-unit
+    #    candidates widen the scope so the model is STRUCTURALLY ABLE to
+    #    plan them. The planner still decides what to construct.
+    # 2. PROMPT EVIDENCE: the candidates are surfaced in the replan note so
+    #    the model knows exactly which capabilities may serve each uncovered
+    #    intent — no scores, no ranking internals, no extra LLM call.
+    uncovered_cands = _coverage_uncovered_candidates(snapshot, valid_ops)
+    if uncovered_cands:
+        valid_ops = list(dict.fromkeys([*valid_ops, *uncovered_cands]))
+    coverage_note = _coverage_evidence_feedback(snapshot, valid_ops)
+    if coverage_note:
+        logger.info(
+            "semantic_planner.coverage_evidence_injected",
+            chars=len(coverage_note),
+            scope_added=len(uncovered_cands),
+        )
+        capabilities = (capabilities + "\n\n" + coverage_note) if capabilities else coverage_note
 
     # P4-4 ADAPTIVE INTENT DECOMPOSITION: the Tier-2 LLM decomposer runs
     # ONLY on (a) low Tier-1 confidence (ambiguous single long clause) or
