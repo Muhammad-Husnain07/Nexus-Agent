@@ -6,7 +6,7 @@ import uuid
 from typing import Annotated
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -58,21 +58,30 @@ ServiceDep = Annotated[SessionService, Depends(get_session_service)]
 async def create_session(
     data: SessionCreate,
     service: ServiceDep,
+    request: Request,
 ) -> SessionRead:
-    return await service.create_session(data=data)
+    # C3/P0-C: sessions are stamped with the verified identity.
+    from nexus.security.ownership import identity_from_request  # noqa: PLC0415
+
+    return await service.create_session(data=data, user_id=identity_from_request(request).user_id)
 
 
 @router.get("", response_model=SessionList)
 async def list_sessions(
     service: ServiceDep,
+    request: Request,
     status: str | None = Query(None, description="Filter by status (active, archived)"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
 ) -> SessionList:
+    # C3/P0-C: only the caller's sessions (plus legacy NULL-owner rows).
+    from nexus.security.ownership import identity_from_request  # noqa: PLC0415
+
     return await service.list_sessions(
         status=status,
         page=page,
         page_size=page_size,
+        owner_id=identity_from_request(request).user_id,
     )
 
 
@@ -80,7 +89,9 @@ async def list_sessions(
 async def get_session(
     session_id: uuid.UUID,
     service: ServiceDep,
+    request: Request,
 ) -> SessionRead:
+    await require_owned(request, session_id)
     session = await service.get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -92,7 +103,9 @@ async def update_session(
     session_id: uuid.UUID,
     data: SessionUpdate,
     service: ServiceDep,
+    request: Request,
 ) -> SessionRead:
+    await require_owned(request, session_id)
     session = await service.update_session(session_id, data)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -106,7 +119,9 @@ async def update_session(
 async def archive_session(
     session_id: uuid.UUID,
     service: ServiceDep,
+    request: Request,
 ) -> None:
+    await require_owned(request, session_id)
     session = await service.archive_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -117,7 +132,9 @@ async def fork_session(
     session_id: uuid.UUID,
     data: ForkRequest,
     service: ServiceDep,
+    request: Request,
 ) -> SessionRead:
+    await require_owned(request, session_id)
     try:
         session = await service.fork_session(
             session_id=session_id,
@@ -135,7 +152,9 @@ async def fork_session(
 async def rename_session(
     session_id: uuid.UUID,
     service: ServiceDep,
+    request: Request,
 ) -> SessionRead:
+    await require_owned(request, session_id)
     session = await service.rename_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -146,11 +165,13 @@ async def rename_session(
 async def get_messages(
     session_id: uuid.UUID,
     service: ServiceDep,
+    request: Request,
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(50, ge=1, le=200, description="Items per page"),
     before_id: uuid.UUID | None = Query(None, description="Get messages before this ID"),
     after_id: uuid.UUID | None = Query(None, description="Get messages after this ID"),
 ) -> MessageList:
+    await require_owned(request, session_id)
     return await service.get_messages(
         session_id=session_id,
         page=page,
@@ -165,5 +186,15 @@ async def add_message(
     session_id: uuid.UUID,
     data: MessageCreate,
     service: ServiceDep,
+    request: Request,
 ) -> MessageRead:
+    await require_owned(request, session_id)
     return await service.add_message(session_id, data)
+
+
+async def require_owned(request: Request, session_id: uuid.UUID) -> None:
+    """C3/P0-C ownership gate for session-scoped endpoints."""
+    from nexus.security.ownership import require_session_access  # noqa: PLC0415
+
+    await require_session_access(request, session_id)
+

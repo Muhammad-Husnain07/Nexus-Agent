@@ -24,6 +24,12 @@ class Memory(Base):
         nullable=True,
         comment="Optional originating session",
     )
+    user_id: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+        default=None,
+        comment="Owning identity (C3/P0-C tenant isolation; NULL = legacy row)",
+    )
     kind: Mapped[str] = mapped_column(
         String(50),
         nullable=False,

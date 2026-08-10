@@ -261,6 +261,28 @@ def _heuristic_classify(
 from nexus.agent.planners.dependency_analysis import has_schema_dependency as _has_schema_dependency
 
 
+def _router_backstop_units(query: str) -> list[str]:
+    """Deterministic executable-intent evidence for the router backstop.
+
+    Pure-syntax detection (IntentDetector) plus the registry-driven
+    unit→capability bridge — metadata only, zero hardcoded domain logic.
+    Returns the classifiable, non-negated unit texts; an empty list means
+    the classifier's conversational/information decision stands.
+    """
+    try:
+        from nexus.agent.planners.intent_detector import IntentDetector, unit_candidates
+        from nexus.context.global_context import get_global_context
+
+        detected = IntentDetector().detect(query)
+        gc = get_global_context()
+        return [
+            u.text for u in detected.units
+            if not u.negated and unit_candidates(u, gc)
+        ]
+    except Exception:
+        return []
+
+
 # ============================================================================
 # LLM Classification (Stage 2 — for ambiguous cases)
 # ============================================================================
@@ -354,6 +376,16 @@ async def node_classify_query(
     resolution = await get_resolution_engine().resolve(last_user, top_k=15)
     tool_names = [c.name for c in resolution.capability_candidates]
 
+    # A1/P1-A: the router's LLM classification draws from the invocation
+    # ReasoningBudget (reserve-before-start); the ledger flows back.
+    _router_budget = None
+    try:
+        from nexus.agent.budget import budget_from_state
+
+        _router_budget = budget_from_state(state)
+    except Exception:
+        _router_budget = None
+
     goals = await classify_query(
         query=last_user,
         history=messages,
@@ -361,10 +393,30 @@ async def node_classify_query(
         llm=llm,
         model=model,
         has_workflow_candidates=resolution.has_workflow_candidates,
+        budget=_router_budget,
     )
+
+    # ROUTER BACKSTOP (B4/P0-B): classification must not have absolute
+    # authority over DETERMINISTIC executable evidence. When the classifier
+    # said conversation/information but the request decomposes into intent
+    # units with registry-backed capability candidates, reroute to the
+    # planner — which validates before any execution. The detector stays
+    # pure syntax; the bridge is the metadata-driven keyword/alias/name
+    # index (zero hardcoded domain logic).
+    if goals.primary in (ExecutionGoal.CONVERSATION, ExecutionGoal.INFORMATION):
+        _evidence = _router_backstop_units(last_user)
+        if _evidence:
+            logger.info(
+                "router.backstop_rerouted",
+                query=last_user[:60],
+                units=_evidence,
+            )
+            goals = ExecutionGoals(goals=(ExecutionGoal.ACTION,))
 
     result: dict[str, Any] = goals.to_state()
     result["response_type"] = _response_type_for(goals)
+    if _router_budget is not None:
+        result["_invocation_budget"] = _router_budget.to_dict()
 
     # Domain-first narrowing: a deterministic domain hint from the query is
     # threaded into state so the planner's catalog/Literal is filtered to
@@ -458,6 +510,7 @@ async def classify_query(
     llm: LLMClient | None = None,
     model: str | None = None,
     has_workflow_candidates: bool | None = None,
+    budget: Any = None,
 ) -> ExecutionGoals:
     """Classify a user query into an ``ExecutionGoals`` set.
 
@@ -475,6 +528,8 @@ async def classify_query(
         llm: LLM client for stage 2.
         model: Model identifier.
         has_workflow_candidates: Engine fact — a workflow template matched.
+        budget: A1/P1-A — the invocation ReasoningBudget (consumed before
+            the LLM call; None = unbudgeted).
     """
     # Stage 0: workflow-template fact (the engine already matched templates —
     # the router never re-runs template matching itself).
@@ -506,7 +561,14 @@ async def classify_query(
 
     # Stage 2: LLM fallback
     if llm is not None and model is not None:
-        llm_result = await _llm_classify(query, tool_names_list, llm, model)
+        # A1/P1-A RESERVE-BEFORE-START: the router's LLM call draws from
+        # the invocation budget BEFORE it begins; exhausted → the safe
+        # heuristic default (never a silent overspend).
+        if budget is None or budget.consume("llm_calls"):
+            llm_result = await _llm_classify(query, tool_names_list, llm, model)
+        else:
+            logger.warning("router.llm_budget_exhausted", query=query[:50])
+            llm_result = ExecutionGoals(goals=(ExecutionGoal.ACTION,))
         logger.info(
             "router.llm_classified",
             query=query[:50],

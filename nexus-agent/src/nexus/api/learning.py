@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import select
 
 from nexus.db.base import get_session_factory
@@ -28,6 +28,7 @@ router = APIRouter(prefix="/learning", tags=["learning"])
 
 @router.get("/workflows")
 async def find_successful_workflows(
+    request: Request,
     intent: str = Query("", description="Intent pattern to match"),
     days_back: int = Query(30, ge=1, le=365, description="Max days of history"),
     top_k: int = Query(5, ge=1, le=50, description="Max workflows to return"),
@@ -36,13 +37,18 @@ async def find_successful_workflows(
 
     Searches ``InvocationOutcome`` records where ``success=True`` and
     ``outcome_version=2`` (post-Phase 6). Ordered by lowest cost + latency.
+
+    C3/P0-C: results are scoped to the caller's sessions.
     """
+    from nexus.security.ownership import accessible_session_ids  # noqa: PLC0415
+
+    owned_ids = await accessible_session_ids(request)
     if not intent:
         return []
 
     since = datetime.now(UTC) - timedelta(days=days_back)
     async with get_session_factory()() as session:
-        result = await session.execute(
+        stmt = (
             select(InvocationOutcome)
             .where(
                 InvocationOutcome.success == True,
@@ -55,6 +61,11 @@ async def find_successful_workflows(
             )
             .limit(top_k)
         )
+        if owned_ids:
+            stmt = stmt.where(InvocationOutcome.session_id.in_(owned_ids))
+        else:
+            stmt = stmt.where(InvocationOutcome.session_id.is_(None))
+        result = await session.execute(stmt)
         outcomes = result.scalars().all()
 
     workflows: list[dict[str, Any]] = []

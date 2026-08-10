@@ -30,11 +30,58 @@ async def handle_websocket(websocket: WebSocket) -> None:
 
     The client sends JSON messages and receives a stream of ``AgentEvent``
     dicts.
+
+    C3/P0-C: the connection is authenticated BEFORE ``accept()`` and the
+    requested session must belong to the verified identity.
     """
-    await websocket.accept()
+    from nexus.config.settings import get_settings  # noqa: PLC0415
+    from nexus.providers.auth import get_auth_provider  # noqa: PLC0415
+    from nexus.security.ownership import session_owner_ok  # noqa: PLC0415
+
+    _ws_settings = get_settings()
     session_id = websocket.path_params.get("session_id", str(uuid.uuid4()))
     sid = str(session_id)
 
+    # 1. AUTHENTICATE before accepting — a rejected handshake never
+    # establishes a connection.
+    provider = get_auth_provider()
+    headers = {k.lower(): v for k, v in websocket.headers.items()}
+    _token = websocket.query_params.get("token")
+    if _token and "authorization" not in headers:
+        headers["authorization"] = f"Bearer {_token}"
+    identity = None
+    try:
+        identity = await provider.authenticate(headers)
+    except Exception as exc:
+        logger.warning("websocket.auth_error", session_id=sid, error=str(exc)[:200])
+    if identity is None and _ws_settings.auth.mode != "none":
+        logger.info("websocket.auth_rejected", session_id=sid)
+        await websocket.close(code=4401)
+        return
+
+    # 2. Session ownership (create-on-demand, stamped with the identity).
+    from nexus.db.base import async_session as _ws_db  # noqa: PLC0415
+    from nexus.sessions.repository import SessionRepository  # noqa: PLC0415
+
+    try:
+        async with _ws_db() as db_session:
+            repo = SessionRepository(db_session)
+            existing = await repo.get(uuid.UUID(sid))
+            if existing is None:
+                await repo.create(
+                    id=uuid.UUID(sid),
+                    title="WebSocket session",
+                    user_id=identity.user_id if identity else "anonymous",
+                )
+                await db_session.commit()
+            elif identity is None or not session_owner_ok(identity, existing):
+                logger.info("websocket.ownership_rejected", session_id=sid)
+                await websocket.close(code=4403)
+                return
+    except Exception as exc:
+        logger.warning("websocket.session_check_failed", session_id=sid, error=str(exc)[:200])
+
+    await websocket.accept()
     logger.info("websocket.connected", session_id=sid)
 
     redis_client = get_redis_client()
@@ -87,10 +134,11 @@ async def handle_websocket(websocket: WebSocket) -> None:
 
     async def _run_agent(message: str) -> None:
         try:
+            user_context = identity.to_dict() if identity is not None else None
             async for agent_event in runner.invoke(
                 session_id=sid,
                 user_message=message,
-
+                user_context=user_context,
             ):
                 if not connected:
                     return

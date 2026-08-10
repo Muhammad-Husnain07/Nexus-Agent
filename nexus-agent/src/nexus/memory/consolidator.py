@@ -147,7 +147,7 @@ class MemoryConsolidator:
         """
         async with async_session() as session:
             result = await session.execute(
-                text("SELECT id, content, kind, importance, embedding FROM memory "
+                text("SELECT id, content, kind, importance, embedding, session_id FROM memory "
                      "WHERE (status = 'active' OR status IS NULL) AND embedding IS NOT NULL "
                      "ORDER BY importance DESC LIMIT 500")
             )
@@ -203,8 +203,13 @@ class MemoryConsolidator:
             return
 
         max_importance = max(m["importance"] for m in cluster)
+        # A3/P1-A: consolidation stays SESSION-SCOPED — the merged fact
+        # inherits the cluster's dominant originating session; global
+        # (session-less) facts are never written.
+        _sessions = [m.get("session_id") for m in cluster if m.get("session_id")]
+        _merge_session = max(set(_sessions), key=_sessions.count) if _sessions else None
         consolidated_id = await self._manager._dedup_and_store(
-            session_id="",
+            session_id=_merge_session or "",
             kind="semantic",
             content=consolidated_content,
             importance=min(1.0, max_importance + 0.05),
@@ -229,11 +234,11 @@ class MemoryConsolidator:
         """Promote high-importance episodic memories to semantic facts."""
         async with async_session() as session:
             result = await session.execute(
-                text("SELECT id, content FROM memory WHERE kind = 'episodic' AND "
+                text("SELECT id, content, session_id FROM memory WHERE kind = 'episodic' AND "
                      "importance >= 0.7 AND (status = 'active' OR status IS NULL) "
                      "LIMIT 50")
             )
-            episodes = [{"id": str(r[0]), "content": r[1]} for r in result.all()]
+            episodes = [{"id": str(r[0]), "content": r[1], "session_id": str(r[2]) if r[2] else None} for r in result.all()]
 
         if len(episodes) < 2:
             return 0
@@ -258,8 +263,14 @@ class MemoryConsolidator:
         promoted = 0
         for fact in facts:
             if isinstance(fact, str) and fact.strip():
+                # A3/P1-A: promoted facts inherit the originating episode's
+                # session (never written globally).
+                _sessions = [e.get("session_id") for e in episodes if e.get("session_id")]
+                _promote_session = (
+                    max(set(_sessions), key=_sessions.count) if _sessions else None
+                )
                 await self._manager._dedup_and_store(
-                    session_id="",
+                    session_id=_promote_session or "",
                     kind="semantic",
                     content=fact.strip(),
                     importance=0.6,
@@ -395,3 +406,4 @@ class MemoryConsolidator:
         if norm_a == 0 or norm_b == 0:
             return 0.0
         return dot / (norm_a * norm_b)
+

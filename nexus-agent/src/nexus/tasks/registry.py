@@ -156,6 +156,113 @@ class TaskRegistry:
             progress=task.get("progress", 0),
         )
 
+    async def claim_lease(self, task_id: str, worker_id: str, lease_s: int = 60) -> bool:
+        """D5/P0-D: atomically claim the DB lease for a task.
+
+        Returns True only when THIS worker won the lease (no live lease or
+        an expired one). A live lease held by another worker → False — the
+        task is being executed elsewhere and must not run again.
+        """
+        from datetime import UTC, datetime, timedelta  # noqa: PLC0415
+
+        try:
+            tid = uuid.UUID(task_id)
+        except (ValueError, TypeError):
+            return False
+        now = datetime.now(UTC)
+        expires = now + timedelta(seconds=lease_s)
+        try:
+            async with _async_session() as sess:
+                result = await sess.execute(
+                    update(Task)
+                    .where(
+                        Task.id == tid,
+                        Task.cancel_requested.is_(False),
+                        (
+                            (Task.lease_expires_at.is_(None))
+                            | (Task.lease_expires_at < now)
+                        ),
+                    )
+                    .values(
+                        worker_id=worker_id,
+                        lease_expires_at=expires,
+                        started_at=now,
+                    )
+                    .returning(Task.id)
+                )
+                won = result.scalar_one_or_none() is not None
+                await sess.commit()
+                return won
+        except Exception as exc:
+            logger.warning("task.lease_claim_failed", task_id=task_id, error=str(exc)[:200])
+            return False
+
+    async def heartbeat(self, task_id: str, worker_id: str, lease_s: int = 60) -> None:
+        """D5/P0-D: refresh the lease while executing (crash → expiry →
+        safe reclaim)."""
+        from datetime import UTC, datetime, timedelta  # noqa: PLC0415
+
+        try:
+            tid = uuid.UUID(task_id)
+        except (ValueError, TypeError):
+            return
+        try:
+            async with _async_session() as sess:
+                await sess.execute(
+                    update(Task)
+                    .where(Task.id == tid, Task.worker_id == worker_id)
+                    .values(
+                        lease_expires_at=(
+                            datetime.now(UTC) + timedelta(seconds=lease_s)
+                        )
+                    )
+                )
+                await sess.commit()
+        except Exception as exc:
+            logger.warning("task.lease_heartbeat_failed", task_id=task_id, error=str(exc)[:200])
+
+    async def release_lease(self, task_id: str, worker_id: str) -> None:
+        """D5/P0-D: release the lease on completion/failure — the row is
+        immediately reclaimable and the original worker can never commit
+        after losing its lease (all writes are lease-scoped)."""
+        try:
+            tid = uuid.UUID(task_id)
+        except (ValueError, TypeError):
+            return
+        try:
+            async with _async_session() as sess:
+                await sess.execute(
+                    update(Task)
+                    .where(Task.id == tid, Task.worker_id == worker_id)
+                    .values(worker_id=None, lease_expires_at=None)
+                )
+                await sess.commit()
+        except Exception as exc:
+            logger.warning("task.lease_release_failed", task_id=task_id, error=str(exc)[:200])
+
+    async def register_attempt(self, task_id: str) -> bool:
+        """D5/P0-D: increment attempts; True while retries remain, False
+        when max_attempts is exhausted (terminal failure)."""
+        from sqlalchemy import select as _select  # noqa: PLC0415
+
+        try:
+            tid = uuid.UUID(task_id)
+        except (ValueError, TypeError):
+            return False
+        try:
+            async with _async_session() as sess:
+                row = (await sess.execute(
+                    _select(Task).where(Task.id == tid)
+                )).scalar_one_or_none()
+                if row is None:
+                    return False
+                row.attempts = (row.attempts or 0) + 1
+                await sess.commit()
+                return (row.attempts or 0) < (row.max_attempts or 1)
+        except Exception as exc:
+            logger.warning("task.attempt_failed", task_id=task_id, error=str(exc)[:200])
+            return False
+
     async def request_cancel(self, task_id: str) -> dict[str, Any] | None:
         """Set the cancellation flag — the worker checks it between steps."""
         try:

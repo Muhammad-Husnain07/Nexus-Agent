@@ -16,7 +16,7 @@ import uuid
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
@@ -375,10 +375,17 @@ async def delete_workflow(workflow_id: str) -> None:
 @router.get("/{workflow_id}/instances")
 async def list_workflow_instances(
     workflow_id: str,
+    request: Request,
     status: str | None = Query(default=None, description="Filter by status"),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> dict[str, Any]:
-    """List execution instances of a workflow definition."""
+    """List execution instances of a workflow definition.
+
+    C3/P0-C: instances are scoped to the caller's sessions.
+    """
+    from nexus.security.ownership import accessible_session_ids  # noqa: PLC0415
+
+    owned_ids = await accessible_session_ids(request)
     async with _session_factory() as session:
         await _get_workflow(session, workflow_id)
         stmt = (
@@ -386,6 +393,10 @@ async def list_workflow_instances(
             .where(WorkflowInstance.definition_id == uuid.UUID(workflow_id))
             .order_by(WorkflowInstance.created_at.desc())
         )
+        if owned_ids:
+            stmt = stmt.where(WorkflowInstance.session_id.in_(owned_ids))
+        else:
+            stmt = stmt.where(WorkflowInstance.session_id.is_(None))
         if status:
             stmt = stmt.where(WorkflowInstance.status == status)  # noqa: E712
         result = await session.execute(stmt.limit(limit))

@@ -47,8 +47,13 @@ class _McpRetryPredicate:
         return isinstance(exc, (httpx.TimeoutException, httpx.TransportError))
 
 
-def _mcp_retry_policy() -> AsyncRetrying:
+def _mcp_retry_policy(max_attempts: int | None = None) -> AsyncRetrying:
     attempts, base_s, max_s = _get_mcp_retry_settings()
+    # F7/P1-A (I12): a NON-idempotent MCP tool call is never automatically
+    # retried — a transport failure after the request was sent may mean the
+    # side effect already fired; retrying duplicates it.
+    if max_attempts is not None and max_attempts < 2:
+        attempts = 1
     return AsyncRetrying(
         stop=stop_after_attempt(attempts),
         wait=wait_exponential(multiplier=1, min=base_s, max=max_s)
@@ -128,6 +133,7 @@ class MCPClient:
         tool_name: str,
         arguments: dict[str, Any],
         headers: dict[str, str] | None = None,
+        idempotent: bool = False,
     ) -> ToolResult:
         """Execute a tool on an external MCP server.
 
@@ -138,6 +144,9 @@ class MCPClient:
             tool_name: Name of the tool to invoke.
             arguments: Input parameters for the tool.
             headers: Optional HTTP headers (e.g. auth tokens).
+            idempotent: F7/P1-A (I12) — False (default) disables the
+                automatic transport retry: a non-idempotent operation is
+                never retried across outcome uncertainty.
 
         Returns:
             A ``ToolResult`` summarising the execution outcome.
@@ -157,7 +166,9 @@ class MCPClient:
         }
 
         try:
-            response = await self._request(server_url, payload, headers=headers)
+            response = await self._request(
+                server_url, payload, headers=headers, idempotent=idempotent
+            )
         except httpx.TimeoutException:
             duration_ms = int((time.perf_counter() - start) * 1000)
             return ToolResult(
@@ -217,13 +228,19 @@ class MCPClient:
         server_url: str,
         payload: dict[str, Any],
         headers: dict[str, str] | None = None,
+        idempotent: bool = False,
     ) -> httpx.Response:
-        """Send a JSON-RPC request to the MCP server with retry."""
+        """Send a JSON-RPC request to the MCP server with retry.
+
+        F7/P1-A (I12): ``idempotent=False`` (the default) disables the
+        automatic retry — a non-idempotent operation is never retried
+        across outcome uncertainty.
+        """
         req_headers = {"Content-Type": "application/json"}
         if headers:
             req_headers.update(headers)
 
-        retry_policy = _mcp_retry_policy()
+        retry_policy = _mcp_retry_policy(max_attempts=1 if not idempotent else None)
         response: httpx.Response | None = None
 
         try:

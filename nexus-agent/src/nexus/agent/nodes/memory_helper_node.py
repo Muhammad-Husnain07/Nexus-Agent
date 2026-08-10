@@ -96,17 +96,29 @@ async def memory_helper_node(ctx: ExecutionContext, llm: Any, model: str) -> Sta
     session_id = snapshot.get("session_id", "")
 
     # C8 — memory gating: skip LLM-based extraction when nothing executable
-    # happened this turn (no tools, no artifacts, no execution errors).
+    # happened this turn. A3/P1-A: extraction is SUCCESS-ONLY — an
+    # error-only turn (failed tools, no successful output) must never be
+    # summarized into long-term memory as if it were learned knowledge.
+    # The success signal is the ARTIFACT GRAPH (every successful execution
+    # registers an artifact; ``tool_results`` is stripped from the
+    # @context_node snapshot, so it cannot be the source of truth here).
     tool_results = snapshot.get("tool_results") or []
-    has_tool_work = bool(tool_results) or bool(snapshot.get("errors"))
+    _successful_tools = [
+        r for r in tool_results
+        if isinstance(r, dict) and r.get("status") == "success"
+    ]
+    from nexus.artifacts.graph import get_artifact_graph as _get_ag
+
+    _artifacts = _get_ag(str(session_id)).all()
+    has_tool_work = bool(_successful_tools) or bool(_artifacts)
     if not has_tool_work:
         logger.info(
-            "memory_helper.skipped_no_tool_work",
+            "memory_helper.skipped_no_successful_tool_work",
             session_id=str(session_id),
         )
         return StatePatch(
             version=ctx.version + 1,
-            updates={"_memory_persisted": {"session_id": session_id, "stored_memory_ids": [], "skipped": "no_tool_work"}},
+            updates={"_memory_persisted": {"session_id": session_id, "stored_memory_ids": [], "skipped": "no_successful_tool_work"}},
         )
 
     # Build agent_state dict for MemoryManager
@@ -157,6 +169,7 @@ async def memory_helper_node(ctx: ExecutionContext, llm: Any, model: str) -> Sta
             session_id=session_id,
             agent_run_id=None,
             agent_state=agent_state,
+            invocation_id=snapshot.get("_invocation_id"),
         )
         logger.info(
             "memory_helper.stored_via_manager",

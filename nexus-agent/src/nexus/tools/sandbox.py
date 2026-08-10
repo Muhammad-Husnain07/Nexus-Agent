@@ -110,7 +110,23 @@ def _block_private_addresses(host: str) -> None:
             ip = ipaddress.ip_address(candidate)
         except ValueError:
             continue
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+        # C1/P0-C: unspecified (0.0.0.0 / :: — binds loopback on most
+        # hosts), private, loopback, link-local and reserved are all
+        # blocked. IPv4-mapped IPv6 (::ffff:127.0.0.1) is evaluated on
+        # its embedded IPv4 address too.
+        mapped = ip.ipv4_mapped if isinstance(ip, ipaddress.IPv6Address) else None
+        if (
+            ip.is_private or ip.is_loopback or ip.is_link_local
+            or ip.is_reserved or ip.is_unspecified
+            or (
+                mapped is not None
+                and (
+                    mapped.is_private or mapped.is_loopback
+                    or mapped.is_link_local or mapped.is_reserved
+                    or mapped.is_unspecified
+                )
+            )
+        ):
             raise SandboxBlockedError(host, [])
 
 
@@ -118,15 +134,19 @@ def mask_sensitive_fields(data: dict[str, Any]) -> dict[str, Any]:
     """Return a copy of ``data`` with sensitive field values redacted.
 
     Sensitive fields are identified by a case-insensitive match against
-    the configured ``sensitive_field_names`` setting.
+    the configured ``sensitive_field_names`` setting. Recurses into nested
+    dicts AND lists (C4/P0-C — payloads often carry secret-bearing lists).
     """
     sensitive = _get_sensitive_fields()
-    result: dict[str, Any] = {}
-    for k, v in data.items():
-        if k.lower() in sensitive:
-            result[k] = "***"
-        elif isinstance(v, dict):
-            result[k] = mask_sensitive_fields(v)
-        else:
-            result[k] = v
-    return result
+
+    def _mask(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                k: "***" if k.lower() in sensitive else _mask(v)
+                for k, v in value.items()
+            }
+        if isinstance(value, list):
+            return [_mask(v) for v in value]
+        return value
+
+    return _mask(data)

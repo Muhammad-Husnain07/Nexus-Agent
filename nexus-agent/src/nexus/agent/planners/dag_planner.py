@@ -191,13 +191,13 @@ async def _call_llm_for_workflow(
     if capabilities_context:
         query = f"{capabilities_context}\n\nUser: {query}"
 
-    try:
-        prompt = prompt_manager.render(
-            "logical_planner", "1.0",
-            capabilities=", ".join(capabilities) if capabilities else "(none available)",
-        )
-    except Exception:
-        prompt = f"User request: {query}"
+    # Fail-closed prompt resolution (I9): only registered versions may be
+    # served (the v2.4 template requires both catalog + history slots).
+    prompt = prompt_manager.render(
+        "logical_planner", "2.4",
+        capabilities=", ".join(capabilities) if capabilities else "(none available)",
+        history="(no prior conversation)",
+    )
 
     if llm is None or model is None:
         return LogicalWorkflow(

@@ -144,6 +144,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         if settings.observability.log_format == "json"
         else structlog.dev.ConsoleRenderer()
     )
+
+    def _redact_event(_logger, _method, event_dict):
+        """C4/P0-C: redact sensitive values (recursively) from every log
+        event — secrets must never reach the log pipeline."""
+        from nexus.tools.sandbox import _get_sensitive_fields
+
+        sensitive = _get_sensitive_fields()
+
+        def _mask(value):
+            if isinstance(value, dict):
+                out: dict = {}
+                for k, v in value.items():
+                    out[k] = "***" if str(k).lower() in sensitive else _mask(v)
+                return out
+            if isinstance(value, (list, tuple)):
+                return [_mask(v) for v in value]
+            return value
+
+        for k in list(event_dict.keys()):
+            if str(k).lower() in sensitive:
+                event_dict[k] = "***"
+            elif isinstance(event_dict[k], (dict, list)):
+                event_dict[k] = _mask(event_dict[k])
+        return event_dict
+
     structlog.configure(
         processors=[
             structlog.stdlib.filter_by_level,
@@ -153,6 +178,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             structlog.processors.TimeStamper(fmt="iso"),
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
+            _redact_event,
             renderer,
         ],
         wrapper_class=structlog.stdlib.BoundLogger,
@@ -318,6 +344,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 def create_app() -> FastAPI:
     """Create a fully configured FastAPI application instance."""
     settings = get_settings()
+
+    # C4/P0-C PRODUCTION BOOT GATE: an unauthenticated deployment in
+    # production mode is a configuration error — refuse to start rather
+    # than expose an open agent with tool-execution powers.
+    import os as _os  # noqa: PLC0415
+
+    if _os.environ.get("NEXUS_ENV", "").strip().lower() == "production":
+        if settings.auth.mode == "none":
+            raise RuntimeError(
+                "Refusing to start: NEXUS_ENV=production requires "
+                "AUTH_MODE=api_key or AUTH_MODE=jwt (auth.mode is 'none')."
+            )
 
     app = FastAPI(
         title="Nexus Agent API",

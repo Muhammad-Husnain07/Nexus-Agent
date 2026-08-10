@@ -6,4 +6,6 @@ expected:
   executor:
     tool_call_count: 0
   guards:
-    avoid_tools: ["get_weather", "get_crypto_price", "get_pokemon"]
+    # get_current_weather is the registered weather capability (lat/long
+    # required) — a city-less weather query must never fire it.
+    avoid_tools: ["get_current_weather", "get_pokemon"]

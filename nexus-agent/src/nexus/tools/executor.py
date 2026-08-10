@@ -391,14 +391,6 @@ class ToolExecutor:
                         coerced = None
                 if coerced is None:
                     logger.warning("tool.input_validation_failed", tool=tool.name, error=str(exc))
-                    try:
-                        with open("/tmp/input_fail.txt", "a") as _df:
-                            _df.write(
-                                f"{tool.name} inputs={inputs} schema={tool.input_schema} "
-                                f"err={str(exc)[:150]}\n"
-                            )
-                    except Exception:
-                        pass
                     return ToolResult(
                         tool_id=tool.id,
                         tool_name=tool.name,
@@ -642,7 +634,12 @@ class ToolExecutor:
                     except (httpx.TimeoutException, httpx.TransportError) as exc:
                         last_exc = exc
                         raise
-        except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.TransportError):
+                    except SandboxBlockedError as exc:
+                        # Final-URL sandbox block (C1/P0-C): never retried,
+                        # surfaced as an explicit tool error.
+                        last_exc = exc
+                        raise
+        except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.TransportError, SandboxBlockedError):
             pass
 
         retried = total_attempts > 1
@@ -718,7 +715,13 @@ class ToolExecutor:
         return result
 
     async def _resolve_auth(self, tool: ToolRead) -> dict[str, str]:
-        """Build auth headers for the tool call."""
+        """Build auth headers for the tool call.
+
+        C4/P0-C: an explicit ``auth_ref`` (an env-var reference injected
+        into the request) is resolved ONLY when the ref is on the
+        operator-configured allowlist — arbitrary env-var references are
+        denied, closing the server-side secret-exfiltration channel.
+        """
         if tool.auth_type == "none" or not tool.auth_type:
             return {}
 
@@ -728,7 +731,20 @@ class ToolExecutor:
             logger.warning("tool.unknown_auth_type", tool=tool.name, auth_type=tool.auth_type)
             return {}
 
-        resolved = self._secret_resolver.resolve(tool.auth_ref or tool.auth_type)
+        _ref = tool.auth_ref or tool.auth_type
+        if tool.auth_ref:
+            allowlist = list(
+                getattr(self._settings.tools, "auth_ref_allowlist", None) or []
+            )
+            if _ref not in allowlist:
+                logger.warning(
+                    "tool.auth_ref_not_allowlisted",
+                    tool=tool.name,
+                    ref=_ref,
+                )
+                return {}
+
+        resolved = self._secret_resolver.resolve(_ref)
         secret_value = resolved.get_secret_value()
         if not secret_value:
             logger.warning("tool.auth_ref_empty", tool=tool.name, auth_type=tool.auth_type)
@@ -747,10 +763,30 @@ class ToolExecutor:
         session: AsyncSession,
     ) -> ToolResult:
         """Execute a tool via an external MCP server — no code execution."""
+        # SANDBOX CHECK (C1/P0-C): the MCP server destination is validated
+        # like the dynamic-endpoint class — an MCP server_url pointing at
+        # an internal/metadata address must never be connected to.
+        try:
+            check_allowed_host(
+                tool.mcp_server_url or "",
+                self._sandbox_config.allowed_hosts,
+                enforce_ssrf=True,
+            )
+        except SandboxBlockedError as exc:
+            logger.warning("tool.sandbox_blocked", tool=tool.name, host=exc.host)
+            return ToolResult(
+                tool_id=tool.id,
+                tool_name=tool.name,
+                status="error",
+                error=str(exc),
+                duration_ms=0,
+            )
+
         result = await self._mcp_client.call_mcp_tool(
             server_url=tool.mcp_server_url,
             tool_name=tool.name,
             arguments=inputs,
+            idempotent=bool(getattr(tool, "idempotent", False)),
         )
 
         # Output validation (soft-fail)
@@ -883,7 +919,11 @@ class ToolExecutor:
         # Use the pooled httpx.AsyncClient (self._client)
         # NOTE: never pass ``params=`` — httpx merges/REPLACES the URL's
         # existing query string (wiping it) when params is given.
-        request_kwargs: dict[str, Any] = {"headers": headers}
+        request_kwargs: dict[str, Any] = {
+            "headers": headers,
+            "follow_redirects": False,  # C1/P0-C: redirects are followed
+            # manually with per-hop sandbox re-validation.
+        }
         try:
             from nexus.execution.policy import policy_for_capability
 
@@ -892,21 +932,35 @@ class ToolExecutor:
             _timeout_s = float(self._tool_timeout_s)
         if _timeout_s > 0:
             request_kwargs["timeout"] = httpx.Timeout(_timeout_s)
-        if method == "get":
-            response = await self._client.get(url, **request_kwargs)
-        else:
-            if graphql_query is not None:
-                # GraphQL contract: query template + variables in the body.
-                request_kwargs["json"] = {
-                    "query": graphql_query,
-                    "variables": dict(url_params),
-                }
-            else:
-                request_kwargs["json"] = url_params
-            response = await self._client.request(
-                method.upper(),
-                url,
-                **request_kwargs,
+
+        # FINAL-DESTINATION SANDBOX CHECK (C1/P0-C): the URL actually being
+        # requested — after template substitution and query merging — is the
+        # enforcement point. Whitelist always applies; SSRF hardening
+        # applies when the final host differs from the operator-registered
+        # host (input-influenced destination) or any input value carried a
+        # URL (relay class).
+        self._validate_final_url(url, tool.endpoint_url, inputs)
+
+        response = await self._send_request(
+            url, method, request_kwargs, graphql_query, url_params,
+        )
+        # MANUAL REDIRECT FOLLOWING (C1/P0-C): every hop is re-validated
+        # against the sandbox BEFORE the next request — a redirect to an
+        # internal/metadata address is blocked, never followed.
+        for _hop in range(5):
+            if response.status_code not in (301, 302, 303, 307, 308):
+                break
+            location = response.headers.get("location")
+            if not location:
+                break
+            next_url = str(httpx.URL(url).join(location))
+            self._validate_final_url(next_url, tool.endpoint_url, inputs)
+            if response.status_code in (301, 302, 303):
+                method = "get"
+                request_kwargs.pop("json", None)
+            url = next_url
+            response = await self._send_request(
+                url, method, request_kwargs, graphql_query, url_params,
             )
 
         # Raise HTTPStatusError for 4xx/5xx so the retry policy catches it.
@@ -916,6 +970,55 @@ class ToolExecutor:
         if response.status_code >= 400:
             response.raise_for_status()
         return response
+
+    def _validate_final_url(
+        self,
+        url: str,
+        registered_url: str,
+        inputs: dict[str, Any],
+    ) -> None:
+        """Final-destination sandbox enforcement (C1/P0-C).
+
+        Validates the URL that will actually be requested: the host
+        whitelist ALWAYS applies; SSRF hardening applies when the final
+        host differs from the operator-registered host (the input-influenced
+        destination class) or when any input value carried a URL (the relay
+        class). Raises ``SandboxBlockedError`` before any connection.
+        """
+        from urllib.parse import urlparse  # noqa: PLC0415
+
+        _reg_host = (urlparse(registered_url).hostname or "").lower()
+        _final_host = (urlparse(url).hostname or "").lower()
+        _input_urls = any(
+            isinstance(v, str) and "://" in v
+            for v in (inputs or {}).values()
+        )
+        check_allowed_host(
+            url,
+            self._sandbox_config.allowed_hosts,
+            enforce_ssrf=(_final_host != _reg_host or _input_urls),
+        )
+
+    async def _send_request(
+        self,
+        url: str,
+        method: str,
+        request_kwargs: dict[str, Any],
+        graphql_query: str | None,
+        url_params: dict[str, Any],
+    ) -> httpx.Response:
+        """Dispatch a single request (GET or method + body/GraphQL)."""
+        if method == "get":
+            return await self._client.get(url, **request_kwargs)
+        if graphql_query is not None:
+            # GraphQL contract: query template + variables in the body.
+            request_kwargs["json"] = {
+                "query": graphql_query,
+                "variables": dict(url_params),
+            }
+        else:
+            request_kwargs["json"] = url_params
+        return await self._client.request(method.upper(), url, **request_kwargs)
 
     def _build_result(
         self,

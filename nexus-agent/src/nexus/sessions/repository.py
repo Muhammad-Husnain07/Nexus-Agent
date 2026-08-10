@@ -38,8 +38,12 @@ class SessionRepository(GenericRepository[SessionModel]):
         status: str | None = None,
         page: int = 1,
         page_size: int = 20,
+        owner_id: str | None = None,
     ) -> tuple[list[SessionModel], int, dict[uuid.UUID, int]]:
         """List sessions with pagination.
+
+        C3/P0-C: when ``owner_id`` is given, only sessions owned by that
+        user (plus legacy NULL-owner rows) are returned.
 
         Returns (items, total, message_counts) where message_counts maps
         session_id → message_count.
@@ -51,6 +55,12 @@ class SessionRepository(GenericRepository[SessionModel]):
 
         if status is not None:
             stmt = stmt.where(self._model.status == status)
+
+        if owner_id is not None:
+            stmt = stmt.where(
+                (self._model.user_id == str(owner_id))
+                | (self._model.user_id.is_(None))
+            )
 
         count_stmt = stmt.with_only_columns(func.count(self._model.id)).order_by(None)
         total_result = await self._session.execute(count_stmt)
@@ -192,14 +202,30 @@ class MessageRepository(GenericRepository[MessageModel]):
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
-    async def search_by_content(self, query: str, limit: int = 20) -> list[MessageModel]:
-        """Search messages by content (simple ILIKE)."""
+    async def search_by_content(
+        self,
+        query: str,
+        limit: int = 20,
+        owner_id: str | None = None,
+    ) -> list[MessageModel]:
+        """Search messages by content (simple ILIKE).
+
+        C3/P0-C: scoped to the caller's sessions (plus legacy NULL rows).
+        """
         stmt = (
             select(self._model)
             .where(self._model.content["text"].as_string().ilike(f"%{query}%"))
             .order_by(self._model.created_at.desc())
             .limit(limit)
         )
+        if owner_id is not None:
+            stmt = stmt.join(
+                SessionModel,
+                SessionModel.id == self._model.session_id,
+            ).where(
+                (SessionModel.user_id == str(owner_id))
+                | (SessionModel.user_id.is_(None))
+            )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 

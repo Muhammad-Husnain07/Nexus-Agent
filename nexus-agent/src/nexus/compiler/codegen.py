@@ -74,8 +74,14 @@ class Compiler:
         (metadata-driven via the resolver + registry), rewrites the
         consumer's input to the corresponding ``${producer_ref.result.<a>}``
         placeholder, and wires the dependency. The frozen IR is REBUILT
-        (never mutated). Expressions whose capability cannot resolve stay
-        literal — the executor rejects them explicitly (never guessed).
+        (never mutated).
+
+        FAIL-CLOSED (invariant I1): a chain expression that cannot be
+        synthesized — unknown capability, no resolvable endpoint, missing
+        producer input contract, or an unsupported chain form — raises
+        ``CompilerError`` so the expression NEVER crosses into execution as
+        a literal string. The compiler node routes the failure back to the
+        planner (bounded replan), never to the executor.
         """
         from nexus.agent.nodes.plan_validator_node import _is_chain_expression
         from nexus.artifacts.normalizer import strip_normalization_state  # noqa: F401
@@ -111,21 +117,39 @@ class Compiler:
                     continue
                 match = resolve_re.search(value)
                 if not match:
-                    continue
+                    # Unsupported chain form (e.g. the legacy "{{ref}}"
+                    # variant) — never a literal passthrough (I1).
+                    raise CompilerError(
+                        f"cannot compile unsupported chain expression {value!r} "
+                        f"in input '{key}' of node '{node.ref}' — resolve it "
+                        "before execution"
+                    )
                 producer_op, producer_key, producer_value = (
                     match.group(1), match.group(2), match.group(3),
                 )
                 meta = _producer_meta(producer_op)
                 if not meta:
-                    continue  # unresolved capability → stays literal
+                    raise CompilerError(
+                        f"RESOLVE(...) references unknown capability "
+                        f"'{producer_op}' in input '{key}' of node "
+                        f"'{node.ref}' — cannot synthesize producer"
+                    )
                 try:
                     candidates = await self.resolver.resolve(
                         producer_op, context=resolver_context
                     )
-                    if not candidates:
-                        continue
-                except Exception:
-                    continue
+                except Exception as exc:
+                    raise CompilerError(
+                        f"RESOLVE(...) producer resolution failed for "
+                        f"'{producer_op}' in input '{key}' of node "
+                        f"'{node.ref}': {exc}"
+                    ) from exc
+                if not candidates:
+                    raise CompilerError(
+                        f"RESOLVE(...) capability '{producer_op}' has no "
+                        f"resolvable endpoint — cannot synthesize producer "
+                        f"for input '{key}' of node '{node.ref}'"
+                    )
                 # Producer input mapping: the expression's key if the
                 # producer's schema declares it, else its first required
                 # input (metadata-driven — mirrors the workflow engine).
@@ -139,7 +163,11 @@ class Compiler:
                     if required:
                         producer_input[str(required[0])] = producer_value
                     else:
-                        continue
+                        raise CompilerError(
+                            f"RESOLVE(...) producer '{producer_op}' declares "
+                            f"no input key contract — cannot synthesize "
+                            f"producer for input '{key}' of node '{node.ref}'"
+                        )
                 producer_ref = f"{node.ref}_producer_{key}"
                 if producer_ref in existing_refs:
                     producer_ref = f"{node.ref}_producer_{key}_{len(synthesized)}"

@@ -103,7 +103,9 @@ def _is_degenerate(text: str) -> bool:
     return False
 
 
-def _synthesis_incorporates_data(text: str, artifact_list: list[Any]) -> bool:
+def _synthesis_incorporates_data(
+    text: str, artifact_list: list[Any], user_query: str = ""
+) -> bool:
     """True when the synthesized text actually engages the artifact data.
 
     The fast synthesis model occasionally claims "no data" while real
@@ -113,25 +115,46 @@ def _synthesis_incorporates_data(text: str, artifact_list: list[Any]) -> bool:
     registered artifacts, the synthesis engaged the data — otherwise the
     deterministic Artifact Renderer takes over (data must never be
     discarded by a formatter/synthesis failure).
+
+    P2-A: evidence credit excludes scalars that merely echo the user's own
+    query text — the response must cite ARTIFACT-derived values, not
+    repeat the request back.
     """
     if not artifact_list:
         return True
-    return _covered_artifacts(text, artifact_list) > 0
+    return _covered_artifacts(text, artifact_list, user_query=user_query) > 0
 
 
-def _synthesis_covers_each_artifact(text: str, artifact_list: list[Any]) -> bool:
+def _synthesis_covers_each_artifact(
+    text: str, artifact_list: list[Any], user_query: str = ""
+) -> bool:
     """Response coverage (P0): EVERY registered artifact must be represented
     in the response by at least one of its values — the "3 intents, 3
     tools, 2 answers" hole. When any artifact is uncited, the deterministic
-    renderer (which renders every artifact) guarantees the coverage."""
+    renderer (which renders every artifact) guarantees the coverage.
+
+    P2-A: the per-artifact required fact must be ARTIFACT-derived —
+    query-echo scalars do not count (see ``_covered_artifacts``).
+    """
     if not artifact_list:
         return True
-    return _covered_artifacts(text, artifact_list) == len(artifact_list)
+    return _covered_artifacts(text, artifact_list, user_query=user_query) == len(
+        artifact_list
+    )
 
 
-def _covered_artifacts(text: str, artifact_list: list[Any]) -> int:
+def _covered_artifacts(
+    text: str, artifact_list: list[Any], user_query: str = ""
+) -> int:
     """Count of artifacts with at least one non-trivial scalar value cited
-    in the text (frozen-payload aware — MappingProxyType descent)."""
+    in the text (frozen-payload aware — MappingProxyType descent).
+
+    P2-A EVIDENCE-CREDIT RULE: a scalar that appears in the user's own
+    query text is QUERY-TAINTED and earns no evidence credit — a response
+    that merely repeats the request back ("Tokyo") must not count as
+    engaging the artifact. An artifact is covered only by at least one
+    NON-TAINTED scalar present in the response.
+    """
     from types import MappingProxyType
 
     def _values_of(data: Any) -> list[str]:
@@ -157,9 +180,70 @@ def _covered_artifacts(text: str, artifact_list: list[Any]) -> int:
     covered = 0
     for art in artifact_list:
         values = _values_of(getattr(art, "data", None))
-        if any(v in text for v in values):
+        # P2-A: scalars present in the user's query earn no evidence credit.
+        untainted = [v for v in values if not (user_query and v in user_query)]
+        if any(v in text for v in untainted):
             covered += 1
     return covered
+
+
+async def _claim_entailment_supported(
+    final: str,
+    artifact_list: list[Any],
+    llm: LLMClient,
+    model: str,
+) -> bool:
+    """OPTIONAL P2-A claim→artifact entailment verifier (feature-flagged).
+
+    Asks the LLM whether EVERY artifact has at least one of its facts
+    supported by the response. STRICT INVARIANT: this is NEVER the
+    correctness authority — it runs only after the deterministic
+    incorporation/coverage guard has passed, and any of its outcomes
+    (false OR error) degrades to the same deterministic renderer floor.
+    Off by default (``agent.enable_claim_entailment``); flag-on changes
+    nothing when the deterministic guards already hold.
+
+    Prompting is structural (no domain lists): artifact payloads are the
+    evidence, the response is the claim set, YES means every artifact is
+    entailed by at least one supported fact.
+    """
+    facts = []
+    for i, art in enumerate(artifact_list, 1):
+        data = getattr(art, "data", None)
+        try:
+            rendered = json.dumps(data, ensure_ascii=False, default=str)[:1500]
+        except Exception:
+            rendered = str(data)[:1500]
+        facts.append(f"[artifact {i}]\n{rendered}")
+    prompt = (
+        "You are a strict verification oracle. The following artifacts are "
+        "the ONLY source of facts that may be claimed:\n\n"
+        + "\n\n".join(facts)
+        + "\n\nGiven this response:"
+        + f"\n\n--- RESPONSE ---\n{final}\n--- END RESPONSE ---\n\n"
+        "Does the response support (entail) at least one fact from EVERY "
+        "artifact? Answer with exactly YES or NO. NO if any artifact has no "
+        "fact supported by the response, or if the response claims anything "
+        "not supported by the artifacts."
+    )
+    try:
+        response = await asyncio.wait_for(
+            llm.complete(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+                max_tokens=16,
+            ),
+            timeout=45,
+        )
+    except (asyncio.TimeoutError, Exception) as exc:
+        logger.warning("response_node.entailment_error", error=str(exc)[:120])
+        return True
+    if response.failed:
+        logger.warning("response_node.entailment_error", error=(response.error or "")[:120])
+        return True
+    answer = (response.content or "").strip().upper()
+    return answer.startswith("YES")
 
 
 def _synthesis_fallback_patch(
@@ -240,6 +324,38 @@ async def response_node(
     workflow = state.get("_logical_workflow", {})
     nodes = workflow.get("nodes", []) if isinstance(workflow, dict) else []
     if not artifact_list and not errors and len(nodes) == 0:
+        # INVARIANT I3 (P0-A): executable intent with no plan and no
+        # artifacts must never be answered from model knowledge — that would
+        # make a requested action silently "succeed". Deterministic signals:
+        # the router classified the request as action/workflow/analysis, the
+        # router ranked preferred tools, or the plan validator detected
+        # executable intent units. Any of them ⇒ explicit NOT_SUCCESS.
+        _report = state.get("_plan_validator_report")
+        _executable_detected = (
+            isinstance(_report, dict)
+            and bool((_report.get("metrics") or {}).get("detected_executable", 0))
+        )
+        _executable_intent = (
+            state.get("_query_type") in ("action", "workflow", "analysis")
+            or bool(state.get("_preferred_tools"))
+            or _executable_detected
+        )
+        if _executable_intent:
+            logger.warning(
+                "response_node.empty_plan_not_success",
+                query_type=state.get("_query_type"),
+                preferred_tools=state.get("_preferred_tools"),
+                detected_executable=_executable_detected,
+            )
+            return {
+                "final_response": (
+                    "I couldn't complete that request: no executable plan could "
+                    "be produced, so no action was performed."
+                ),
+                "_routing_decision": "finalize",
+                "response_type": "error",
+            }
+
         messages = state.get("messages", [])
         chat_messages = [
             {"role": m.get("role", "user"), "content": m.get("content", "")}
@@ -313,17 +429,35 @@ async def response_node(
 
     _fin_settings = get_settings().agent
 
-    # REASONING BUDGET (P0): the synthesis LLM call consumes the shared
-    # llm-call budget; the ledger flows back on every return below.
+    # A1/P1-A RESERVE-BEFORE-START: the synthesis LLM call reserves its
+    # llm-call budget slot BEFORE the call; an exhausted budget degrades
+    # to the deterministic renderer immediately (never a silent overspend).
     _llm_budget = {}
     try:
         from nexus.agent.budget import budget_from_state
 
         _bud = budget_from_state(state)
-        _bud.consume("llm_calls")
+        if not _bud.consume("llm_calls"):
+            logger.error("response_node.llm_budget_exhausted")
+            if artifact_list:
+                return _synthesis_fallback_patch(
+                    state, artifact_list,
+                    "I'm sorry, I encountered an issue while composing the response. Please try again.",
+                )
+            return {
+                "final_response": "I'm sorry, I couldn't complete that request: the invocation LLM budget was exhausted.",
+                "_routing_decision": "finalize",
+                "response_type": "error",
+                "_invocation_budget": _bud.to_dict(),
+            }
         _llm_budget = _bud.to_dict()
     except Exception:
         _llm_budget = {}
+
+    # P2-A GROUNDEDNESS: the incorporation/coverage guards (below) grant
+    # evidence credit only to ARTIFACT-derived values — scalars that merely
+    # echo the user's own query text never count (see _covered_artifacts).
+    _user_query = _last_user_message(state) or ""
 
     # Guard LLM call with timeout fallback — prevents hanging when model is unreachable
     try:
@@ -357,8 +491,12 @@ async def response_node(
             # hole) — must not stand: the deterministic Artifact Renderer
             # produces the data-backed, coverage-complete answer instead.
             if artifact_list and (
-                not _synthesis_incorporates_data(final, artifact_list)
-                or not _synthesis_covers_each_artifact(final, artifact_list)
+                not _synthesis_incorporates_data(
+                    final, artifact_list, user_query=_user_query
+                )
+                or not _synthesis_covers_each_artifact(
+                    final, artifact_list, user_query=_user_query
+                )
             ):
                 logger.warning(
                     "response_node.synthesis_ignored_artifacts",
@@ -440,6 +578,46 @@ async def response_node(
             )
         return {"final_response": "I'm sorry, I couldn't process the tool results.", "_routing_decision": "finalize", "response_type": "error"}
 
+    # P2-A DETERMINISTIC FLOOR ON THE FINAL TEXT: the degenerate-retry loop
+    # above can REPLACE the guarded response, so the incorporation/coverage
+    # guard re-runs on the text that will actually be returned. If it fails
+    # now, the deterministic renderer takes over — an LLM-written retry is
+    # never trusted over the guard. (Deterministic: no LLM involvement.)
+    if artifact_list and (
+        not _synthesis_incorporates_data(final, artifact_list, user_query=_user_query)
+        or not _synthesis_covers_each_artifact(
+            final, artifact_list, user_query=_user_query
+        )
+    ):
+        logger.warning(
+            "response_node.synthesis_ignored_artifacts_retry",
+            text_len=len(final or ""),
+        )
+        return _synthesis_fallback_patch(
+            state, artifact_list,
+            "I retrieved the following results:",
+        )
+
+    # P2-A OPTIONAL claim→entailment verifier (feature flag, default OFF):
+    # runs ONLY after the deterministic guard passed and the response is
+    # non-degenerate. It is NEVER the authority: on NO, the deterministic
+    # renderer (the same floor the guard already uses) takes over; on any
+    # error, the deterministic-guarded response stands. Flag-off ⇒ no
+    # behavior change whatsoever.
+    if (
+        artifact_list
+        and get_settings().agent.enable_claim_entailment
+        and not await _claim_entailment_supported(final, artifact_list, llm, model)
+    ):
+        logger.warning(
+            "response_node.entailment_failed",
+            artifacts=len(artifact_list),
+        )
+        return _synthesis_fallback_patch(
+            state, artifact_list,
+            "I retrieved the following results:",
+        )
+
     # Build final message
     _milestone_min = get_settings().agent.milestone_min_length
     _is_clarification = len(final) < _milestone_min
@@ -462,9 +640,12 @@ async def response_node(
         "_routing_decision": "finalize",
         "_invocation_budget": _llm_budget,
         # RESPONSE COVERAGE (P2 eval): the fraction of artifacts cited in
-        # the final response — the "3 intents, 2 answers" detector.
+        # the final response — the "3 intents, 2 answers" detector. P2-A:
+        # the metric uses the same evidence-credit rule as the guard
+        # (query-echo scalars earn no credit).
         "_response_coverage": (
-            _covered_artifacts(final, artifact_list) / len(artifact_list)
+            _covered_artifacts(final, artifact_list, user_query=_user_query)
+            / len(artifact_list)
             if artifact_list else 1.0
         ),
     }
@@ -512,13 +693,15 @@ async def _compile_and_render(
     # Build ContextIR items
     items: list[ContextItem] = []
 
-    # 1. System Instructions (V4.0 Artifact-aware Lowering Pass)
+    # 1. System Instructions (V4.1 Artifact-aware Lowering Pass)
+    # Fail-closed prompt resolution (I9): only registered versions may be
+    # served; a missing prompt is a typed configuration error that must
+    # surface (the caller degrades to the honest fallback response), never
+    # a silent one-line substitute.
     from nexus.agent.prompts.manager import prompt_manager
-    try:
-        system_prompt = prompt_manager.render("finalize", version="4.0", tool_citations="", errors_summary="")
-        system_prompt = system_prompt.replace("**Artifacts:**\n\n", "").replace("**Errors:**\n", "")
-    except Exception:
-        system_prompt = "You are answering the user's question using the provided facts (Artifacts). Do NOT summarize execution status."
+
+    system_prompt = prompt_manager.render("finalize", version="4.1", tool_citations="", errors_summary="")
+    system_prompt = system_prompt.replace("**Artifacts:**\n\n", "").replace("**Errors:**\n", "")
     if system_prompt:
         items.append(ContextItem(
             section=ContextSection.SYSTEM_INSTRUCTIONS,
@@ -607,10 +790,19 @@ async def _compile_and_render(
 
     # Cache the result
     try:
+        from nexus.agent.prompts import prompt_manager as _resp_pm
         from nexus.artifacts.renderers.registry import RendererRegistry
-        _cache_fp = current_ir.fingerprint(RendererRegistry.version_hash())
+
+        # P1-B.2: the RESPONSE prompt content participates in the response
+        # cache fingerprint only — finalize-prompt changes never touch
+        # parse/plan caches.
+        _resp_prompt_fp = _resp_pm.fingerprint("finalize")
+        _cache_fp = current_ir.fingerprint(
+            RendererRegistry.version_hash(), prompt_fp=_resp_prompt_fp
+        )
         _PROMPT_CACHE.set(_cache_fp, model, ir.budget_limit, compiled_messages)
     except Exception:
         pass  # cache failure is non-fatal
 
     return current_ir, compiled_messages
+

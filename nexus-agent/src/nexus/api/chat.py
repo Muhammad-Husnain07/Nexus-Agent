@@ -35,10 +35,17 @@ async def _ensure_session_exists(
     session_id: uuid.UUID,
     user_message: str,
 ) -> None:
-    """Create a session in the database if it doesn't exist yet."""
+    """Create a session in the database if it doesn't exist yet.
+
+    C3/P0-C tenant isolation: the session is stamped with the verified
+    caller's user_id; an existing session owned by another identity is
+    rejected with 403 (legacy NULL-owner rows remain open).
+    """
     from nexus.db.base import async_session  # noqa: PLC0415
+    from nexus.security.ownership import identity_from_request, session_owner_ok  # noqa: PLC0415
     from nexus.sessions.repository import SessionRepository  # noqa: PLC0415
 
+    identity = identity_from_request(request)
     try:
         async with async_session() as db_session:
             repo = SessionRepository(db_session)
@@ -49,9 +56,17 @@ async def _ensure_session_exists(
                 await repo.create(
                     id=session_id,
                     title=title,
+                    user_id=identity.user_id,
                 )
                 await db_session.commit()
                 logger.info("session_created_for_agent", session_id=str(session_id))
+            elif not session_owner_ok(identity, existing):
+                raise HTTPException(
+                    status_code=403,
+                    detail="This session belongs to another user",
+                )
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.warning("session.create_failed", session_id=str(session_id), error=str(exc))
 
@@ -126,9 +141,15 @@ async def chat(
     runner: AgentRunner = await get_agent_runner(request)
     app_state = request.app.state
 
+    # C3/P0-C: verified identity rides into the graph for the executor's
+    # authorization gate (roles) — populated by the auth middleware only.
+    from nexus.security.ownership import identity_from_request  # noqa: PLC0415
+
+    user_context = identity_from_request(request).to_dict()
+
     if body.stream:
-        return _stream_response(runner, sid, body.message, app_state)
-    return await _json_response(runner, sid, body.message, app_state)
+        return _stream_response(runner, sid, body.message, app_state, user_context)
+    return await _json_response(runner, sid, body.message, app_state, user_context)
 
 
 
@@ -161,6 +182,7 @@ def _stream_response(
     sid: str,
     message: str,
     app_state: Any = None,
+    user_context: dict[str, Any] | None = None,
 ) -> EventSourceResponse:
     """Return an SSE streaming response with heartbeats and shutdown tracking."""
 
@@ -177,6 +199,7 @@ def _stream_response(
             event_aiter = runner.invoke(
                 session_id=sid,
                 user_message=message,
+                user_context=user_context,
             )
 
             async for sse_event in _heartbeat_generator(event_aiter):
@@ -223,6 +246,7 @@ async def _json_response(
     sid: str,
     message: str,
     app_state: Any = None,
+    user_context: dict[str, Any] | None = None,
 ) -> ChatResponse:
     """Collect all events and return as a single JSON response."""
     events: list[dict[str, Any]] = []
@@ -238,6 +262,7 @@ async def _json_response(
         async for agent_event in runner.invoke(
             session_id=sid,
             user_message=message,
+            user_context=user_context,
         ):
             if agent_event.type == "final_response":
                 final_text = agent_event.payload.get("text")
@@ -277,6 +302,12 @@ async def get_session_state(
     Returns 404 if no state exists for the session.
     """
     sid = str(session_id)
+
+    # C3/P0-C: a session's state is only readable by its owner.
+    from nexus.security.ownership import require_session_access  # noqa: PLC0415
+
+    await require_session_access(request, session_id)
+
     runner: AgentRunner = await get_agent_runner(request)
     graph = await runner._build_graph()
     config = {"configurable": {"thread_id": sid}}
@@ -298,7 +329,10 @@ async def get_session_state(
     fr = state_snapshot.values.get("final_response")
     next_nodes = state_snapshot.next or []
 
-    status = "completed" if not next_nodes else "running"
+    status = derive_run_status(
+        bool(next_nodes),
+        state_snapshot.values.get("_invocation_status"),
+    )
 
     return AgentStateResponse(
         session_id=session_id,
@@ -306,3 +340,20 @@ async def get_session_state(
         current_node=next_nodes[0] if next_nodes else None,
         final_response=fr,
     )
+
+
+def derive_run_status(has_next: bool, invocation_status: str | None) -> str:
+    """D2/P0-D (I6): map the checkpoint to a truthful run status.
+
+    A terminal-abnormal marker (crashed / timed-out / interrupted /
+    failed) is reported as-is — never as a forever-"running" run. A
+    completed marker (or an empty graph with no marker) is "completed".
+    """
+    from nexus.agent.runner import _TERMINAL_ABNORMAL
+
+    if invocation_status in _TERMINAL_ABNORMAL:
+        return invocation_status.lower()
+    if invocation_status == "COMPLETED" or not has_next:
+        return "completed"
+    return "running"
+

@@ -48,12 +48,14 @@ async def approval_checkpoint_resume_node(
 
     if intent == "approve":
         logger.info("approval_checkpoint.approved")
-        # APPROVAL SEMANTIC BINDING (P1): record the operation hash the
-        # approval binds to — the gate honors the stored approval ONLY for
-        # the identical operation (a modified/replanned step re-approves).
+        # APPROVAL SEMANTIC BINDING (C2/P0-C): record BOTH the decision and
+        # the operation hash the approval binds to — the gate honors the
+        # stored approval ONLY for the identical operation (a
+        # modified/replanned step re-approves).
         _chain = dict(snapshot.get("_approval_chain_state") or {})
         _step_id = str(pending.get("step") or "step_0")
         _hash = str(pending.get("operation_hash") or "")
+        _chain[f"step_{_step_id}_decision"] = "approved"
         if _hash:
             _chain[f"step_{_step_id}_hash"] = _hash
         return StatePatch(version=ctx.version + 1, updates={

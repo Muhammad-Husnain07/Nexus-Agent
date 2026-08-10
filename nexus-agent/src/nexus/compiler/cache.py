@@ -84,6 +84,21 @@ def _registry_fingerprint() -> str:
     return "|".join(parts) if parts else ""
 
 
+def _planner_prompt_fp() -> str:
+    """P1-B.2: content fingerprint of the registered PLANNER prompt.
+
+    Component-specific: only the logical_planner template participates in
+    parse/plan cache keys — a response or router prompt change must not
+    invalidate planned artifacts. Any failure → "prompt-unknown" (safe:
+    cached entries simply stop matching old keys)."""
+    try:
+        from nexus.agent.prompts import prompt_manager
+
+        return prompt_manager.fingerprint("logical_planner")
+    except Exception:
+        return "prompt-unknown"
+
+
 def _query_fingerprint(query: str, available_tools: list[dict[str, Any]]) -> str:
     tool_info = sorted(
         f"{t.get('name','')}:{t.get('version',1)}" for t in available_tools if t.get("name")
@@ -217,6 +232,9 @@ class ParseCache(_BaseCache):
         # must never outlive the code that produced it (deployment-safe
         # invalidation). The fingerprint is the ONLY architecture version
         # in cache keys.
+        # P1-B.2 COMPONENT-SPECIFIC PROMPT FP: the parse cache depends on
+        # the PLANNER prompt (content hash) — a planner-prompt change
+        # invalidates cached plans; a response/router prompt change does NOT.
         try:
             from nexus.agent.architecture import ArchitectureVersion
 
@@ -226,6 +244,7 @@ class ParseCache(_BaseCache):
         return _make_key(
             "parse", _query_fingerprint(query, tools), model, context,
             _arch_fp,
+            _planner_prompt_fp(),
         )
 
     async def get(
@@ -316,12 +335,27 @@ class PlanCache(_BaseCache):
                     "op": str(n.get("op") or ""),
                     "inputs": {k: str(v) for k, v in (n.get("inputs") or {}).items()},
                     "depends_on": [str(d) for d in (n.get("depends_on") or [])],
+                    "iterate_over": str(n.get("iterate_over") or ""),
+                    "ref": str(n.get("ref") or ""),
+                    "condition": str(n.get("condition") or ""),
+                    "branch_true": str(n.get("branch_true") or ""),
+                    "branch_false": str(n.get("branch_false") or ""),
                 }
                 for n in nodes
                 if isinstance(n, dict)
             ],
             sort_keys=True,
         )
+        # Collections shape participates in the key: two workflows with
+        # identical ops but different iterate_over collections compile to
+        # different maps — they must never share a cached graph.
+        _collections = (
+            logical_workflow.get("collections")
+            if isinstance(logical_workflow, dict)
+            else None
+        )
+        if _collections:
+            wf_fp += "|cols:" + json.dumps(_collections, sort_keys=True)[:4000]
         try:
             from nexus.agent.architecture import ArchitectureVersion
 
@@ -331,6 +365,10 @@ class PlanCache(_BaseCache):
         reg_fp = _registry_fingerprint() or ""
         return _make_key(
             "plan", wf_fp, _arch_fp, reg_fp,
+            # P1-B.2: the plan cache depends on the PLANNER prompt content —
+            # planner-prompt changes invalidate compiled graphs; response
+            # prompt changes do not.
+            _planner_prompt_fp(),
         )
 
     async def get_workflow(self, logical_workflow: dict[str, Any]) -> dict[str, Any] | None:

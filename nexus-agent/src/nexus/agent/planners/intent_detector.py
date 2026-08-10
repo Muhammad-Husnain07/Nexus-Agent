@@ -29,7 +29,10 @@ _LIST_AND_RE = re.compile(r"(?i)\b(\d+)\s+and\s+(\d+)\b")
 _NEGATION_MARKERS = ("don't", "dont ", " do not ", " not ", " never ", " without ")
 _COMPARISON_MARKERS = ("compare", " versus ", "vs", " both ")
 
-_SPLIT_RE = re.compile(r"(?i)(?:,?\s*(?:and|plus|also|then|after|before|but|while|&|or)\s+)")
+# Connector set with WORD BOUNDARIES (B1/P0-B): "or" must never match
+# inside "for", "while" never inside "whiles", etc. "&" is normalized to
+# " and " before splitting, so it needs no entry here.
+_SPLIT_RE = re.compile(r"(?i)(?:,?\s*\b(?:and|plus|also|then|after|before|but|while|or)\b\s+)")
 _NEGATION_RE = re.compile(r"(?i)(don't|dont|do not|not|never|without)")
 _NUMBER_LIST_RE = re.compile(r"\b\d+\b")
 
@@ -85,7 +88,7 @@ class IntentDetector:
 
         # Overall confidence: clean multi-clause splits are high-confidence;
         # a single long clause is ambiguous (Tier-2 trigger).
-        confidence = 1.0 if len(units) > 1 else 1.0
+        confidence = 1.0 if len(units) > 1 else 0.9
         if len(units) == 1 and len(text.split()) > 14:
             confidence = 0.6
 

@@ -35,6 +35,7 @@ from typing import Any
 import structlog
 
 from nexus.config.settings import get_settings
+from nexus.errors import PlaceholderResolutionError
 from nexus.tools.executor import ToolExecutor
 
 logger = structlog.get_logger("nexus.agent.executors.concurrent_executor")
@@ -183,12 +184,26 @@ def _resolve_placeholder_value(
         if match:
             resolved = _lookup_placeholder(match, results, ref_aliases)
             if match.group(0) == val:
-                # Whole-string placeholder → typed value (or None on failure)
+                # Whole-string placeholder → typed value. FAIL-CLOSED
+                # (invariant I2): an unresolved placeholder never reaches a
+                # tool — neither as None nor as the raw string. The task
+                # fails explicitly and recovery decides.
+                if resolved is None:
+                    raise PlaceholderResolutionError(
+                        f"cannot resolve placeholder {match.group(0)!r} "
+                        f"(dependency {match.group(1)!r} missing or failed)"
+                    )
                 return resolved
-            # Inline placeholder → string substitution; keep the raw
-            # placeholder if the dependency failed (do not fabricate data).
+            # Inline placeholder → string substitution. FAIL-CLOSED (I2):
+            # an unresolved inline placeholder means the dependent task
+            # cannot receive a valid input — fail explicitly rather than
+            # execute with a raw/unsubstituted string.
             if resolved is None:
-                return val
+                raise PlaceholderResolutionError(
+                    f"cannot resolve inline placeholder {match.group(0)!r} "
+                    f"in value {val!r} (dependency {match.group(1)!r} "
+                    "missing or failed)"
+                )
             return val.replace(match.group(0), _stringify(resolved))
     return val
 
@@ -396,6 +411,7 @@ class ConcurrentExecutor:
         session_id: str = "",
         budget: Any = None,
         user_roles: list[str] | None = None,
+        ledger: Any = None,
     ) -> None:
         self._executor = tool_executor or ToolExecutor()
         self._settings = get_settings()
@@ -406,6 +422,14 @@ class ConcurrentExecutor:
         self._ref_aliases: dict[str, str] = {}  # symbolic_ref → task_id
         self._conditional_branch: dict[str, list[str]] = {}
         self._disabled_task_ids: set[str] = set()
+        # DURABLE IDEMPOTENCY LEDGER (D1/P0-D, I5): exactly-one-winner
+        # execution + durable result replay across executor instances
+        # (reflection retries, checkpoint resumes, replays).
+        if ledger is None:
+            from nexus.execution.ledger import CompletedExecutionLedger
+
+            ledger = CompletedExecutionLedger()
+        self._ledger = ledger
         # REASONING BUDGET (P0): the per-invocation tool-call budget —
         # every real tool execution reserves before the call; cache hits
         # do not consume (they are calls avoided).
@@ -701,6 +725,23 @@ class ConcurrentExecutor:
             try:
                 from nexus.memory.store import MemoryStore
 
+                _norm_reg_fp = ""
+                _norm_schema_hash = ""
+                try:
+                    from nexus.compiler.cache import _registry_fingerprint as _nrf
+
+                    _norm_reg_fp = _nrf()
+                except Exception:
+                    _norm_reg_fp = ""
+                try:
+                    _norm_schema_hash = hashlib.sha256(
+                        json.dumps(
+                            getattr(tool_read, "input_schema", None) or {},
+                            sort_keys=True, default=str,
+                        ).encode()
+                    ).hexdigest()[:16]
+                except Exception:
+                    _norm_schema_hash = ""
                 await MemoryStore().put(
                     session_id=str(self._session_id) if self._session_id else None,
                     kind="normalized_artifact",
@@ -712,6 +753,11 @@ class ConcurrentExecutor:
                         "tool": tool_read.name,
                         "normalized": "true",
                         "arch_fp": _arch_fp,
+                        # P1-B.3: registry + schema contract fingerprints —
+                        # a contract change makes old normalized payloads
+                        # unreadable (never reused).
+                        "reg_fp": _norm_reg_fp,
+                        "schema_hash": _norm_schema_hash,
                     },
                 )
             except Exception as _art_cache_exc:
@@ -835,19 +881,148 @@ class ConcurrentExecutor:
                     execution_key=exec_key,
                 )
 
+            # DURABLE IDEMPOTENCY LEDGER (D1/P0-D, I5): first check for a
+            # COMPLETED result (durable replay — reflection retries,
+            # checkpoint resumes and replays reuse it, never re-execute);
+            # then atomically CLAIM the key (exactly one winner).
+            _sid = str(self._session_id) if self._session_id else ""
+            if _sid:
+                from nexus.agent.architecture import ArchitectureVersion as _Arch
+
+                _arch_fp = ""
+                try:
+                    _arch_fp = _Arch.cache_fingerprint()
+                except Exception:
+                    _arch_fp = ""
+                _ledger_entry = await self._ledger.find(_sid, exec_key)
+                if (
+                    _ledger_entry is not None
+                    and _ledger_entry.result is not None
+                    and (_arch_fp == "" or _ledger_entry.arch_fp == _arch_fp)
+                ):
+                    logger.info(
+                        "concurrent_executor.ledger_reuse",
+                        task=task.id,
+                        domain=domain,
+                    )
+                    self._completed_keys.add(exec_key)
+                    result = ToolExecutionResult(
+                        task_id=task.id,
+                        tool_name=task.tool_name,
+                        status="success",
+                        data=_ledger_entry.result,
+                        execution_key=exec_key,
+                        cached=True,
+                    )
+                    # The execution→artifact invariant requires an artifact
+                    # per success — register from the replayed payload.
+                    try:
+                        _replay_tool_read = self._tool_dict_to_read(task.tool_name)
+                        if _replay_tool_read is not None:
+                            await self._register_artifact(
+                                task, result, _replay_tool_read,
+                                exec_key=exec_key,
+                            )
+                    except Exception as _replay_exc:
+                        logger.warning(
+                            "concurrent_executor.ledger_reuse_artifact_failed",
+                            task=task.id,
+                            error=str(_replay_exc)[:200],
+                        )
+                    return result
+                _ledger_token = await self._ledger.claim(_sid, exec_key, _arch_fp)
+                if _ledger_token is None:
+                    # Another attempt holds the claim — it may have completed
+                    # in the meantime; otherwise surface an explicit outcome
+                    # (never a silent duplicate).
+                    _recheck = await self._ledger.find(_sid, exec_key)
+                    if (
+                        _recheck is not None
+                        and _recheck.result is not None
+                        and (_arch_fp == "" or _recheck.arch_fp == _arch_fp)
+                    ):
+                        logger.info(
+                            "concurrent_executor.ledger_reuse_after_conflict",
+                            task=task.id,
+                        )
+                        self._completed_keys.add(exec_key)
+                        return ToolExecutionResult(
+                            task_id=task.id,
+                            tool_name=task.tool_name,
+                            status="success",
+                            data=_recheck.result,
+                            execution_key=exec_key,
+                            cached=True,
+                        )
+                    logger.warning(
+                        "concurrent_executor.ledger_claim_conflict",
+                        task=task.id,
+                        key=exec_key[:16],
+                    )
+                    return ToolExecutionResult(
+                        task_id=task.id,
+                        tool_name=task.tool_name,
+                        status="error",
+                        error=(
+                            "execution already in progress — durable "
+                            "idempotency claim held by another attempt"
+                        ),
+                        execution_key=exec_key,
+                    )
+            else:
+                _ledger_token = None
+
             async with self._domain_semaphores[domain]:
-                return await self._execute_single(
+                _outcome = await self._execute_single(
                     task=task,
                     task_map=task_map,
                     accumulated=accumulated,
                     timeout=per_tool_timeout,
                     pre_resolved_inputs=resolved_inputs,
+                    ledger_token=_ledger_token,
+                    ledger_key=exec_key if _ledger_token else None,
+                    ledger_session=_sid if _ledger_token else "",
+                )
+                # D1/P0-D: a DEFINITE failure releases the claim lease so a
+                # retry is immediately re-claimable. ``uncertain`` NEVER
+                # releases (the side effect may have fired — the lease
+                # expiry window prevents duplicates).
+                if (
+                    _ledger_token
+                    and exec_key
+                    and _sid
+                    and _outcome.status not in ("success", "uncertain")
+                ):
+                    await self._ledger.release(_sid, exec_key, _ledger_token)
+                return _outcome
+
+        async def _guarded_run(t: Any) -> ToolExecutionResult:
+            """Run one task; a mid-flight cancellation (global timeout /
+            invocation cancel) is RETAINED as an UNCERTAIN outcome — the
+            run must never report all-success with silently missing data
+            (D3/P0-D)."""
+            try:
+                return await _run(t)
+            except asyncio.CancelledError:
+                return ToolExecutionResult(
+                    task_id=t.id,
+                    tool_name=t.tool_name,
+                    status="uncertain",
+                    error=(
+                        "cancelled during execution — outcome uncertain "
+                        "(global timeout / cancellation)"
+                    ),
                 )
 
-        outcomes = await asyncio.gather(
-            *(_run(t) for t in wave.tasks),
-            return_exceptions=True,
-        )
+        tasks = [asyncio.create_task(_guarded_run(t)) for t in wave.tasks]
+        try:
+            outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+        except asyncio.CancelledError:
+            # The global-timeout cancellation cancelled the gather (and its
+            # children); every child converted its CancelledError into an
+            # UNCERTAIN outcome. Re-collect the settled outcomes so nothing
+            # is silently dropped (D3/P0-D).
+            outcomes = await asyncio.gather(*tasks, return_exceptions=True)
 
         results: list[ToolExecutionResult] = []
         for i, outcome in enumerate(outcomes):
@@ -878,6 +1053,9 @@ class ConcurrentExecutor:
         accumulated: dict[str, Any],
         timeout: float,
         pre_resolved_inputs: dict[str, Any] | None = None,
+        ledger_token: str | None = None,
+        ledger_key: str | None = None,
+        ledger_session: str = "",
     ) -> ToolExecutionResult:
         """Execute a single tool task with retry policy, timeout, and endpoint fallback.
 
@@ -891,6 +1069,10 @@ class ConcurrentExecutor:
         - If a task has ``candidate_endpoints`` (set by the Compiler/optimizer pass),
           a ``validation_error`` or ``error`` status will try the next candidate
           endpoint before failing.
+
+        Ledger (D1/P0-D, I5): when a durable claim token is held, a SUCCESS
+        result is recorded to the completed_executions ledger so any later
+        attempt (reflection, resume, replay) replays instead of re-executing.
         """
         import time as _time
 
@@ -986,6 +1168,10 @@ class ConcurrentExecutor:
                 else:
                     tool_read = self._tool_dict_to_read(task.tool_name)
                     if tool_read is None:
+                        if ledger_token and ledger_key and ledger_session:
+                            await self._ledger.release(
+                                ledger_session, ledger_key, ledger_token
+                            )
                         return ToolExecutionResult(
                             task_id=task.id,
                             tool_name=task.tool_name,
@@ -996,10 +1182,50 @@ class ConcurrentExecutor:
                 # Cacheable artifact read (Phase 5): a cacheable op reuses a
                 # prior long-term result keyed by its execution key — the
                 # external API is never called twice for the same input.
+                # I7/P1-A CENTRALIZED SCOPE: the lookup is session-scoped
+                # UNLESS the capability explicitly declares
+                # ``validation_rules.cache_scope == "public"`` (operator-
+                # approved genuinely-public deterministic data). Default =
+                # private — cross-session reuse is structurally impossible.
                 _exec_key = self._compute_execution_key(task.tool_name, resolved_inputs)
                 _tool_cacheable = bool(
                     tool_data.get("cacheable", True) if isinstance(tool_data, dict) else True
                 )
+                _cache_scope = "private"
+                try:
+                    _vr = tool_data.get("validation_rules") if isinstance(tool_data, dict) else None
+                    if isinstance(_vr, dict):
+                        _cache_scope = str(_vr.get("cache_scope", "private") or "private")
+                except Exception:
+                    _cache_scope = "private"
+                _cache_session = (
+                    str(self._session_id) if self._session_id else None
+                )
+                if _cache_scope == "public":
+                    _cache_session = None
+                # P1-B.3: a cached tool result must not outlive the
+                # capability/endpoint/schema contract that produced it —
+                # the registry fingerprint + tool schema content hash
+                # participate in the cache key (on reads AND writes).
+                _reg_fp = ""
+                try:
+                    from nexus.compiler.cache import _registry_fingerprint as _reg_fp_fn
+
+                    _reg_fp = _reg_fp_fn()
+                except Exception:
+                    _reg_fp = ""
+                _schema_hash = ""
+                try:
+                    import json as _json
+
+                    _schema_hash = hashlib.sha256(
+                        _json.dumps(
+                            tool_data.get("input_schema") or {},
+                            sort_keys=True, default=str,
+                        ).encode()
+                    ).hexdigest()[:16]
+                except Exception:
+                    _schema_hash = ""
                 if _tool_cacheable and _exec_key not in self._completed_keys:
                     try:
                         from nexus.agent.architecture import ArchitectureVersion
@@ -1010,9 +1236,12 @@ class ConcurrentExecutor:
                                 "execution_key": _exec_key,
                                 "tool": task.tool_name,
                                 "arch_fp": ArchitectureVersion.cache_fingerprint(),
+                                "reg_fp": _reg_fp,
+                                "schema_hash": _schema_hash,
                             },
                             kind="artifact",
                             top_k=1,
+                            session_scope=_cache_session,
                         )
                     except Exception as _mem_exc:
                         logger.warning(
@@ -1051,9 +1280,12 @@ class ConcurrentExecutor:
                                         "tool": task.tool_name,
                                         "normalized": "true",
                                         "arch_fp": ArchitectureVersion.cache_fingerprint(),
+                                        "reg_fp": _reg_fp,
+                                        "schema_hash": _schema_hash,
                                     },
                                     kind="normalized_artifact",
                                     top_k=1,
+                                    session_scope=_cache_session,
                                 )
                                 if _norm_hits and isinstance(
                                     _norm_hits[0].get("content"), str
@@ -1103,6 +1335,19 @@ class ConcurrentExecutor:
                             _cached_result.data = _strip_nx(
                                 _cached_result.data or {}
                             )
+                            # D1/P0-D: the ARTIFACT-cache hit is a KNOWN
+                            # result — complete the durable ledger claim so
+                            # the row never lingers with a live lease
+                            # (which would block the next turn with a
+                            # phantom claim conflict).
+                            if ledger_token and ledger_key and ledger_session:
+                                await self._ledger.complete(
+                                    ledger_session, ledger_key,
+                                    _cached_result.data
+                                    if isinstance(_cached_result.data, dict)
+                                    else {},
+                                    ledger_token,
+                                )
                             return _cached_result
 
                 # REASONING BUDGET (P0): reserve the tool-call budget BEFORE
@@ -1115,6 +1360,10 @@ class ConcurrentExecutor:
                         task=task.id,
                         tool=task.tool_name,
                     )
+                    if ledger_token and ledger_key and ledger_session:
+                        await self._ledger.release(
+                            ledger_session, ledger_key, ledger_token
+                        )
                     return ToolExecutionResult(
                         task_id=task.id,
                         tool_name=task.tool_name,
@@ -1190,6 +1439,23 @@ class ConcurrentExecutor:
 
                             _payload = result.data
                             if isinstance(_payload, dict):
+                                _wr_reg_fp = ""
+                                _wr_schema_hash = ""
+                                try:
+                                    from nexus.compiler.cache import _registry_fingerprint as _wrf
+
+                                    _wr_reg_fp = _wrf()
+                                except Exception:
+                                    _wr_reg_fp = ""
+                                try:
+                                    _wr_schema_hash = hashlib.sha256(
+                                        _json.dumps(
+                                            tool_data.get("input_schema") or {},
+                                            sort_keys=True, default=str,
+                                        ).encode()
+                                    ).hexdigest()[:16]
+                                except Exception:
+                                    _wr_schema_hash = ""
                                 await MemoryStore().put(
                                     session_id=str(self._session_id) if self._session_id else None,
                                     kind="artifact",
@@ -1199,6 +1465,11 @@ class ConcurrentExecutor:
                                         "tool": task.tool_name,
                                         "cacheable": "true",
                                         "arch_fp": ArchitectureVersion.cache_fingerprint(),
+                                        # P1-B.3: registry + schema contract
+                                        # fingerprints — stale results are
+                                        # never read after a contract change.
+                                        "reg_fp": _wr_reg_fp,
+                                        "schema_hash": _wr_schema_hash,
                                     },
                                 )
                         except Exception as _cache_exc:
@@ -1216,6 +1487,15 @@ class ConcurrentExecutor:
                     # here and return success with the raw data instead.
                     exec_key = self._compute_execution_key(task.tool_name, resolved_inputs)
                     self._completed_keys.add(exec_key)
+                    # DURABLE LEDGER COMPLETION (D1/P0-D, I5): record the
+                    # completed result under the claimed key — later
+                    # attempts replay it instead of re-executing.
+                    if ledger_token and ledger_key and ledger_session:
+                        await self._ledger.complete(
+                            ledger_session, ledger_key,
+                            result.data if isinstance(result.data, dict) else {},
+                            ledger_token,
+                        )
                     normalized_data = await self._register_artifact(
                         task, result, tool_read,
                         exec_key=exec_key,
@@ -1231,12 +1511,17 @@ class ConcurrentExecutor:
                         idempotency_key=_idem_key,
                     )
 
-                # Check if we should fallback to a candidate endpoint
+                # Check if we should fallback to a candidate endpoint.
+                # F7/P1-A (I12): endpoint fallback is ONLY legal for
+                # idempotent capabilities — a validation/contract error on
+                # a non-idempotent op may mean the side effect already
+                # fired; re-invoking another endpoint duplicates it.
                 is_validation_error = result.status == "validation_error"
                 is_contract_error = result.error and "contract" in str(result.error).lower()
                 can_fallback = (
                     fallback_index < len(candidate_pool)
                     and candidate_pool
+                    and task_idempotent
                     and (is_validation_error or is_contract_error)
                 )
                 if can_fallback:
@@ -1269,9 +1554,14 @@ class ConcurrentExecutor:
                         error=last_error,
                     )
 
-                # Normal retry for transient errors
+                # Normal retry for transient errors.
+                # F7/P1-A (I12): the retry bound is the IDEMPOTENCY-scoped
+                # ``task_retries`` (0 for non-idempotent tools) — a 500 /
+                # timeout on a non-idempotent op is ambiguous (the side
+                # effect may have fired) and is NEVER automatically
+                # retried. ``task.max_retries`` alone must not drive retries.
                 last_error = result.error or "Unknown error"
-                if attempt < task.max_retries:
+                if attempt < task_retries:
                     wait = 2 ** attempt
                     logger.warning(
                         "concurrent_executor.retry",
@@ -1281,7 +1571,7 @@ class ConcurrentExecutor:
 
             except asyncio.TimeoutError:
                 last_error = f"Timed out after {timeout}s"
-                if attempt < task.max_retries:
+                if attempt < task_retries:
                     wait = 2 ** attempt
                     logger.warning(
                         "concurrent_executor.retry_timeout",

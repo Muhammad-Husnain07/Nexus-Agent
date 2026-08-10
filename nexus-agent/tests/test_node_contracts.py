@@ -61,6 +61,7 @@ _SHARED_FIELDS = frozenset({
     "_routing_decision",
     # Approval coordination (gate + resume node cooperate by design)
     "_approval_granted", "_approval_pending", "_approval_chain_state", "_needs_approval",
+    "_approval_decision",
     # The workflow node (runtime) also produces logical workflows
     "_logical_workflow",
     # Retry counters shared between recovery and reflection

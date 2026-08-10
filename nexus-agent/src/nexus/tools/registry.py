@@ -697,7 +697,18 @@ class ToolRegistry:
                     )
 
         try:
-            check_allowed_host(tool.endpoint_url, sandbox_config_allowed)
+            # C1/P0-C: the test endpoint enforces FULL SSRF hardening on the
+            # final (template-resolved) URL — a metadata/private address
+            # must never be reachable through a connectivity test.
+            final_url = tool.endpoint_url
+            if "{" in final_url and sample_input:
+                import re as _re
+                for match in _re.finditer(r"\{(\w+)\}", final_url):
+                    if match.group(1) in sample_input:
+                        final_url = final_url.replace(
+                            match.group(0), str(sample_input[match.group(1)])
+                        )
+            check_allowed_host(final_url, sandbox_config_allowed, enforce_ssrf=True)
         except Exception as exc:
             return ToolResult(
                 tool_id=tool.id,
@@ -720,7 +731,7 @@ class ToolRegistry:
                         url = url.replace(match.group(0), str(sample_input[param]))
                         params.pop(param, None)
 
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
                 method = tool.http_method.lower()
                 if method == "get":
                     resp = await client.get(url, params=params or None)
@@ -728,6 +739,25 @@ class ToolRegistry:
                     resp = await client.request(
                         method, url, json=params or None
                     )
+                # C1/P0-C: redirects are re-validated per hop (max 5) —
+                # a redirect to an internal address is blocked.
+                for _hop in range(5):
+                    if resp.status_code not in (301, 302, 303, 307, 308):
+                        break
+                    location = resp.headers.get("location")
+                    if not location:
+                        break
+                    next_url = str(httpx.URL(url).join(location))
+                    check_allowed_host(
+                        next_url, sandbox_config_allowed, enforce_ssrf=True
+                    )
+                    url = next_url
+                    if resp.status_code in (301, 302, 303):
+                        method = "get"
+                    if method == "get":
+                        resp = await client.get(url)
+                    else:
+                        resp = await client.request(method, url, json=params or None)
                 if resp.status_code >= 400:
                     resp.raise_for_status()
                 data = resp.json() if resp.text else None

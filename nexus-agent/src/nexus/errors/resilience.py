@@ -114,6 +114,17 @@ class ContextWindowExceededError(AgentError):
         super().__init__(code=ErrorCode.CONTEXT_WINDOW_EXCEEDED, message=message, **kwargs)
 
 
+class PlaceholderResolutionError(AgentError):
+    """Raised when a symbolic ``${ref.result.field}`` placeholder cannot be
+    resolved before a tool call (dependency failed, ref unknown, or field
+    missing). Fail-closed invariant I2: an unresolved placeholder must
+    never reach a tool — neither as ``None`` nor as the raw string.
+    """
+
+    def __init__(self, message: str = "Unresolved placeholder reference", **kwargs: Any) -> None:
+        super().__init__(code=ErrorCode.PLANNING_FAILED, message=message, **kwargs)
+
+
 # ── Rate / Quota Errors ─────────────────────────────────────────────────────
 
 

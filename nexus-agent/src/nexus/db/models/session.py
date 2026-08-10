@@ -25,6 +25,12 @@ class Session(Base):
         default=None,
         comment="Optional parent project ID",
     )
+    user_id: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+        default=None,
+        comment="Owning identity (C3/P0-C tenant isolation; NULL = legacy row)",
+    )
     status: Mapped[str] = mapped_column(
         String(50),
         default="active",

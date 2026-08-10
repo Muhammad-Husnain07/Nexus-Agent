@@ -18,6 +18,9 @@ _INTENTIONALLY_PERSISTENT = frozenset({
     "_structured_context",
     "_ir_stack",
     "_context_version",
+    # P1-B.1: checkpoint compatibility contract — must survive to be read
+    # by the NEXT invocation's load contract.
+    "_contract_meta",
     # NOTE: _context_snapshot is NOT in this set — the comment in state_schema.py
     # declares it IS ephemeral ("rebuilt each turn from AgentState checkpoint").
     "_logical_workflow",

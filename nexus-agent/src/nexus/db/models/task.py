@@ -41,6 +41,14 @@ class Task(Base):
     )
     attempts: Mapped[int] = mapped_column(Integer, default=0, comment="Execution attempt count")
     max_attempts: Mapped[int] = mapped_column(Integer, default=3, comment="Max attempts before failure")
+    worker_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True,
+        comment="Worker holding the execution lease (D5/P0-D)",
+    )
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+        comment="Lease expiry — an expired lease is safely reclaimable",
+    )
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False, comment="Cancellation flag (checked between steps)")
     schedule_cron: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="Cron expression for scheduled runs")
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

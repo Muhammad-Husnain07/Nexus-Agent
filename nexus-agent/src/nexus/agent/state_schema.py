@@ -1,5 +1,10 @@
 """Production-grade AgentState schema — tiered memory, type-safe, reducer-optimized.
 
+P1-B.1: AGENT_STATE_SCHEMA_VERSION is the AgentState contract version —
+checkpoints carry it (plus the architecture fingerprint) in
+``_contract_meta``; a checkpoint is only resumed under the exact contract
+it was created for.
+
 Lifecycle Architecture
 ======================
 
@@ -32,6 +37,11 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from typing import Annotated, Any, Literal
+
+# P1-B.1: the AgentState contract version — carried in checkpoint
+# ``_contract_meta`` alongside the architecture fingerprint. Bump when the
+# state schema changes incompatibly; old checkpoints then refuse resume.
+AGENT_STATE_SCHEMA_VERSION = "1"
 
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict
@@ -316,6 +326,8 @@ _EPHEMERAL_FIELDS: list[str] = [
     "tool_results",
     "errors",       # flat backward-compat, not typed in AgentState
 
+    "_invocation_id",  # A3/P1-A: per-invocation identity (memory provenance)
+
     "_query_type",
     "_force_query_type",
     "_goals",
@@ -455,6 +467,7 @@ class AgentState(TypedDict, total=False):
     _compile_retry_count: int
     _invocation_budget: dict[str, Any]
     _invocation_status: str
+    _invocation_id: str
     _response_coverage: float
     _execution_strategy: str
     _execution_strategy_reasons: list[str]
@@ -495,6 +508,11 @@ class AgentState(TypedDict, total=False):
     _ir_stack: dict[str, Any]
     _context_version: int
     _context_snapshot: dict[str, Any]
+
+    # P1-B.1: checkpoint compatibility contract — architecture fingerprint
+    # + state-schema version. A checkpoint is only resumed under the
+    # contract it was created for; mismatches refuse safely.
+    _contract_meta: dict[str, Any]
 
     # New 13-node compiler pipeline fields
     _logical_workflow: dict[str, Any]

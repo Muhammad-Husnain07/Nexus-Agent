@@ -48,12 +48,16 @@ class Scheduler:
                 await self._registry.update_status(task_id, STATUS_QUEUED)
                 nxt = _next_cron(task["schedule_cron"])
                 await self._advance_next_run(task_id, nxt)
-            else:
-                await self._registry.update_status(task_id, STATUS_QUEUED)
             try:
                 await self._queue.enqueue(task_id, task.get("payload", {}))
                 enqueued += 1
                 logger.info("scheduler.enqueued", task_id=task_id, task_type=task.get("task_type"))
+                # D5/P0-D: a ONE-SHOT task's next_run_at is cleared right
+                # after its successful enqueue — otherwise the next tick
+                # re-enqueues it (the duplicate-run bug: one-shots fired
+                # every poll until a worker marked them RUNNING).
+                if not task.get("schedule_cron"):
+                    await self._advance_next_run(task_id, None)
             except Exception as exc:
                 logger.warning("scheduler.enqueue_failed", task_id=task_id, error=str(exc)[:200])
         return enqueued

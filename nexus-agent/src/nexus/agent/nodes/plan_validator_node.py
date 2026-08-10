@@ -92,9 +92,22 @@ class PlanValidatorNode:
         nodes = workflow.get("nodes") or []
         prior_chain = _prior_executed_chain(state)
         user_query = _current_user_query(state)
-        report = self.validate(nodes, prior_chain=prior_chain, user_query=user_query)
+        report = self.validate(
+            nodes,
+            prior_chain=prior_chain,
+            user_query=user_query,
+            collections=workflow.get("collections") if isinstance(workflow, dict) else None,
+            preferred_tools=state.get("_preferred_tools") or None,
+        )
         rounds = int(state.get("_plan_validator_rounds", 0) or 0)
 
+        # Gate: PROCEED when the report is valid (no CRITICAL/ERROR). Note:
+        # capability_alignment stays WARNING-grade (B3/P0-B) — the keyword
+        # bridge demonstrably disagrees with the engine's semantic ranking
+        # on correct plans (scenarios 8/20/38/47), so alignment must never
+        # block execution with the current signals. It rides the report as
+        # per-intent EVIDENCE (I4) + the refine loop; engine-score-based
+        # blocking is the documented follow-up.
         if report.valid:
             logger.info("plan_validator.passed", nodes=len(nodes))
             return {
@@ -201,6 +214,8 @@ class PlanValidatorNode:
         nodes: list[dict[str, Any]],
         prior_chain: list[str] | None = None,
         user_query: str | None = None,
+        collections: dict[str, Any] | None = None,
+        preferred_tools: list[str] | None = None,
     ) -> PlanValidatorReport:
         violations: list[Violation] = []
         errors: list[str] = []
@@ -269,6 +284,40 @@ class PlanValidatorNode:
             ))
             errors.append("dependency cycle detected")
 
+        # 2b. ITERATE_OVER RESOLVABILITY (F1/P0-B): a node declaring
+        # ``iterate_over`` must reference a declared, non-empty collection
+        # OR a runtime-produced placeholder (``${ref.result...}``). A map
+        # over a phantom collection would silently fall back to a single
+        # body execution at runtime (graph.py) and produce misleading
+        # plan_created events — the planner must never emit it.
+        for node in nodes:
+            io_key = node.get("iterate_over")
+            if not io_key or not isinstance(io_key, str):
+                continue
+            if io_key.startswith("${"):
+                continue  # runtime-produced collection (producer chain)
+            declared = (
+                isinstance(collections, dict)
+                and io_key in collections
+                and isinstance(collections[io_key], list)
+                and bool(collections[io_key])
+            )
+            if not declared:
+                violations.append(Violation(
+                    code="unresolved_iterate_over",
+                    severity=ViolationSeverity.ERROR,
+                    action=ViolationAction.REFINE,
+                    node=str(node.get("op") or ""),
+                    message=(
+                        f"iterate_over '{io_key}' does not reference a "
+                        "declared non-empty collection"
+                    ),
+                ))
+                errors.append(
+                    f"unresolved iterate_over: {io_key} on "
+                    f"{node.get('op') or '?'}"
+                )
+
         # 3. Missing required inputs (schema-driven; GC meta carries the
         # required-property list built from the tool's input_schema).
         # Empty/whitespace values are NOT provided — they would fail at
@@ -322,6 +371,31 @@ class PlanValidatorNode:
                     message=f"{op} input type violations: {detail}",
                 ))
                 errors.append(f"{op} input type violations: {detail}")
+
+        # 3c. UNKNOWN INPUT KEYS (D0/P0-C, I11): an input key the
+        # capability schema does not declare (and is not an x-alias) is an
+        # invented parameter — the tool never consumes it, the plan is
+        # structurally invalid, and it must never be cached or executed.
+        for node in nodes:
+            op = str(node.get("op") or "")
+            node_inputs = node.get("inputs") or {}
+            if not isinstance(node_inputs, dict):
+                continue
+            bad = _unknown_input_keys(op, node_inputs)
+            if bad:
+                violations.append(Violation(
+                    code="unknown_input_key",
+                    severity=ViolationSeverity.ERROR,
+                    action=ViolationAction.REFINE,
+                    node=op,
+                    message=(
+                        f"{op} declares input keys not in its schema: "
+                        f"{', '.join(sorted(bad))}"
+                    ),
+                ))
+                errors.append(
+                    f"{op} unknown input keys: {', '.join(sorted(bad))}"
+                )
 
         # 3b2. PARAMETER PROVENANCE (P0): a planned input VALUE must be
         # traceable to the user request or a producer chain — never an LLM
@@ -490,6 +564,60 @@ class PlanValidatorNode:
                 forbidden_ops |= _unit_candidates(u)
             served: list[str] = []
             dropped: list[str] = []
+            # PER-INTENT EVIDENCE (I4, P0-B): one structured record per
+            # intent unit — candidates, planned matches, chosen vs best
+            # capability, alignment and served status. The scalar
+            # intent_coverage metric stays for dashboards; the evidence is
+            # the debuggable truth the validator and telemetry consume.
+            # ALIGNMENT SEMANTICS (B3/P0-B): the authoritative ranking is
+            # the ENGINE's ranked candidate list (preferred_tools — the
+            # exact order the planner saw in its catalog). A unit is
+            # misaligned when the plan picked a candidate ranked >=2
+            # positions below the unit's best-ranked candidate (or picked
+            # an op the engine did not rank at all). Adjacent positions are
+            # near-ties the engine itself treats as ambiguous — never
+            # blocking. This aligns the validator WITH the engine instead
+            # of a home-grown keyword-strength score.
+            _engine_order = [
+                c for c in (preferred_tools or []) if isinstance(c, str)
+            ]
+            coverage_evidence: list[dict[str, Any]] = []
+            for u in detected.units:
+                candidates = _unit_candidates(u)
+                classifiable = bool(candidates) and not u.negated
+                matches = planned_ops & candidates if classifiable else set()
+                best = _best_capability(u, candidates) if candidates else None
+                chosen = (
+                    _best_capability(u, matches)
+                    if matches else None
+                )
+                engine_best = next(
+                    (c for c in _engine_order if c in candidates), None
+                )
+                misaligned_pick = bool(
+                    chosen
+                    and engine_best
+                    and chosen != engine_best
+                    and (
+                        chosen not in _engine_order
+                        or _engine_order.index(chosen)
+                        - _engine_order.index(engine_best)
+                        >= 2
+                    )
+                )
+                coverage_evidence.append({
+                    "unit": u.text,
+                    "negated": u.negated,
+                    "classifiable": classifiable,
+                    "instance_hint": u.instance_hint,
+                    "candidates": sorted(candidates),
+                    "planned_matches": sorted(matches),
+                    "best": best,
+                    "chosen": chosen,
+                    "engine_best": engine_best,
+                    "aligned": not misaligned_pick,
+                    "served": None,  # filled below for executable units
+                })
             for u in executable:
                 candidates = _unit_candidates(u)
                 matches = planned_ops & candidates
@@ -498,6 +626,10 @@ class PlanValidatorNode:
                     served.append(u.text)
                 else:
                     dropped.append(u.text)
+            for rec, u in zip(coverage_evidence, detected.units, strict=True):
+                if not u.negated and rec["classifiable"]:
+                    rec["served"] = u.text in served
+            metrics["intent_coverage_evidence"] = coverage_evidence
             metrics["detected_executable"] = len(executable)
             metrics["unclassifiable_units"] = len(unclassifiable)
             metrics["served_intents"] = len(served)
@@ -509,6 +641,14 @@ class PlanValidatorNode:
             # by the WRONG capability when several candidates matched its
             # keywords. Alignment = did the plan pick the unit's BEST
             # candidate? Ranked by the keyword/name/alias match strength.
+            # ALIGNMENT (B3/P0-B): a served unit's chosen capability is
+            # misaligned when it carries ZERO keyword/alias/name-token
+            # signal while the unit has candidates with positive signal —
+            # the plan mapped the intent to an unrelated capability. Weak
+            # but positive signals (engine ranking vs keyword-overlap
+            # disagreements) are NOT violations: the planner follows the
+            # engine-ranked catalog, and tie/weak-gap arbitration belongs
+            # to the engine, never to a blocking validator rule.
             misaligned: list[str] = []
             alignments: list[float] = []
             for u in executable:
@@ -516,10 +656,27 @@ class PlanValidatorNode:
                 matches = planned_ops & candidates
                 if not matches:
                     continue
-                best = max(candidates, key=lambda c: _op_match_strength(u, c))
-                chosen = max(matches, key=lambda c: _op_match_strength(u, c))
-                if chosen != best:
-                    misaligned.append(f"{u.text[:40]} -> {chosen} (best: {best})")
+                best = _best_capability(u, candidates)
+                chosen = _best_capability(u, matches)
+                engine_best = next(
+                    (c for c in _engine_order if c in candidates), None
+                )
+                # ENGINE-ORDER ALIGNMENT (B3/P0-B): the planner was handed
+                # the engine-ranked catalog; picking a candidate ranked >=2
+                # positions below the unit's best-ranked candidate (or an
+                # op the engine never ranked) is a genuine wrong pick.
+                if (
+                    chosen
+                    and engine_best
+                    and chosen != engine_best
+                    and (
+                        chosen not in _engine_order
+                        or _engine_order.index(chosen)
+                        - _engine_order.index(engine_best)
+                        >= 2
+                    )
+                ):
+                    misaligned.append(f"{u.text[:40]} -> {chosen} (best: {engine_best})")
                     alignments.append(0.0)
                 else:
                     alignments.append(1.0)
@@ -742,6 +899,13 @@ def _unit_candidates(unit) -> frozenset[str]:
         return frozenset()
 
 
+def _best_capability(unit, ops) -> str | None:
+    """Deterministic best-capability pick: highest keyword/name/alias
+    match strength, name-lexicographic tiebreak (B3/P0-B)."""
+    ranked = sorted(ops, key=lambda c: (_op_match_strength(unit, c), str(c)))
+    return str(ranked[-1]) if ranked else None
+
+
 def _op_match_strength(unit, op: str) -> int:
     """Keyword/name/alias match strength between an intent unit and a
     capability — used for the capability-alignment ranking. Metadata-only
@@ -924,7 +1088,7 @@ def _missing_inputs(op: str, provided: set[str]) -> set[str]:
     a required property counts as satisfied (the executor remaps it at call
     time). Empty/whitespace values count as NOT provided (a plan that emits
     ``latitude: ""`` has no usable input — it would fail at execution with
-    a type error). No schema → nothing reported (never guesses)."""
+    a type error). No schema — nothing reported (never guesses)."""
     if not op:
         return set()
     meta = _capability_meta(op)
@@ -939,6 +1103,32 @@ def _missing_inputs(op: str, provided: set[str]) -> set[str]:
                 provided_aliases.add(prop_name)
     satisfied = provided | provided_aliases
     return required - satisfied
+
+
+def _unknown_input_keys(op: str, inputs: dict[str, Any]) -> list[str]:
+    """Input keys the capability schema does not declare (D0/P0-C, I11).
+
+    An invented key (``base_currency`` on a tool whose schema declares
+    other properties, or any LLM-invented parameter) is never consumed by
+    the tool — the plan is structurally invalid. Alias-aware (x-alias keys
+    declared in ``input_aliases`` are valid). No declared schema → no
+    signal → nothing reported (never guesses).
+    """
+    if not op:
+        return []
+    meta = _capability_meta(op)
+    schema = meta.get("input_schema") or {}
+    props = schema.get("properties") if isinstance(schema, dict) else None
+    if not isinstance(props, dict) or not props:
+        return []
+    declared = set(props)
+    alias_map = meta.get("input_aliases") or {}
+    for aliases in alias_map.values():
+        declared.update(str(a) for a in (aliases or []))
+    return [
+        str(k) for k in (inputs or {}).keys()
+        if str(k) not in declared
+    ]
 
 
 def _schema_type_violations(op: str, inputs: dict) -> list[tuple[str, Any, str]]:

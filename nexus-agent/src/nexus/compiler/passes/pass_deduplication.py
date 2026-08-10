@@ -27,6 +27,12 @@ PRIORITY = 40
 def run(graph: ExecutionGraph) -> ExecutionGraph:
     """Merge duplicate ToolNodes and remap dependency references.
 
+    D4/P0-D: merging is ONLY allowed for idempotent (+ dedup-safe, when
+    declared) capabilities — two identical calls to a side-effecting tool
+    are two DISTINCT operations the user asked for. Map identity includes
+    the iterate_over collection (two maps over different collections are
+    never merged, even with identical bodies).
+
     Args:
         graph: The current ``ExecutionGraph`` with physical nodes.
 
@@ -37,14 +43,16 @@ def run(graph: ExecutionGraph) -> ExecutionGraph:
     if len(nodes) < 2:
         return graph
 
-    # Build hash → list of (nid, ToolNode)
-    sig_groups: dict[str, list[tuple[str, ToolNode]]] = {}
+    # Build hash → list of (nid, node)
+    sig_groups: dict[str, list[tuple[str, PhysicalNode]]] = {}
     for nid, node in nodes.items():
         tnode = _extract_tool_node(node)
         if tnode is None:
             continue
-        sig = _node_signature(tnode)
-        sig_groups.setdefault(sig, []).append((nid, tnode))
+        if not _dedup_safe(tnode.tool_name):
+            continue  # D4: side-effecting operations are never merged
+        sig = _node_signature(node)
+        sig_groups.setdefault(sig, []).append((nid, node))
 
     # Build remapping: duplicate ID → canonical ID
     remap: dict[str, str] = {}
@@ -52,7 +60,7 @@ def run(graph: ExecutionGraph) -> ExecutionGraph:
         if len(group) < 2:
             continue
         canonical = group[0][0]
-        for nid, _tnode in group[1:]:
+        for nid, _node in group[1:]:
             remap[nid] = canonical
 
     if not remap:
@@ -90,6 +98,28 @@ def run(graph: ExecutionGraph) -> ExecutionGraph:
     return ExecutionGraph(**data, nodes=kept, waves=new_waves)
 
 
+def _dedup_safe(tool_name: str) -> bool:
+    """D4/P0-D: only capabilities whose registry contract declares
+    ``idempotent`` (and ``dedup_safe`` when present) may be merged —
+    absent metadata = never merge (safe default)."""
+    try:
+        from types import SimpleNamespace as _NS
+
+        from nexus.context.global_context import get_global_context
+
+        gc = get_global_context()
+        meta = (gc.capability_index or {}).get(tool_name) or {}
+        contract = meta.get("contract")
+        if contract is None or not bool(getattr(contract, "idempotent", False)):
+            return False
+        dedup_safe = getattr(contract, "dedup_safe", None)
+        if dedup_safe is None:
+            return True
+        return bool(dedup_safe)
+    except Exception:
+        return False
+
+
 def _extract_tool_node(node: PhysicalNode) -> ToolNode | None:
     """Extract a ToolNode from a PhysicalNode.
     
@@ -103,13 +133,20 @@ def _extract_tool_node(node: PhysicalNode) -> ToolNode | None:
     return None
 
 
-def _node_signature(tnode: ToolNode) -> str:
-    """Deterministic hash of (tool_name, sorted inputs)."""
-    payload = json.dumps(
-        {"tool_name": tnode.tool_name, "inputs": tnode.inputs},
-        sort_keys=True,
-    )
-    return hashlib.sha256(payload.encode()).hexdigest()
+def _node_signature(node: PhysicalNode) -> str:
+    """Deterministic hash of (tool_name, sorted inputs) — plus the
+    iterate_over collection for MapNodes (D4/P0-D: two maps over
+    different collections are distinct operations)."""
+    tnode = node if isinstance(node, ToolNode) else node.body
+    payload: dict = {
+        "tool_name": tnode.tool_name,
+        "inputs": tnode.inputs,
+    }
+    if isinstance(node, MapNode):
+        payload["iterate_over"] = node.iterate_over
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True).encode()
+    ).hexdigest()
 
 
 def _remap_deps(node: PhysicalNode, remap: dict[str, str]) -> PhysicalNode:

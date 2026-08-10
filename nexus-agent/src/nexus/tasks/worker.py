@@ -9,6 +9,8 @@ and cancellation checks) → ack/complete or nack/fail.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import uuid
 from typing import Any, Awaitable, Callable
 
 import structlog
@@ -43,22 +45,34 @@ def get_executors() -> dict[str, Callable[[dict[str, Any]], Awaitable[dict[str, 
 
 
 class Worker:
-    """Background task worker: claims tasks from the queue and executes them."""
+    """Background task worker: claims tasks from the queue and executes them.
+
+    D5/P0-D lease semantics: each worker uses a UNIQUE consumer name (so
+    horizontal parallelism works), holds an atomic DB lease on the task
+    row while executing (heartbeated), releases it on completion, and can
+    only ever commit writes while it still owns the lease.
+    """
 
     def __init__(
         self,
         registry: TaskRegistry | None = None,
         queue: TaskQueue | None = None,
         poll_ms: int = 500,
+        consumer: str | None = None,
+        lease_s: int = 60,
     ) -> None:
         self._registry = registry or TaskRegistry()
         self._queue = queue or RedisStreamsQueue()
         self._poll_ms = poll_ms
+        # D5: unique consumer name per worker process — all workers sharing
+        # the name "worker" would be ONE consumer from Redis's perspective.
+        self._consumer = consumer or f"worker-{uuid.uuid4().hex[:8]}"
+        self._lease_s = lease_s
         self._running = False
 
     async def run_once(self) -> bool:
         """Claim and execute ONE task. Returns True if a task was processed."""
-        claimed = await self._queue.claim()
+        claimed = await self._queue.claim(consumer=self._consumer)
         if claimed is None:
             return False
         task_id = claimed["task_id"]
@@ -78,14 +92,38 @@ class Worker:
             await self._queue.ack(entry_id)
             return True
 
+        # D5: ATOMIC DB LEASE — exactly one worker may execute. When the
+        # lease is held by another worker (stream XCLAIM raced), the task
+        # must NOT run; the entry stays pending and is retried after the
+        # lease expires.
+        if not await self._registry.claim_lease(task_id, self._consumer, self._lease_s):
+            logger.info(
+                "worker.lease_held_by_another",
+                task_id=task_id,
+                holder=record.get("worker_id"),
+            )
+            return True
+
         await self._registry.update_status(task_id, STATUS_RUNNING)
         executor = _executors.get(record.get("task_type", ""))
         if executor is None:
             await self._registry.mark_failed(task_id, f"No executor for task type '{record.get('task_type')}'")
+            await self._registry.release_lease(task_id, self._consumer)
             await self._queue.ack(entry_id)
             return True
 
+        # D5: lease heartbeat while executing — a crash mid-run expires
+        # the lease for a safe reclaim; a lost lease means the worker must
+        # stop committing.
+        heartbeat_task: asyncio.Task[None] | None = None
+
+        async def _heartbeat() -> None:
+            while True:
+                await asyncio.sleep(max(1, self._lease_s // 3))
+                await self._registry.heartbeat(task_id, self._consumer, self._lease_s)
+
         try:
+            heartbeat_task = asyncio.create_task(_heartbeat())
             result = await executor(payload)
             await self._registry.mark_completed(task_id, result if isinstance(result, dict) else {"result": result})
             await self._queue.ack(entry_id)
@@ -94,8 +132,20 @@ class Worker:
             raise
         except Exception as exc:
             logger.warning("worker.task_failed", task_id=task_id, error=str(exc)[:300])
-            await self._registry.mark_failed(task_id, str(exc)[:500])
-            await self._queue.ack(entry_id)
+            # D5: retry semantics — a failed task is left pending (not
+            # acked) while attempts remain; max_attempts exhausted →
+            # terminal FAILED.
+            if await self._registry.register_attempt(task_id):
+                logger.info("worker.task_retry_pending", task_id=task_id)
+            else:
+                await self._registry.mark_failed(task_id, str(exc)[:500])
+                await self._queue.ack(entry_id)
+        finally:
+            if heartbeat_task is not None:
+                heartbeat_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await heartbeat_task
+            await self._registry.release_lease(task_id, self._consumer)
         return True
 
     async def run_forever(self) -> None:

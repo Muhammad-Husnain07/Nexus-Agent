@@ -335,6 +335,9 @@ async def compile_registry(
                             "weight": ep.weight,
                             "latency_p99_ms": ep.latency_p99_ms,
                             "cost_per_call": ep.cost_per_call,
+                            # D4/P0-D: the optimizer's batch-fusion gate reads
+                            # this at runtime (absent = no fusion).
+                            "supports_batch": bool(ep.supports_batch),
                         })
                     providers_list.append({
                         "name": prov.name,

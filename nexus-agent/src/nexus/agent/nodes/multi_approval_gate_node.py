@@ -207,10 +207,32 @@ async def _process_approval_chain(
         return {"_approval_granted": True, "_approval_chain_state": chain_state}
 
     current_step = steps[current_idx]
+    step_id = current_step.get("step_id", f"step_{current_idx}")
 
-    # Check the GLOBAL decision first (set by POST /approve or /reject)
+    # Check the GLOBAL decision first (set by the conversational resume
+    # node — approve/reject/cancel/modify/clarify).
     global_decision = state.get("_approval_decision")
     if global_decision == "approved":
+        # APPROVAL BINDING (C2/P0-C): a conversational approve authorizes
+        # the EXACT operation recorded when the approval was requested. A
+        # replanned/modified operation (different inputs / plan version /
+        # capability set) produces a different operation_hash — the prior
+        # approval is NOT honored; the gate re-requests approval. The
+        # decision is consumed either way (never double-grants a step).
+        if not _approval_binding_ok(chain_state, _pending, step_id):
+            logger.warning(
+                "multi_approval_gate.binding_mismatch",
+                step=step_id,
+            )
+            return {
+                "_approval_decision": None,
+                "_approval_granted": False,
+                "_needs_approval": True,
+                "_pending_approval_tools": _build_step_message(
+                    current_step, completed_steps, steps
+                ),
+                "_approval_chain_state": chain_state,
+            }
         completed_steps.append({
             "step_id": current_step.get("step_id", f"step_{current_idx}"),
             "decision": "approved",
@@ -224,6 +246,8 @@ async def _process_approval_chain(
                 "_needs_approval": False,
                 "_pending_approval_tools": [],
                 "_approval_chain_state": chain_state,
+                # Consume the decision — it binds to this step only.
+                "_approval_decision": None,
                 # Clear the conversational checkpoint — the decision is consumed
                 "_approval_pending": None,
                 "_approval_checkpoint_context": None,
@@ -232,6 +256,7 @@ async def _process_approval_chain(
             "_approval_chain_state": chain_state,
             "_needs_approval": True,
             "_pending_approval_tools": _build_step_message(current_step, completed_steps, steps),
+            "_approval_decision": None,
         }
     if global_decision == "rejected":
         return {
@@ -244,18 +269,14 @@ async def _process_approval_chain(
         }
 
     # Check if this step has been approved via the per-step chain state.
-    # APPROVAL SEMANTIC BINDING (P1): the stored decision carries the
+    # APPROVAL SEMANTIC BINDING (C2/P0-C): the stored decision carries the
     # operation_hash it was approved for — a replanned/modified step
     # (different inputs) produces a different hash and the prior approval
-    # is NOT honored (re-approval required).
-    step_id = current_step.get("step_id", current_idx)
+    # is NOT honored (re-approval required). A decision without a matching
+    # bound hash is never honored.
     step_decision = chain_state.get(f"step_{step_id}_decision")
-    _step_approved_hash = chain_state.get(f"step_{step_id}_hash", "")
-    _current_hash = _pending.get("operation_hash", "") if isinstance(
-        _pending, dict
-    ) else ""
-    if step_decision == "approved" and (
-        not _step_approved_hash or _step_approved_hash == _current_hash
+    if step_decision == "approved" and _approval_binding_ok(
+        chain_state, _pending, step_id
     ):
         completed_steps.append({
             "step_id": current_step.get("step_id", f"step_{current_idx}"),
@@ -344,20 +365,40 @@ async def _process_approval_chain(
     # hardcoded operation text.
     context_summary = _build_checkpoint_context(tool_names, tool_details)
 
-    # APPROVAL SEMANTIC BINDING (P1): the decision binds to the EXACT
-    # operation set — a hash of (policy, step, tools, resolved inputs).
-    # A replanned/modified operation produces a different hash and is
-    # NEVER auto-authorized by a prior approval.
+    # APPROVAL SEMANTIC BINDING (C2/P0-C): the decision binds to the EXACT
+    # operation set — policy (+version), step, tools, the STEP-declared
+    # inputs AND the actual planned (resolved) inputs per tool, capability
+    # ids, and the plan/graph version. A replanned/modified operation
+    # produces a different hash and is NEVER auto-authorized by a prior
+    # approval.
     import hashlib as _hl
     import json as _json
 
+    _step_inputs = current_step.get("inputs") or {}
+    _resolved_inputs: dict[str, Any] = {}
+    _capability_ids: list[str] = []
+    for _name, _details in (tool_details or {}).items():
+        if not isinstance(_details, dict):
+            continue
+        _ins = _details.get("inputs") or {}
+        if isinstance(_ins, dict):
+            _resolved_inputs[_name] = {
+                str(k): str(v) for k, v in _ins.items()
+            }
+        _capability_ids.append(
+            str(_details.get("capability_id") or _details.get("id") or "")
+        )
     _binding_payload = {
         "policy": policy.get("name", ""),
+        "policy_version": policy.get("version", ""),
         "step": current_step.get("step_id", f"step_{current_idx}"),
         "tools": sorted(tool_names),
-        "inputs": sorted(
-            str(v) for v in (current_step.get("inputs") or {}).values()
-        ),
+        "step_inputs": {
+            str(k): str(v) for k, v in (dict(_step_inputs) or {}).items()
+        },
+        "resolved_inputs": {k: v for k, v in sorted(_resolved_inputs.items())},
+        "capability_ids": sorted(_capability_ids),
+        "graph_version": str(state.get("_graph_version") or ""),
     }
     operation_hash = _hl.sha256(
         _json.dumps(_binding_payload, sort_keys=True).encode()
@@ -418,6 +459,24 @@ def _build_checkpoint_context(
     if len(parts) > 8:
         summary += f" (+{len(parts) - 8} more)"
     return summary
+
+
+def _approval_binding_ok(
+    chain_state: dict[str, Any],
+    pending: Any,
+    step_id: str,
+) -> bool:
+    """C2/P0-C approval binding: the recorded approval (chain state) must
+    carry the operation_hash of the CURRENT pending operation. A missing or
+    mismatched hash means the operation changed since approval — the
+    approval must NOT be honored."""
+    _bound = chain_state.get(f"step_{step_id}_hash", "")
+    _current = (
+        pending.get("operation_hash", "")
+        if isinstance(pending, dict)
+        else ""
+    )
+    return bool(_bound) and bool(_current) and _bound == _current
 
 
 def _clear_requested_at(chain_state: dict[str, Any]) -> dict[str, Any]:

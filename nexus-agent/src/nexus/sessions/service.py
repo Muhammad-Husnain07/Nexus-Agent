@@ -78,12 +78,14 @@ class SessionService:
     async def create_session(
         self,
         data: SessionCreate | None = None,
+        user_id: str | None = None,
     ) -> SessionRead:
         title = data.title if data and data.title else "New Session"
         metadata_ = data.metadata_ if data else None
         session = await self._session_repo.create(
             title=title,
             metadata_=metadata_,
+            user_id=user_id,
         )
         logger.info("session_created", session_id=str(session.id))
         return _session_to_read(session)
@@ -100,11 +102,13 @@ class SessionService:
         status: str | None = None,
         page: int = 1,
         page_size: int = 20,
+        owner_id: str | None = None,
     ) -> SessionList:
         items, total, message_counts = await self._session_repo.list(
             status=status,
             page=page,
             page_size=page_size,
+            owner_id=owner_id,
         )
         reads = [_session_to_read(s, message_counts.get(s.id, 0)) for s in items]
         return SessionList(items=reads, total=total, page=page, page_size=page_size)

@@ -346,6 +346,13 @@ class AgentSettings(BaseModel):
         max_llm_calls: Max LLM calls per invocation.
         max_tool_calls: Max tool calls per invocation.
         max_invocation_cost_usd: Max estimated cost per invocation.
+        enable_claim_entailment: OPTIONAL claim→artifact entailment verifier
+            (P2-A). Off by default: the deterministic incorporation/coverage
+            guards + renderer are ALWAYS the correctness floor — the LLM
+            entailment check, when enabled, runs only AFTER them and its
+            failure degrades to the same deterministic renderer; it can
+            never be the authority (a response can never claim success
+            merely because an LLM says the claim is grounded).
     """
 
     max_iterations: int = Field(default=25, ge=1, description="Max iterations per turn")
@@ -360,11 +367,16 @@ class AgentSettings(BaseModel):
     max_invocation_cost_usd: float = Field(
         default=1.0, ge=0.0, description="Max estimated cost per invocation"
     )
+    enable_claim_entailment: bool = Field(
+        default=False,
+        description="P2-A optional claim→artifact entailment verifier (off by "
+        "default; the deterministic guard + renderer are always the floor)",
+    )
     memory_default_ttl_s: int = Field(
-        default=0, ge=0,
-        description="Default memory entry lifetime in seconds (0 = no expiry; "
-        "a bounded lifetime prevents stale context from being treated as "
-        "current truth — the P1 freshness contract)",
+        default=604800, ge=0,
+        description="Default memory entry lifetime in seconds (7 days; 0 = no "
+        "expiry — a bounded lifetime prevents stale context from being "
+        "treated as current truth, the P1 freshness contract)",
     )
     context_window_tokens: int = Field(default=128000, ge=1, description="Context window in tokens")
     summarization_threshold_tokens: int = Field(
@@ -640,6 +652,15 @@ class ToolSettings(BaseModel):
             "apikey", "token", "secret",
         ],
         description="Header/field names whose values should be redacted in logs",
+    )
+
+    # C4/P0-C: tool ``auth_ref`` values (env-var references injected as
+    # Authorization headers) are resolved ONLY when the ref is operator-
+    # allowlisted. Empty (default) = no arbitrary env-var references —
+    # closing the server-side secret-exfiltration channel.
+    auth_ref_allowlist: list[str] = Field(
+        default_factory=list,
+        description="Operator-approved env-var names usable as tool auth_refs",
     )
 
     # Max request body size in bytes

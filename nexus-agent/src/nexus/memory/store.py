@@ -35,6 +35,7 @@ class MemoryStore:
         metadata: dict[str, Any] | None = None,
         importance: float = 0.5,
         ttl_s: int | None = None,
+        invocation_id: str | None = None,
     ) -> uuid.UUID:
         """Store a memory entry."""
         mid = memory_id or uuid.uuid4()
@@ -45,18 +46,29 @@ class MemoryStore:
         content = re.sub(r"<|endoftext|>\s*$", "", content.strip())
 
         # PROVENANCE (P1): every memory entry carries its observed time,
-        # source, scope, and confidence — the freshness contract the
-        # ContextCompiler and the planner rely on. Attached here (the store
-        # boundary) so no caller can forget them.
+        # source, scope, confidence, and (A3) its originating invocation —
+        # the freshness contract the ContextCompiler and the planner rely
+        # on. Attached here (the store boundary) so no caller can forget
+        # them.
         now = datetime.now(UTC)
         metadata = dict(metadata or {})
         metadata.setdefault("observed_at", now.isoformat())
         metadata.setdefault("source", "agent")
         metadata.setdefault("scope", session_id or "global")
         metadata.setdefault("confidence", round(importance, 2))
-        # FRESHNESS (P1): an optional bounded lifetime writes ``expires_at``
-        # (epoch seconds) — the scout's expiry filter enforces it; stale
-        # memories are never retrieved as current truth.
+        if invocation_id:
+            metadata.setdefault("invocation_id", str(invocation_id))
+        # FRESHNESS (P1): a bounded lifetime writes ``expires_at`` (epoch
+        # seconds) — the scout's expiry filter enforces it; stale memories
+        # are never retrieved as current truth. A3/P1-A: the default TTL
+        # from settings applies when the caller does not override.
+        if ttl_s is None:
+            try:
+                from nexus.config.settings import get_settings as _mem_settings
+
+                ttl_s = int(getattr(_mem_settings().agent, "memory_default_ttl_s", 0) or 0)
+            except Exception:
+                ttl_s = 0
         if ttl_s and ttl_s > 0:
             metadata["expires_at"] = now.timestamp() + ttl_s
 
@@ -112,12 +124,19 @@ class MemoryStore:
         metadata_filter: dict[str, Any],
         kind: str | None = None,
         top_k: int = 5,
+        session_scope: str | None = None,
     ) -> list[dict[str, Any]]:
         """Deterministic metadata lookup — no embedding required.
 
         Used by the executor's cacheable artifact reads (Phase 5): find a
         previously stored artifact by its execution key without paying for a
         vector query.
+
+        I7/P1-A CENTRALIZED SCOPE ENFORCEMENT: when ``session_scope`` is
+        provided (the artifact-cache read paths), the lookup is restricted
+        to rows written by THAT session — cross-session cache reads are
+        structurally impossible. ``None`` keeps the unscoped behavior for
+        non-cache consumers.
         """
         if not metadata_filter:
             return []
@@ -132,6 +151,10 @@ class MemoryStore:
         if kind:
             sql += "AND kind = :kind "
             params["kind"] = kind
+
+        if session_scope is not None:
+            sql += "AND session_id = :scope "
+            params["scope"] = str(session_scope)
 
         import re
         _VALID_KEY = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")

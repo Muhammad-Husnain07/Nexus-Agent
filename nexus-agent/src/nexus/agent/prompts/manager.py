@@ -4,7 +4,7 @@ Usage::
 
     from nexus.agent.prompts import prompt_manager
 
-    prompt = prompt_manager.render("understand_intent", version="2.0", goal="send email")
+    prompt = prompt_manager.render("logical_planner", "2.4", capabilities="...", history="...")
 """
 
 from __future__ import annotations
@@ -17,6 +17,16 @@ import structlog
 from pydantic import BaseModel, Field
 
 logger = structlog.get_logger("nexus.agent.prompts.manager")
+
+
+class PromptVersionError(KeyError):
+    """Raised when a prompt name/version is requested but not registered.
+
+    Fail-closed contract (invariant I9): a missing production prompt is a
+    typed configuration error, never a silent quality degradation. Callers
+    must not catch this and substitute an ad-hoc prompt.
+    """
+
 
 class PromptTemplate(BaseModel):
     """A registered prompt template with versioning metadata.
@@ -79,16 +89,17 @@ class PromptManager:
             The matching ``PromptTemplate``.
 
         Raises:
-            KeyError: If the name is not registered or the version doesn't exist.
+            PromptVersionError: If the name is not registered or the version
+                doesn't exist.
         """
         versions = self._templates.get(name)
         if versions is None:
-            raise KeyError(f"Unknown prompt: '{name}'")
+            raise PromptVersionError(f"Unknown prompt: '{name}'")
 
         if version is not None:
             tmpl = versions.get(version)
             if tmpl is None:
-                raise KeyError(f"Unknown version '{version}' for prompt '{name}'")
+                raise PromptVersionError(f"Unknown version '{version}' for prompt '{name}'")
             return tmpl
 
         # A/B testing — pick version based on configured weights
@@ -167,6 +178,23 @@ class PromptManager:
         """Return all registered version strings for a prompt name."""
         versions = self._templates.get(name, {})
         return sorted(versions.keys(), key=lambda v: [int(x) for x in v.split(".")])
+
+    def fingerprint(self, name: str, version: str | None = None) -> str:
+        """P1-B.2: content hash of the registered template (current or the
+        given version). A prompt CONTENT change produces a new fingerprint
+        even when the version label is unchanged."""
+        import hashlib as _hl
+
+        tmpl = self.get(name, version=version)
+        return _hl.sha256(tmpl.template.encode()).hexdigest()[:16]
+
+    def fingerprints(self) -> dict[str, str]:
+        """P1-B.2: content fingerprints of every registered prompt, keyed
+        by prompt name (the highest registered version)."""
+        out: dict[str, str] = {}
+        for name in self._templates:
+            out[name] = self.fingerprint(name)
+        return out
 
 
 prompt_manager = PromptManager()

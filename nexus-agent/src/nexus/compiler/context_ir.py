@@ -140,17 +140,20 @@ class ContextIR:
     policy: ContextPolicy = field(default_factory=lambda: ContextPolicy(purpose="compiled"))
     context_id: str = ""
 
-    def fingerprint(self, renderer_version_hash: str) -> str:
+    def fingerprint(self, renderer_version_hash: str, prompt_fp: str = "") -> str:
         """Compute a deterministic cache key for this compiled context.
 
-        Includes policy, model, schema versions, and item content hashes.
-        Two ContextIRs with the same fingerprint produce identical rendered prompts.
+        Includes policy, model, schema versions, item content hashes, and
+        (P1-B.2) the RESPONSE prompt content fingerprint — a finalize-prompt
+        change invalidates only the response cache, never parse/plan caches.
+        Two ContextIRs with the same fingerprint produce identical rendered
+        prompts.
         """
         policy_str = (
             f"{self.policy.purpose}|{self.policy.max_history_turns}|{self.policy.max_artifacts}"
         )
         version_str = (
-            f"2.0|{renderer_version_hash}|{self.model_name}|{policy_str}|"
+            f"2.0|{renderer_version_hash}|{prompt_fp}|{self.model_name}|{policy_str}|"
             f"{json.dumps(self.schema_versions, sort_keys=True)}"
         )
         sorted_items = sorted(

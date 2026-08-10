@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import select, update
 
 from nexus.db.base import get_session_factory
@@ -28,8 +28,12 @@ logger = structlog.get_logger("nexus.api.long_running")
 router = APIRouter(prefix="/long-running", tags=["long_running"])
 
 
-async def _get_workflow(workflow_id: str) -> dict[str, Any]:
-    """Fetch a LongRunningWorkflow by ID."""
+async def _get_workflow(
+    workflow_id: str,
+    request: Request | None = None,
+) -> dict[str, Any]:
+    """Fetch a LongRunningWorkflow by ID (owner-scoped when a request is
+    given — C3/P0-C)."""
     from nexus.db.models.long_running_workflow import LongRunningWorkflow
 
     try:
@@ -44,6 +48,11 @@ async def _get_workflow(workflow_id: str) -> dict[str, Any]:
         wf = result.scalar_one_or_none()
         if wf is None:
             raise HTTPException(status_code=404, detail="Workflow not found")
+
+        if request is not None:
+            from nexus.security.ownership import require_session_access  # noqa: PLC0415
+
+            await require_session_access(request, wf.session_id)
 
         return {
             "id": str(wf.id),
@@ -63,14 +72,21 @@ async def _get_workflow(workflow_id: str) -> dict[str, Any]:
 
 
 @router.get("")
-async def list_workflows() -> list[dict[str, Any]]:
-    """List all long-running workflows."""
+async def list_workflows(request: Request) -> list[dict[str, Any]]:
+    """List long-running workflows (owner-scoped — C3/P0-C)."""
     from nexus.db.models.long_running_workflow import LongRunningWorkflow
+    from nexus.security.ownership import accessible_session_ids  # noqa: PLC0415
 
+    owned_ids = await accessible_session_ids(request)
     async with get_session_factory()() as session:
-        result = await session.execute(
-            select(LongRunningWorkflow).order_by(LongRunningWorkflow.created_at.desc())
-        )
+        stmt = select(LongRunningWorkflow).order_by(LongRunningWorkflow.created_at.desc())
+        if owned_ids:
+            stmt = stmt.where(
+                LongRunningWorkflow.session_id.in_(owned_ids)
+            )
+        else:
+            stmt = stmt.where(LongRunningWorkflow.session_id.is_(None))
+        result = await session.execute(stmt)
         workflows = result.scalars().all()
         return [
             {
@@ -88,17 +104,30 @@ async def list_workflows() -> list[dict[str, Any]]:
 
 
 @router.get("/{workflow_id}")
-async def get_workflow(workflow_id: str) -> dict[str, Any]:
-    """Get the status of a specific workflow."""
-    return await _get_workflow(workflow_id)
+async def get_workflow(workflow_id: str, request: Request) -> dict[str, Any]:
+    """Get the status of a specific workflow (owner-scoped)."""
+    return await _get_workflow(workflow_id, request)
 
 
 @router.post("/{workflow_id}/pause")
-async def pause_workflow(workflow_id: str) -> dict[str, str]:
-    """Pause a running workflow."""
+async def pause_workflow(workflow_id: str, request: Request) -> dict[str, str]:
+    """Pause a running workflow (owner-scoped)."""
     from nexus.db.models.long_running_workflow import LongRunningWorkflow
 
     async with get_session_factory()() as session:
+        result = await session.execute(
+            select(LongRunningWorkflow).where(
+                LongRunningWorkflow.id == uuid.UUID(workflow_id)
+            )
+        )
+        wf = result.scalar_one_or_none()
+        if wf is None:
+            raise HTTPException(status_code=404, detail="Running workflow not found")
+
+        from nexus.security.ownership import require_session_access  # noqa: PLC0415
+
+        await require_session_access(request, wf.session_id)
+
         result = await session.execute(
             update(LongRunningWorkflow)
             .where(
@@ -116,11 +145,24 @@ async def pause_workflow(workflow_id: str) -> dict[str, str]:
 
 
 @router.post("/{workflow_id}/resume")
-async def resume_workflow(workflow_id: str) -> dict[str, str]:
-    """Resume a paused workflow."""
+async def resume_workflow(workflow_id: str, request: Request) -> dict[str, str]:
+    """Resume a paused workflow (owner-scoped)."""
     from nexus.db.models.long_running_workflow import LongRunningWorkflow
 
     async with get_session_factory()() as session:
+        result = await session.execute(
+            select(LongRunningWorkflow).where(
+                LongRunningWorkflow.id == uuid.UUID(workflow_id)
+            )
+        )
+        wf = result.scalar_one_or_none()
+        if wf is None:
+            raise HTTPException(status_code=404, detail="Paused workflow not found")
+
+        from nexus.security.ownership import require_session_access  # noqa: PLC0415
+
+        await require_session_access(request, wf.session_id)
+
         result = await session.execute(
             update(LongRunningWorkflow)
             .where(
@@ -138,11 +180,24 @@ async def resume_workflow(workflow_id: str) -> dict[str, str]:
 
 
 @router.post("/{workflow_id}/cancel")
-async def cancel_workflow(workflow_id: str) -> dict[str, str]:
-    """Cancel a workflow (completed terminal status)."""
+async def cancel_workflow(workflow_id: str, request: Request) -> dict[str, str]:
+    """Cancel a workflow (completed terminal status) — owner-scoped."""
     from nexus.db.models.long_running_workflow import LongRunningWorkflow
 
     async with get_session_factory()() as session:
+        result = await session.execute(
+            select(LongRunningWorkflow).where(
+                LongRunningWorkflow.id == uuid.UUID(workflow_id)
+            )
+        )
+        wf = result.scalar_one_or_none()
+        if wf is None:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+
+        from nexus.security.ownership import require_session_access  # noqa: PLC0415
+
+        await require_session_access(request, wf.session_id)
+
         result = await session.execute(
             update(LongRunningWorkflow)
             .where(LongRunningWorkflow.id == uuid.UUID(workflow_id))
@@ -154,3 +209,4 @@ async def cancel_workflow(workflow_id: str) -> dict[str, str]:
 
     logger.info("long_running.cancelled", workflow_id=workflow_id)
     return {"status": "completed", "workflow_id": workflow_id}
+

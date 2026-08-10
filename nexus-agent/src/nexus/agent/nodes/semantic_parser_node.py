@@ -654,6 +654,61 @@ def _surface_cache_drops(workflow: dict[str, Any]) -> list[str]:
         logger.warning("semantic_planner.cache_dropped_ops", dropped=dropped)
 
 
+def _plan_unsafe_to_cache(nodes: list[Any], user_query: str = "") -> bool:
+    """True when a plan must never enter the ParseCache (D0/P0-C, I11).
+
+    A plan is unsafe to cache when it is structurally invalid in a
+    statically-detectable way: schema-invalid input values, missing
+    REQUIRED inputs, INVENTED input keys (keys the capability schema does
+    not declare), or REQUIRED-input literal values that lack message
+    provenance (the F4-class replay: a bad-but-well-formed plan cached and
+    replayed deterministically — scenario 35's ``base_currency`` value).
+    Caching such a plan turns a one-off LLM mistake into a deterministic
+    replay.
+    """
+    if _has_schema_invalid_nodes(nodes):
+        return True
+    try:
+        from nexus.agent.nodes.plan_validator_node import (
+            _unknown_input_keys,
+            _value_in_message,
+        )
+    except Exception:
+        return False
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        op = str(node.get("op") or "")
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        if _unknown_input_keys(op, inputs):
+            return True
+        # VALUE PROVENANCE (I11 extension, P1-A/A1): a REQUIRED input
+        # carrying a literal value that appears nowhere in the user message
+        # is a guessed value — caching it replays the guess forever. The
+        # planner has the message at write time; this is deterministic.
+        if not user_query:
+            continue
+        from nexus.agent.nodes.plan_validator_node import _capability_meta
+
+        meta = _capability_meta(op)
+        required = set(meta.get("input_required") or [])
+        for key, value in inputs.items():
+            if key not in required:
+                continue
+            if not isinstance(value, (str, int, float)):
+                continue
+            if isinstance(value, str) and (
+                not value.strip()
+                or value.startswith("${")
+            ):
+                continue
+            if not _value_in_message(value, user_query):
+                return True
+    return False
+
+
 def _has_schema_invalid_nodes(nodes: list[Any]) -> bool:
     """True when any node carries an input the tool's declared JSON Schema
     type can never accept (garbage values the model emitted once, e.g.
@@ -1017,7 +1072,7 @@ async def semantic_parser_node(
             # A cached plan carrying schema-invalid input values (garbage the
             # model emitted once) is UNTRUSTWORTHY — treat it as a miss and
             # replan fresh (self-healing; never execute a known-bad plan).
-            if _has_schema_invalid_nodes(cached["nodes"]):
+            if _plan_unsafe_to_cache(cached["nodes"], last_message):
                 logger.warning(
                     "semantic_planner.cache_schema_invalid_replan",
                     query=last_message[:60],
@@ -1031,7 +1086,7 @@ async def semantic_parser_node(
             cached["nodes"] = _drop_unresolved(cached["nodes"], valid_ops)
             await _apply_strong_signal_correction(cached["nodes"], last_message)
             _drop_errs = _surface_cache_drops(cached)
-            if _has_schema_invalid_nodes(cached["nodes"]):
+            if _plan_unsafe_to_cache(cached["nodes"], last_message):
                 logger.warning(
                     "semantic_planner.cache_schema_invalid_replan",
                     query=last_message[:60],
@@ -1050,28 +1105,52 @@ async def semantic_parser_node(
     # full conversation history makes the LLM re-plan earlier steps and
     # hallucinate unrelated tools (observed in production runs).
     history_str = history_for_plan
-    try:
-        prompt = _pm.render(
-            "logical_planner", "2.3",
-            capabilities=capabilities if capabilities else "(none available)",
-            history=history_str if history_str else "(no prior conversation)",
-        )
-    except Exception:
-        prompt = f"Translate the user request into a workflow with these capabilities: {capabilities}\n\nConversation history:\n{history_str}"
+    # Fail-closed prompt resolution (I9): only registered versions may be
+    # served; a missing prompt is a typed configuration error
+    # (PromptVersionError) that must surface, never a silent fallback.
+    prompt = _pm.render(
+        "logical_planner", "2.4",
+        capabilities=capabilities if capabilities else "(none available)",
+        history=history_str if history_str else "(no prior conversation)",
+    )
 
     total_cost: float = 0.0
     total_tokens: int = 0
     parsed: dict[str, Any] | None = None
+
+    # A1/P1-A: RESERVE-BEFORE-START — every planner LLM call (instructor,
+    # JSON fallback, repair) draws from the invocation budget BEFORE it
+    # begins; an exhausted llm-call dimension terminates planning with an
+    # explicit error, never a silent overspend.
+    from nexus.agent.budget import budget_from_state as _budget_from_state
+
+    _bud = _budget_from_state(snapshot)
 
     # Try instructor first with strict Literal enforcement; on a typed LLM
     # failure (provider timeout/5xx — flaky shared endpoints), retry before
     # surfacing an honest error: transient provider failures are common and a
     # re-attempt materially improves availability.
     for _retry in range(3):
+        if not _bud.consume("llm_calls"):
+            return _build_error_patch(
+                Exception("invocation llm-call budget exhausted during planning"),
+                total_tokens,
+                total_cost,
+                version=ctx.version + 1,
+                invocation_budget=_bud.to_dict(),
+            )
         parsed = await _instructor_extract(prompt, last_message, llm, model, settings, valid_ops)
         if parsed is not None:
             break
         logger.info("semantic_planner.fallback_json_extract")
+        if not _bud.consume("llm_calls"):
+            return _build_error_patch(
+                Exception("invocation llm-call budget exhausted during planning"),
+                total_tokens,
+                total_cost,
+                version=ctx.version + 1,
+                invocation_budget=_bud.to_dict(),
+            )
         parsed = await _json_extract(prompt, last_message, llm, model, settings)
         if parsed is not None:
             break
@@ -1115,7 +1194,8 @@ async def semantic_parser_node(
         except Exception:
             repair_enabled = True
         if repair_enabled and valid_ops:
-            repair_map = await _repair_ops(llm, model, unresolved_ops, valid_ops)
+            if _bud.consume("llm_calls"):
+                repair_map = await _repair_ops(llm, model, unresolved_ops, valid_ops)
             for node in parsed["nodes"]:
                 if not isinstance(node, dict):
                     continue
@@ -1164,13 +1244,17 @@ async def semantic_parser_node(
 
     elapsed = time.perf_counter() - start_ts
 
-    # Never cache a plan whose inputs violate the tools' declared schema
-    # types (garbage values would be replayed forever and fail at execution).
-    if not _has_schema_invalid_nodes(nodes):
+    # NEVER CACHE A STRUCTURALLY INVALID PLAN (D0/P0-C, I11): schema-invalid
+    # input values AND invented input keys are statically detectable — a
+    # plan carrying either would be replayed forever from the cache and
+    # fail at execution or send junk parameters. Provenance/alignment are
+    # message-dependent and stay validator-side (the validator runs after
+    # every cache-hit planning too, so they still gate execution).
+    if not _plan_unsafe_to_cache(nodes, last_message):
         await cache.set(last_message, [], model, nodes, context=prior_chain)
     else:
         logger.warning(
-            "semantic_planner.skip_cache_schema_invalid",
+            "semantic_planner.skip_cache_structurally_invalid",
             query=last_message[:60],
         )
 
@@ -1191,18 +1275,8 @@ async def semantic_parser_node(
         latency_ms=round(elapsed * 1000),
     )
 
-    # REASONING BUDGET (P0): the planner's LLM call consumes the shared
-    # llm-call budget; the ledger flows back on the patch.
-    _llm_budget = {}
-    try:
-        from nexus.agent.budget import budget_from_state
-
-        _bud = budget_from_state(snapshot)
-        _bud.consume("llm_calls")
-        _llm_budget = _bud.to_dict()
-    except Exception:
-        _llm_budget = {}
-
+    # A1/P1-A: the RESERVED ledger (built before the first call) flows back
+    # on the patch — the runner merges it into its own budget.
     return _build_patch(
         parsed,
         total_tokens=total_tokens,
@@ -1211,7 +1285,7 @@ async def semantic_parser_node(
         version=ctx.version + 1,
         errors=planner_errors or None,
         budget_exceeded=_budget_flag("planning", elapsed * 1000),
-        invocation_budget=_llm_budget,
+        invocation_budget=_bud.to_dict(),
     )
 
 
@@ -1286,6 +1360,7 @@ def _build_error_patch(
     total_tokens: int = 0,
     cost_usd: float = 0.0,
     version: int = 1,
+    invocation_budget: dict | None = None,
 ) -> StatePatch:
     """Build error StatePatch when LLM call fails."""
     patch = _build_patch(
@@ -1293,6 +1368,9 @@ def _build_error_patch(
         total_tokens=total_tokens,
         cost_usd=cost_usd,
         version=version,
+        invocation_budget=invocation_budget,
     )
     patch.updates["errors"] = [f"SemanticPlanner: LLM call failed — {exc}"]
     return patch
+
+

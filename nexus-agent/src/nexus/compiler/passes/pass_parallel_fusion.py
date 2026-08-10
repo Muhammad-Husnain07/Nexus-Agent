@@ -46,6 +46,12 @@ def run(graph: ExecutionGraph) -> ExecutionGraph:
             continue
 
         tool_name, iterate_over = key
+        # D4/P0-D: fusion is ONLY legal when the endpoint declares
+        # supports_batch (absent metadata = no fusion — never change
+        # execution semantics merely to make the graph smaller).
+        if not _endpoint_supports_batch(tool_name):
+            continue
+
         first_id, first_node = group[0]
 
         combined_deps: set[str] = set()
@@ -73,6 +79,28 @@ def run(graph: ExecutionGraph) -> ExecutionGraph:
 
     new_waves = _prune_waves(graph.waves, set(fused.keys()))
     return graph.model_copy(update={"nodes": fused, "waves": new_waves})
+
+
+def _endpoint_supports_batch(tool_name: str) -> bool:
+    """D4/P0-D: fusion requires the endpoint's ``supports_batch`` metadata.
+
+    Reads the capability's provider endpoints from GlobalContext. Absent
+    metadata (or any failure) → False → no fusion (the safe default: the
+    optimizer never changes execution semantics without proof).
+    """
+    try:
+        from nexus.context.global_context import get_global_context
+
+        gc = get_global_context()
+        for prov in (gc.capability_providers or {}).get(tool_name, []) or []:
+            if not isinstance(prov, dict):
+                continue
+            for ep in (prov.get("endpoints") or []):
+                if isinstance(ep, dict) and ep.get("supports_batch"):
+                    return True
+    except Exception:
+        return False
+    return False
 
 
 def _prune_waves(waves: list[list[str]], kept_ids: set[str]) -> list[list[str]]:

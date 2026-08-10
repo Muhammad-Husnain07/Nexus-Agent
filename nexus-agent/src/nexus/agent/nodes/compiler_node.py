@@ -15,6 +15,38 @@ from nexus.execution.context import ExecutionContext, StatePatch
 logger = structlog.get_logger("nexus.agent.nodes.compiler")
 
 
+def _graph_has_unknown_input_keys(graph) -> bool:
+    """True when any compiled tool node carries input keys the capability
+    schema does not declare (D0/P0-C, I11 cache-poison backstop)."""
+    try:
+        from nexus.agent.nodes.plan_validator_node import _unknown_input_keys
+
+        nodes = (
+            graph.get("nodes")
+            if isinstance(graph, dict)
+            else getattr(graph, "nodes", None)
+        )
+        if not isinstance(nodes, dict):
+            return False
+        for nd in nodes.values():
+            if isinstance(nd, dict):
+                op = str(nd.get("capability") or nd.get("tool_name") or "")
+                inputs = nd.get("inputs")
+            else:
+                op = str(
+                    getattr(nd, "capability", "")
+                    or getattr(nd, "tool_name", "")
+                )
+                inputs = getattr(nd, "inputs", None)
+            if not isinstance(inputs, dict):
+                continue
+            if _unknown_input_keys(op, inputs):
+                return True
+        return False
+    except Exception:
+        return False
+
+
 @context_node
 async def compiler_node(ctx: ExecutionContext) -> StatePatch:
     """Compile the LogicalWorkflow into an ExecutionGraph.
@@ -60,18 +92,29 @@ async def compiler_node(ctx: ExecutionContext) -> StatePatch:
 
         try:
             graph = ExecutionGraph(**cached_graph)
-            logger.info(
-                "compiler_node.cache_hit",
-                graph_id=graph.graph_id,
-                node_count=len(graph.nodes),
-            )
-            return StatePatch(
-                version=ctx.version + 1,
-                updates={
-                    "_execution_graph": graph.model_dump(),
-                    "_graph_version": int(snapshot.get("_graph_version") or 0) + 1,
-                },
-            )
+            # CACHE-POISON BACKSTOP (D0/P0-C, I11): a cached compiled graph
+            # is only trustworthy when its tool nodes carry schema-declared
+            # input keys. An invalid cached graph (e.g. written before the
+            # unknown-input-key rule existed) is ignored and recompiled —
+            # an invalid plan must never cross into execution.
+            if _graph_has_unknown_input_keys(graph):
+                logger.warning(
+                    "compiler_node.cache_invalid_keys_recompile",
+                    graph_id=graph.graph_id,
+                )
+            else:
+                logger.info(
+                    "compiler_node.cache_hit",
+                    graph_id=graph.graph_id,
+                    node_count=len(graph.nodes),
+                )
+                return StatePatch(
+                    version=ctx.version + 1,
+                    updates={
+                        "_execution_graph": graph.model_dump(),
+                        "_graph_version": int(snapshot.get("_graph_version") or 0) + 1,
+                    },
+                )
         except Exception:
             pass  # malformed cache entry → recompile
 

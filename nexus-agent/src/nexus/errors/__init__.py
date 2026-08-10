@@ -21,6 +21,7 @@ from nexus.errors.resilience import (
     ForbiddenError,
     MaxIterationsError,
     NexusError,
+    PlaceholderResolutionError,
     PlanningError,
     QuotaExceededError,
     RateLimitError,
@@ -46,6 +47,7 @@ __all__ = [
     "ToolExecutionError",
     "MaxIterationsError",
     "ContextWindowExceededError",
+    "PlaceholderResolutionError",
     # Rate/Quota
     "RateLimitError",
     "QuotaExceededError",

@@ -71,6 +71,7 @@ class MemoryManager:
         session_id: str,
         agent_run_id: str | None = None,
         agent_state: dict[str, Any] | None = None,
+        invocation_id: str | None = None,
     ) -> list[str]:
         """Extract salient memories from an agent run and persist them."""
         if not self._memory_settings.enabled:
@@ -146,12 +147,13 @@ class MemoryManager:
         kind: str,
         content: str,
         importance: float,
+        invocation_id: str | None = None,
     ) -> str | None:
         """Deduplicate against existing memories, then store."""
         # Sanitize content — strip LLM artifacts before persistence
         content = re.sub(r"###\s*$", "", content.strip())
         content = re.sub(r"<\|im_end\|>\s*$", "", content.strip())
-        content = re.sub(r"<\|endoftext\|>\s*$", "", content.strip())
+        content = re.sub(r"<|endoftext|>\s*$", "", content.strip())
 
         mid = uuid.uuid4()
         embedding = await self._generate_embedding(content)
@@ -175,6 +177,7 @@ class MemoryManager:
                     metadata={"session_id": session_id},
                     importance=importance,
                     ttl_s=_memory_ttl(),
+                    invocation_id=invocation_id,
                 )
                 return str(existing_id)
 
@@ -187,6 +190,7 @@ class MemoryManager:
             metadata={"session_id": session_id},
             importance=importance,
             ttl_s=_memory_ttl(),
+            invocation_id=invocation_id,
         )
         return str(mid)
 
@@ -429,3 +433,5 @@ class MemoryManager:
 
         composite = 0.4 * llm_score + 0.3 * user_explicit + 0.3 * task_relevant
         return min(1.0, max(0.0, composite))
+
+

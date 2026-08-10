@@ -138,6 +138,49 @@ class AgentEvent:
         return {"type": self.type, "ts": self.ts, "payload": self.payload}
 
 
+_TERMINAL_ABNORMAL = frozenset({"CANCELLED", "TIMED_OUT", "INTERRUPTED", "FAILED"})
+
+
+def _terminal_reset_needed(status: str | None) -> bool:
+    """D2/P0-D (I6): a terminal-abnormal invocation status must never be
+    silently continued — the next invocation starts a fresh super-step."""
+    return bool(status) and status in _TERMINAL_ABNORMAL
+
+
+def build_contract_meta() -> dict[str, Any]:
+    """P1-B.1: the current checkpoint compatibility contract.
+
+    Architecture fingerprint + AgentState schema version. A checkpoint is
+    only resumed under the exact contract it was created for.
+    """
+    try:
+        from nexus.agent.architecture import ArchitectureVersion
+        from nexus.agent.state_schema import AGENT_STATE_SCHEMA_VERSION
+
+        return {
+            "arch_fp": ArchitectureVersion.cache_fingerprint(),
+            "state_schema": AGENT_STATE_SCHEMA_VERSION,
+        }
+    except Exception:
+        return {"arch_fp": "", "state_schema": "unknown"}
+
+
+def checkpoint_contract_ok(values: Any) -> str | None:
+    """P1-B.1: None when the checkpoint may resume; a reason string when it
+    must be refused. Missing metadata, architecture or state-schema
+    mismatch → refuse safely (never reinterpret old state, never execute a
+    stale graph)."""
+    meta = values.get("_contract_meta") if isinstance(values, dict) else None
+    if not isinstance(meta, dict) or not meta:
+        return "missing checkpoint compatibility metadata"
+    current = build_contract_meta()
+    if meta.get("arch_fp") != current["arch_fp"]:
+        return "architecture fingerprint mismatch"
+    if meta.get("state_schema") != current["state_schema"]:
+        return "state schema version mismatch"
+    return None
+
+
 def _append_step_progress(
     events: list[AgentEvent],
     step: str,
@@ -297,6 +340,7 @@ class AgentRunner:
         session_id: uuid.UUID | str,
         user_message: str,
         config: dict[str, Any] | None = None,
+        user_context: dict[str, Any] | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Run the agent graph and yield events.
 
@@ -307,6 +351,10 @@ class AgentRunner:
             session_id: The conversation session ID.
             user_message: The user's latest message.
             config: Optional LangGraph ``RunnableConfig`` dict.
+            user_context: Optional verified identity context
+                (``{"user_id": ..., "roles": [...]}`` — C3/P0-C) consumed by
+                the executor's authorization gate. Never trust client
+                input; only the auth middleware may populate it.
 
         Yields:
             ``AgentEvent`` instances as the graph progresses.
@@ -321,10 +369,64 @@ class AgentRunner:
         # Try to load prior state from the checkpointer
         prior_messages: list[dict[str, Any]] = []
         prior_state: Any = None
+        prior_status: str | None = None
         try:
             prior_state = await graph.aget_state(run_config)
             if prior_state is not None and prior_state.values:
-                prior_messages = list(prior_state.values.get("messages", []))
+                prior_status = prior_state.values.get("_invocation_status")
+                # P1-B.1 CHECKPOINT COMPATIBILITY CONTRACT: a checkpoint is
+                # only resumed under the EXACT contract it was created for.
+                # Missing or mismatched compatibility metadata (architecture
+                # fingerprint / state-schema version) → refuse safely: the
+                # stale graph is NOT executed and the old state is NOT
+                # reinterpreted — the invocation starts clean.
+                _contract = checkpoint_contract_ok(prior_state.values)
+                if _contract is not None:
+                    logger.warning(
+                        "runner.checkpoint_contract_refused",
+                        session_id=sid,
+                        reason=_contract,
+                    )
+                    try:
+                        await graph.aupdate_state(
+                            run_config,
+                            {"messages": [], "_contract_meta": build_contract_meta()},
+                            as_node="__start__",
+                        )
+                    except Exception as _contract_exc:
+                        logger.warning(
+                            "runner.checkpoint_contract_reset_failed",
+                            session_id=sid,
+                            error=str(_contract_exc)[:200],
+                        )
+                    prior_messages = []
+                    prior_state = None
+                    prior_status = None
+                else:
+                    prior_messages = list(prior_state.values.get("messages", []))
+                # D2/P0-D (I6): a TERMINAL-abnormal checkpoint (crashed /
+                # timed-out / interrupted / failed run) must never silently
+                # continue the old graph. Reset the pending tasks so this
+                # invocation starts a FRESH planning/execution super-step —
+                # messages are preserved (the conversation continues).
+                if _terminal_reset_needed(prior_status):
+                    logger.info(
+                        "runner.stale_graph_reset",
+                        session_id=sid,
+                        status=prior_status,
+                    )
+                    try:
+                        await graph.aupdate_state(
+                            run_config,
+                            {"_invocation_status": "COMPLETED"},
+                            as_node="__start__",
+                        )
+                    except Exception as _reset_exc:
+                        logger.warning(
+                            "runner.stale_graph_reset_failed",
+                            session_id=sid,
+                            error=str(_reset_exc)[:200],
+                        )
                 # Clear ephemeral fields from prior state — they belong to the previous turn
                 for ef in _EPHEMERAL_FIELDS:
                     if ef in prior_state.values and ef not in prior_state.values.get("messages", []):
@@ -408,7 +510,18 @@ class AgentRunner:
             # Domain hint computed by the router each turn (capability
             # classification) — never carries across turns.
             "_domain_hint": None,
+            # A3/P1-A: per-invocation identity for memory provenance.
+            "_invocation_id": str(uuid.uuid4()),
+            # P1-B.1: the checkpoint compatibility contract (arch fp +
+            # state schema version) — stamped so every checkpoint records
+            # the contract it was created under.
+            "_contract_meta": build_contract_meta(),
         }
+
+        # C3/P0-C: verified identity context (auth middleware only) —
+        # consumed by the executor's authorization gate (allowed_roles).
+        if user_context and isinstance(user_context, dict):
+            initial_state["user_context"] = dict(user_context)
 
         # Preserve an OPEN conversational approval checkpoint across turns —
         # it must survive until the user decides in-chat. The resume node
@@ -489,6 +602,13 @@ class AgentRunner:
                     logger.warning("runner.skipping_non_dict_event", event_type=type(event).__name__, event=repr(event)[:200])
                     continue
                 if _budget is not None:
+                    # A1/P1-A: merge the state carrier (nodes write their
+                    # ledger back) so the runner's wall-clock/steps checks
+                    # see llm/tool/cost consumption from every subsystem.
+                    try:
+                        _budget.merge(_last_state.get("_invocation_budget"))
+                    except Exception:
+                        pass
                     _budget.consume("graph_steps")
                     _exceeded = _budget.exceeded()
                     if _exceeded:
@@ -614,6 +734,12 @@ class AgentRunner:
             try:
                 if _last_state.get("_invocation_status") in (None, "RUNNING"):
                     _last_state["_invocation_status"] = "COMPLETED"
+                    # D2/P0-D (I6): persist the terminal marker so the
+                    # checkpoint never reports a finished run as running.
+                    await graph.aupdate_state(
+                        run_config,
+                        {"_invocation_status": "COMPLETED"},
+                    )
             except Exception:
                 pass
             yield _emit_execution_completed(_last_state, final_status, self._event_bus, sid, yield_event=True)
@@ -627,6 +753,20 @@ class AgentRunner:
                 _target = _last_state if _last_state else initial_state
                 if _target.get("_invocation_status") in (None, "RUNNING"):
                     _target["_invocation_status"] = "CANCELLED"
+            except Exception:
+                pass
+            # D2/P0-D (I6): persist the TERMINAL-ABNORMAL marker into the
+            # checkpoint (crash/timeout/interrupt/failure) and clear the
+            # pending graph — the next invocation must start fresh, never
+            # silently resume the stale plan.
+            try:
+                _terminal = _target.get("_invocation_status") or ""
+                if _terminal_reset_needed(_terminal):
+                    await graph.aupdate_state(
+                        run_config,
+                        {"_invocation_status": _terminal},
+                        as_node="__start__",
+                    )
             except Exception:
                 pass
             # Persist outcome record (fire-and-forget)
@@ -927,7 +1067,22 @@ class AgentRunner:
             graph = state_update.get("_execution_graph")
             if graph and isinstance(graph, dict):
                 waves = graph.get("waves", [])
-                node_summary = {k: v.get("capability", v.get("tool_name", k)) for k, v in (graph.get("nodes", {}) or {}).items() if isinstance(v, dict)}
+                # plan_created step names (F1/P0-B): ToolNodes expose
+                # capability/tool_name at the top level; MapNodes nest the
+                # body ToolNode — unwrap it so the event never falls back
+                # to a bare node-id hash.
+                node_summary: dict[str, str] = {}
+                for k, v in (graph.get("nodes", {}) or {}).items():
+                    if not isinstance(v, dict):
+                        continue
+                    name = str(v.get("capability") or v.get("tool_name") or "")
+                    if not name and isinstance(v.get("body"), dict):
+                        name = str(
+                            v.get("body").get("tool_name")
+                            or v.get("body").get("capability")
+                            or ""
+                        )
+                    node_summary[k] = name or k
                 from nexus.events.models import build_event
 
                 events.append(AgentEvent.from_model(build_event("plan_created", {
@@ -953,10 +1108,18 @@ class AgentRunner:
 
                 for tr in tool_results:
                     etype = "tool_call_completed" if tr.get("status") == "success" else "error"
+                    # C4/P0-C: tool payloads are redacted before they reach
+                    # the SSE stream — sensitive fields never leave the
+                    # server in events.
+                    from nexus.tools.sandbox import mask_sensitive_fields
+
+                    _tr_data = tr.get("data")
+                    if isinstance(_tr_data, dict):
+                        _tr_data = mask_sensitive_fields(_tr_data)
                     events.append(AgentEvent.from_model(build_event(etype, {
                         "tool_name": tr.get("tool_name"),
                         "status": tr.get("status"),
-                        "data": tr.get("data"),
+                        "data": _tr_data,
                         "error": tr.get("error"),
                         "task_id": tr.get("task_id", ""),
                         "duration_ms": float(tr.get("duration_ms", 0.0) or 0.0),
