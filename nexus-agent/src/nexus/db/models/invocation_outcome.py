@@ -54,6 +54,52 @@ class InvocationOutcome(Base):
     outcome_version: Mapped[int] = mapped_column(
         Integer, default=1, comment="Schema version for forward compatibility"
     )
+    architecture_fingerprint: Mapped[str] = mapped_column(
+        String(64), default="", nullable=False, comment="ADR 0008 architecture manifest fingerprint"
+    )
+    # P2-B REPRODUCIBILITY columns — the evidence to answer "exactly what
+    # produced this answer?" (see nexus/observability/outcomes.py).
+    request_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True,
+        comment="API request correlation id (RequestIDMiddleware)"
+    )
+    agent_run_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True,
+        comment="Per-invocation run identity (_invocation_id)"
+    )
+    temperature: Mapped[float | None] = mapped_column(
+        Float, nullable=True, comment="Finalize LLM temperature used"
+    )
+    seed: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, comment="LLM seed if configured (None for parity)"
+    )
+    registry_fingerprint: Mapped[str] = mapped_column(
+        String(64), default="", nullable=False,
+        comment="Catalog/registry contract fingerprint (P1-B)"
+    )
+    planner_metrics: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, default=dict,
+        comment="Plan-validator telemetry incl. per-intent coverage evidence"
+    )
+    intent_coverage: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, default=dict,
+        comment="Aggregate coverage summary (evidence in planner_metrics)"
+    )
+    reproducibility: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, default=dict,
+        comment="Model + temperature + prompt versions/fingerprints + arch fp"
+    )
+    logical_intent_graph_ref: Mapped[str] = mapped_column(
+        String(64), default="", nullable=False,
+        comment="SHA256 reference to the logical workflow (checkpoint)"
+    )
+    logical_plan_ref: Mapped[str] = mapped_column(
+        String(64), default="", nullable=False,
+        comment="SHA256 reference to the compiled execution graph"
+    )
+    attempts: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, default=dict, comment="Per-operation execution-key identity references"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
     )

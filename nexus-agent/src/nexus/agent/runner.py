@@ -341,6 +341,7 @@ class AgentRunner:
         user_message: str,
         config: dict[str, Any] | None = None,
         user_context: dict[str, Any] | None = None,
+        request_id: str | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Run the agent graph and yield events.
 
@@ -355,11 +356,15 @@ class AgentRunner:
                 (``{"user_id": ..., "roles": [...]}`` — C3/P0-C) consumed by
                 the executor's authorization gate. Never trust client
                 input; only the auth middleware may populate it.
+            request_id: The API request correlation id (P2-B) — persisted
+                with the invocation outcome so every answer is traceable
+                to the HTTP request that produced it.
 
         Yields:
             ``AgentEvent`` instances as the graph progresses.
         """
         sid = str(session_id)
+        _request_id = request_id
 
         graph = await self._build_graph()
         run_config: dict[str, Any] = dict(config or {})
@@ -773,7 +778,8 @@ class AgentRunner:
             latency = int((time_module.perf_counter() - _start_ts) * 1000)
             try:
                 outcome = InvocationOutcome.from_state(
-                    _last_state, latency, error_message=_error_msg
+                    _last_state, latency, error_message=_error_msg,
+                    request_id=_request_id,
                 )
                 # Fire and forget — tracked to prevent GC dropping the task
                 _track_bg_task(asyncio.ensure_future(persist_outcome(outcome)))

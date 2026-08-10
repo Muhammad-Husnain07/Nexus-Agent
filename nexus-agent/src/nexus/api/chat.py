@@ -147,9 +147,14 @@ async def chat(
 
     user_context = identity_from_request(request).to_dict()
 
+    # P2-B: the request correlation id (RequestIDMiddleware) is persisted
+    # with the invocation outcome — every answer is traceable to the
+    # HTTP request that produced it.
+    req_id = getattr(request.state, "request_id", None)
+
     if body.stream:
-        return _stream_response(runner, sid, body.message, app_state, user_context)
-    return await _json_response(runner, sid, body.message, app_state, user_context)
+        return _stream_response(runner, sid, body.message, app_state, user_context, req_id)
+    return await _json_response(runner, sid, body.message, app_state, user_context, req_id)
 
 
 
@@ -177,12 +182,13 @@ async def _persist_messages(sid: str, user_message: str, assistant_text: str | N
         logger.warning("message.persist_failed", session_id=sid, error=str(exc))
 
 
-def _stream_response(
+def _stream_response(  # noqa: PLR0913
     runner: AgentRunner,
     sid: str,
     message: str,
     app_state: Any = None,
     user_context: dict[str, Any] | None = None,
+    request_id: str | None = None,
 ) -> EventSourceResponse:
     """Return an SSE streaming response with heartbeats and shutdown tracking."""
 
@@ -200,6 +206,7 @@ def _stream_response(
                 session_id=sid,
                 user_message=message,
                 user_context=user_context,
+                request_id=request_id,
             )
 
             async for sse_event in _heartbeat_generator(event_aiter):
@@ -247,6 +254,7 @@ async def _json_response(
     message: str,
     app_state: Any = None,
     user_context: dict[str, Any] | None = None,
+    request_id: str | None = None,
 ) -> ChatResponse:
     """Collect all events and return as a single JSON response."""
     events: list[dict[str, Any]] = []
@@ -263,6 +271,7 @@ async def _json_response(
             session_id=sid,
             user_message=message,
             user_context=user_context,
+            request_id=request_id,
         ):
             if agent_event.type == "final_response":
                 final_text = agent_event.payload.get("text")
