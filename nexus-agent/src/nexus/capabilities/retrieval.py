@@ -258,86 +258,91 @@ class CapabilityRetriever:
                     matched_by="alias",
                     reasons=("exact_alias",),
                 ))
-        else:
-            # 1b. Example/keyword boost: when the query (token-containment)
-            # matches a capability's own examples or keywords, that capability
-            # wins — the operator explicitly declared these phrases as
-            # triggers. Metadata-driven, stronger than BM25. EVERY matching
-            # capability is returned (ranked), not just a single winner —
-            # picking one arbitrarily would hide the others from the planner.
-            cap_meta_all: dict[str, dict[str, Any]] = getattr(gc, "capability_index", {}) or {}
-            q_tokens = set(_tokenize(q))
-            if q_tokens:
-                # Generic-word demotion: a keyword token that belongs to many
-                # capabilities ("the", "use", "and" — prose words) is not
-                # discriminative and must not boost. A token is generic when
-                # it appears as a keyword token for MORE THAN THREE
-                # capabilities (a signal that fires for many capabilities is
-                # no signal at all; tokens shared by just two tools, e.g.
-                # ``latitude`` for geocode+weather, stay discriminative —
-                # metadata-driven, no pattern lists).
-                total_caps = max(1, len(cap_meta_all))
-                tok_freq: dict[str, int] = {}
-                for _meta in cap_meta_all.values():
-                    for _kw in (_meta.get("keywords") or []):
-                        _tokens = _tokenize(str(_kw))
-                        if _tokens:
-                            tok_freq[_tokens[0]] = tok_freq.get(_tokens[0], 0) + 1
-                generic = {
-                    t for t, count in tok_freq.items()
-                    if count > 3
-                }
-                boosted: list[tuple[str, float]] = []
-                for cap_name, meta in cap_meta_all.items():
-                    ex_hits = 0
-                    for ex_p in (meta.get("examples") or []):
-                        if isinstance(ex_p, str) and ex_p.strip():
-                            ex_tokens = set(_tokenize(ex_p))
-                            # Partial non-generic overlap: a query sharing a
-                            # DISTINCTIVE example token ("naruto" inside
-                            # "Is Naruto any good?" vs the example "Search for
-                            # the anime Naruto") is a strong declared trigger.
-                            # Strict containment misses these; full-overlap
-                            # scoring without genericity would let prose words
-                            # ("the", "about") boost everything.
-                            matched = {
-                                t for t in (ex_tokens & q_tokens) if t not in generic
-                            }
-                            if matched:
-                                ex_hits += len(matched)
-                    kw_hits = 0
-                    for kw in (meta.get("keywords") or []):
-                        if isinstance(kw, str) and kw.strip().lower() in q:
-                            kw_tokens = _tokenize(kw)
-                            if kw_tokens and kw_tokens[0] not in generic:
-                                kw_hits += 1
-                    total = ex_hits + kw_hits * 3
-                    if total > 0:
-                        boosted.append((cap_name, float(total)))
-                boosted.sort(key=lambda t: t[1], reverse=True)
-                for cap_name, score in boosted:
-                    cap_meta = cap_meta_all[cap_name]
-                    # Recover which signals fired (explanatory, per candidate).
-                    cand_reasons: list[str] = []
-                    for ex_p in (cap_meta.get("examples") or []):
-                        if isinstance(ex_p, str) and ex_p.strip():
-                            ex_tokens = set(_tokenize(ex_p))
-                            if {t for t in (ex_tokens & q_tokens) if t not in generic}:
-                                cand_reasons.append("example_similarity")
-                                break
-                    for kw in (cap_meta.get("keywords") or []):
-                        if isinstance(kw, str) and kw.strip().lower() in q:
-                            kw_tokens = _tokenize(kw)
-                            if kw_tokens and kw_tokens[0] not in generic:
-                                cand_reasons.append(f"keyword:{kw.strip().lower()}")
-                    results.append(RetrievedCapability(
-                        name=cap_name,
-                        domain=str(cap_meta.get("domain") or ""),
-                        aliases=tuple(cap_meta.get("aliases") or []),
-                        score=score,
-                        matched_by="example",
-                        reasons=tuple(cand_reasons) or ("keyword_match",),
-                    ))
+    # 1b. Example/keyword boost: when the query (token-containment)
+    # matches a capability's own examples or keywords, that capability
+    # wins — the operator explicitly declared these phrases as
+    # triggers. Metadata-driven, stronger than BM25. EVERY matching
+    # capability is returned (ranked), not just a single winner —
+    # picking one arbitrarily would hide the others from the planner.
+    # P0-A FIX: this step runs ALWAYS — an alias hit (e.g. the generic
+    # web-search alias "search") must not short-circuit the keyword/
+    # example signal for specialized capabilities ("meal", "recipes").
+    # The alias step's 100.0 score wins the ranking; the boost keeps
+    # the specialized candidates in the pool so the deterministic
+    # ranker (specificity + generic suppression) can decide.
+        cap_meta_all: dict[str, dict[str, Any]] = getattr(gc, "capability_index", {}) or {}
+        q_tokens = set(_tokenize(q))
+        if q_tokens:
+            # Generic-word demotion: a keyword token that belongs to many
+            # capabilities ("the", "use", "and" — prose words) is not
+            # discriminative and must not boost. A token is generic when
+            # it appears as a keyword token for MORE THAN THREE
+            # capabilities (a signal that fires for many capabilities is
+            # no signal at all; tokens shared by just two tools, e.g.
+            # ``latitude`` for geocode+weather, stay discriminative —
+            # metadata-driven, no pattern lists).
+            total_caps = max(1, len(cap_meta_all))
+            tok_freq: dict[str, int] = {}
+            for _meta in cap_meta_all.values():
+                for _kw in (_meta.get("keywords") or []):
+                    _tokens = _tokenize(str(_kw))
+                    if _tokens:
+                        tok_freq[_tokens[0]] = tok_freq.get(_tokens[0], 0) + 1
+            generic = {
+                t for t, count in tok_freq.items()
+                if count > 3
+            }
+            boosted: list[tuple[str, float]] = []
+            for cap_name, meta in cap_meta_all.items():
+                ex_hits = 0
+                for ex_p in (meta.get("examples") or []):
+                    if isinstance(ex_p, str) and ex_p.strip():
+                        ex_tokens = set(_tokenize(ex_p))
+                        # Partial non-generic overlap: a query sharing a
+                        # DISTINCTIVE example token ("naruto" inside
+                        # "Is Naruto any good?" vs the example "Search for
+                        # the anime Naruto") is a strong declared trigger.
+                        # Strict containment misses these; full-overlap
+                        # scoring without genericity would let prose words
+                        # ("the", "about") boost everything.
+                        matched = {
+                            t for t in (ex_tokens & q_tokens) if t not in generic
+                        }
+                        if matched:
+                            ex_hits += len(matched)
+                kw_hits = 0
+                for kw in (meta.get("keywords") or []):
+                    if isinstance(kw, str) and kw.strip().lower() in q:
+                        kw_tokens = _tokenize(kw)
+                        if kw_tokens and kw_tokens[0] not in generic:
+                            kw_hits += 1
+                total = ex_hits + kw_hits * 3
+                if total > 0:
+                    boosted.append((cap_name, float(total)))
+            boosted.sort(key=lambda t: t[1], reverse=True)
+            for cap_name, score in boosted:
+                cap_meta = cap_meta_all[cap_name]
+                # Recover which signals fired (explanatory, per candidate).
+                cand_reasons: list[str] = []
+                for ex_p in (cap_meta.get("examples") or []):
+                    if isinstance(ex_p, str) and ex_p.strip():
+                        ex_tokens = set(_tokenize(ex_p))
+                        if {t for t in (ex_tokens & q_tokens) if t not in generic}:
+                            cand_reasons.append("example_similarity")
+                            break
+                for kw in (cap_meta.get("keywords") or []):
+                    if isinstance(kw, str) and kw.strip().lower() in q:
+                        kw_tokens = _tokenize(kw)
+                        if kw_tokens and kw_tokens[0] not in generic:
+                            cand_reasons.append(f"keyword:{kw.strip().lower()}")
+                results.append(RetrievedCapability(
+                    name=cap_name,
+                    domain=str(cap_meta.get("domain") or ""),
+                    aliases=tuple(cap_meta.get("aliases") or []),
+                    score=score,
+                    matched_by="example",
+                    reasons=tuple(cand_reasons) or ("keyword_match",),
+                ))
 
         # 2. Keyword / domain prefilter → candidate pool.
         candidates: list[str] = []

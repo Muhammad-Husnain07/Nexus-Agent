@@ -230,6 +230,47 @@ async def _fetch_capabilities(
     valid_ops: list[str] = []
     catalog_parts: list[str] = []
 
+    # P0-A: the capability-semantics map (specificity/generic/requires/
+    # produces) is built FIRST — the ranker + dependency closure need it
+    # before the resolution candidates are processed.
+    _semantics_map: dict[str, Any] = {}
+    _tool_schemas: dict[str, dict[str, Any]] = {}
+    _tool_outputs: dict[str, dict[str, Any]] = {}
+    _tool_examples: dict[str, list[dict[str, Any]]] = {}
+    try:
+        from nexus.db.models.tool import Tool  # noqa: PLC0415
+        from sqlalchemy import select as _tool_select  # noqa: PLC0415
+
+        async with _cat_db() as _sem_db:
+            _tool_rows = await _sem_db.execute(
+                _tool_select(
+                    Tool.name, Tool.input_schema, Tool.output_schema, Tool.examples,
+                    Tool.description, Tool.cacheable, Tool.related,
+                    Tool.consumes, Tool.produces, Tool.category,
+                    Tool.validation_rules,
+                )
+            )
+            for t_row in _tool_rows.all():
+                t_name = t_row[0]
+                props = (t_row[1] or {}).get("properties", {}) if isinstance(t_row[1], dict) else {}
+                if isinstance(props, dict) and props:
+                    _tool_schemas[t_name] = props
+                out_props = (t_row[2] or {}).get("properties", {}) if isinstance(t_row[2], dict) else {}
+                if isinstance(out_props, dict) and out_props:
+                    _tool_outputs[t_name] = out_props
+                if isinstance(t_row[3], list):
+                    _tool_examples[t_name] = [
+                        e for e in t_row[3] if isinstance(e, dict) and e.get("user_prompt")
+                    ]
+                try:
+                    from nexus.capabilities.capability_semantics import CapabilitySemantics  # noqa: PLC0415
+
+                    _semantics_map[t_name] = CapabilitySemantics.from_registry(t_name, t_row)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
     try:
         gc = get_global_context()
         cap_meta: dict[str, dict[str, Any]] = getattr(gc, "capability_index", {}) or {}
@@ -246,6 +287,46 @@ async def _fetch_capabilities(
                     top_k=15,
                 )
                 candidates = list(resolution.capability_candidates)
+                # P0-A RESOLVER UPGRADE (vNext Phase 1): deterministic
+                # specificity ranking + generic-fallback suppression +
+                # dependency closure over the engine's raw candidates.
+                # Nemotron/BM25 propose; the ranker decides; the closure
+                # guarantees the planner never operates on an incomplete
+                # capability set (coordinates + weather → geocode_location
+                # is added deterministically).
+                try:
+                    import re as _re  # noqa: PLC0415
+                    from nexus.capabilities.capability_semantics import (  # noqa: PLC0415
+                        close_dependencies,
+                        rank_candidates,
+                    )
+
+                    ranked = rank_candidates(
+                        [(c.name, float(c.score)) for c in candidates],
+                        _semantics_map,
+                        query=query or "",
+                    )
+                    closed = close_dependencies(
+                        [(r.name, r.score) for r in ranked],
+                        _semantics_map,
+                        query_entities=set(
+                            _re.findall(r"[a-zA-Z]{3,}", (query or "").lower())
+                        ),
+                    )
+                    candidates = [
+                        type("_C", (), {"name": n, "score": s})()
+                        for n, s in closed
+                    ]
+                    logger.info(
+                        "semantic_planner.resolver_ranked",
+                        ranked=[(r.name, r.score) for r in ranked][:8],
+                        closed=[n for n, _s in closed],
+                    )
+                except Exception as _rank_exc:
+                    logger.warning(
+                        "semantic_planner.resolver_rank_failed",
+                        error=str(_rank_exc)[:150],
+                    )
                 if resolution.workflow_candidates:
                     template_hint = "Suggested workflow template:\n  " + "\n  ".join(
                         f"{w.name} ({w.confidence}, {', '.join(w.match_sources)})"
@@ -267,30 +348,8 @@ async def _fetch_capabilities(
 
             # Tool input/output schemas + examples — the definitive parameter
             # names and returns for each op (metadata-driven, no hardcoding).
-            from nexus.db.models.tool import Tool
-            from sqlalchemy import select as _tool_select
-
-            _tool_schemas: dict[str, dict[str, Any]] = {}
-            _tool_outputs: dict[str, dict[str, Any]] = {}
-            _tool_examples: dict[str, list[dict[str, Any]]] = {}
-            _tool_rows = await session.execute(
-                _tool_select(
-                    Tool.name, Tool.input_schema, Tool.output_schema, Tool.examples,
-                    Tool.description, Tool.cacheable, Tool.related,
-                )
-            )
-            for t_row in _tool_rows.all():
-                t_name = t_row[0]
-                props = (t_row[1] or {}).get("properties", {}) if isinstance(t_row[1], dict) else {}
-                if isinstance(props, dict) and props:
-                    _tool_schemas[t_name] = props
-                out_props = (t_row[2] or {}).get("properties", {}) if isinstance(t_row[2], dict) else {}
-                if isinstance(out_props, dict) and out_props:
-                    _tool_outputs[t_name] = out_props
-                if isinstance(t_row[3], list):
-                    _tool_examples[t_name] = [
-                        e for e in t_row[3] if isinstance(e, dict) and e.get("user_prompt")
-                    ]
+            # (the tool rows / schemas / semantics map were already loaded
+            # at the top of this function — P0-A)
 
             # Candidate-driven: the engine's ranked names are authoritative.
             # When resolution produced NOTHING the query carries no tool
