@@ -230,6 +230,34 @@ class CapabilityRetriever:
                 matched_by="alias",
                 reasons=("exact_alias",),
             ))
+            # ALIAS MULTI-MATCH (BENCHMARK FIX): a query may carry MULTIPLE
+            # operator-declared aliases ("reverse geocode" AND "current
+            # weather" in one request). The single-winner selection above
+            # dropped every alias except the longest, so the resolution
+            # candidates structurally excluded the other intents' tools —
+            # the F8-class planner restriction for multi-intent queries.
+            # ALL alias hits are returned (most-specific first), ranked —
+            # the same philosophy as the keyword step below.
+            q_tokens = set(_tokenize(q))
+            alias_hits: list[tuple[int, str]] = []
+            for alias, cap in alias_index.items():
+                alias_tokens = set(_tokenize(alias))
+                if not alias_tokens or cap == direct:
+                    continue
+                if alias_tokens <= q_tokens:
+                    alias_hits.append((len(alias_tokens), cap))
+            alias_hits.sort(key=lambda m: -m[0])
+            for _n_tokens, cap in alias_hits:
+                if any(r.name == cap for r in results):
+                    continue
+                results.append(RetrievedCapability(
+                    name=cap,
+                    domain=str((getattr(gc, "capability_index", {}) or {}).get(cap, {}).get("domain", "")),
+                    aliases=tuple((getattr(gc, "capability_index", {}) or {}).get(cap, {}).get("aliases", [])),
+                    score=100.0,
+                    matched_by="alias",
+                    reasons=("exact_alias",),
+                ))
         else:
             # 1b. Example/keyword boost: when the query (token-containment)
             # matches a capability's own examples or keywords, that capability

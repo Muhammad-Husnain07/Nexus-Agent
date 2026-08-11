@@ -199,6 +199,7 @@ def _extract_returns(
 async def _fetch_capabilities(
     query: str | None = None,
     domain_hint: str | None = None,
+    snapshot: dict[str, Any] | None = None,
 ) -> tuple[list[str], str]:
     """Fetch the capabilities the planner should consider.
 
@@ -293,18 +294,40 @@ async def _fetch_capabilities(
 
             # Candidate-driven: the engine's ranked names are authoritative.
             # When resolution produced NOTHING the query carries no tool
-            # signal — the planner must NOT see the full catalog (a catalog
-            # invites hallucination: a greeting would plan an arbitrary tool).
-            # It plans nothing → conversational, honest.
+            # signal. The planner must NOT see the full catalog for a
+            # CONVERSATIONAL request (a catalog invites hallucination: a
+            # greeting would plan an arbitrary tool) — it plans nothing →
+            # conversational, honest.
+            # BENCHMARK FIX: for an EXECUTABLE request (the router already
+            # classified it action/workflow) an EMPTY domain is far worse —
+            # the planner's Literal becomes unconstrained and the LLM emits
+            # invented op names ("get_weather", "get_country_information",
+            # "search_docker") that survive into execution. The capability
+            # domain must be at least as complete as the resolver's: with
+            # zero resolver signal the domain is the FULL registered set
+            # (structurally barring invented names; the validator still
+            # gates semantics).
             selected_names: set[str] = {c.name for c in candidates} if candidates else set()
             if not selected_names:
-                valid_ops = []
-                catalog_parts = []
-                logger.info(
-                    "semantic_planner.empty_catalog",
-                    query=str(query or "")[:60],
+                _executable = bool(
+                    str(snapshot.get("_query_type") or "") in ("action", "workflow", "analysis")
+                    or snapshot.get("_preferred_tools")
                 )
-                return valid_ops, "".join(catalog_parts)
+                if not _executable:
+                    valid_ops = []
+                    catalog_parts = []
+                    logger.info(
+                        "semantic_planner.empty_catalog",
+                        query=str(query or "")[:60],
+                    )
+                    return valid_ops, "".join(catalog_parts)
+                logger.info(
+                    "semantic_planner.full_domain_fallback",
+                    query=str(query or "")[:60],
+                    capabilities=len(capabilities),
+                )
+                selected_names = {cap.logical_op_name or cap.name for cap in capabilities}
+                selected_names.discard(None)
 
             for cap in capabilities:
                 name = cap.logical_op_name or cap.name
@@ -1064,7 +1087,9 @@ async def semantic_parser_node(
     # effective planning message (dynamic step intent / approval modification
     # when scoped) narrows the catalog to ranked, available top-K candidates
     # before the LLM ever sees it. Engine facts + scored catalog text.
-    valid_ops, capabilities = await _fetch_capabilities(last_message, domain_hint=domain_hint)
+    valid_ops, capabilities = await _fetch_capabilities(
+        last_message, domain_hint=domain_hint, snapshot=snapshot
+    )
 
     # Replan scoping: ops marked unavailable by a replan (structural failure)
     # or an approval denial that blocked the graph are never re-selected.
