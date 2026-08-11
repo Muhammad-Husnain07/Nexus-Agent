@@ -26,6 +26,11 @@ from typing import Any
 _GENERIC_SUPPRESSION_THRESHOLD = 0.70
 _GENERIC_PENALTY = 0.35
 _SPECIALIZED_BONUS = 0.12
+# Marginal-candidate cutoff: candidates whose final score falls more than
+# this far below the top candidate are noise (the "search" keyword family
+# all match any "search X" query at marginal scores). The planner must see
+# the minimum sufficient set — the reviewer's selection principle.
+_MARGINAL_CUTOFF = 3.0
 
 
 @dataclass(frozen=True)
@@ -169,7 +174,17 @@ def rank_candidates(
                         f"specialized {best_specialized.name} present "
                         f"(base>0) and no explicit web request"
                     )
-    return [r for r in ranked if not r.suppressed]
+    # Marginal cutoff: candidates far below the top carry no
+    # discriminative signal (the whole search_* family enters every
+    # "search X" query via the shared token). Runs AFTER generic
+    # suppression (a suppressed generic is already gone; a suppressed
+    # list means the specialized candidate won and is kept). The minimum
+    # sufficient set for the planner.
+    survivors = [r for r in ranked if not r.suppressed]
+    if survivors:
+        top = survivors[0].score
+        survivors = [r for r in survivors if r.score >= top - _MARGINAL_CUTOFF]
+    return survivors
 
 
 def close_dependencies(

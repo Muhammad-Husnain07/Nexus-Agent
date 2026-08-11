@@ -314,7 +314,10 @@ async def _fetch_capabilities(
                         ),
                     )
                     candidates = [
-                        type("_C", (), {"name": n, "score": s})()
+                        type("_C", (), {
+                            "name": n, "score": s,
+                            "confidence": "high", "match_sources": ("resolver_ranked",),
+                        })()
                         for n, s in closed
                     ]
                     logger.info(
