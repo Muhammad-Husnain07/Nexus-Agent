@@ -69,7 +69,7 @@ NODE_CONTRACTS: Final[tuple[NodeContract, ...]] = (
         reads=("GlobalContext", "ResolutionEngine", "MemoryScout", "registry"),
         writes=("_logical_workflow", "_extraction_result", "_budget_exceeded", "errors",
                 "_total_tokens", "_cost_breakdown", "total_cost_usd",
-                "_invocation_budget", "_binding_report"),
+                "_invocation_budget", "_binding_report", "_detected_intents"),
         produces=("LogicalWorkflow",),
         consumes=("user_message", "capability_catalog"),
         may_fail=True,
@@ -80,7 +80,7 @@ NODE_CONTRACTS: Final[tuple[NodeContract, ...]] = (
     NodeContract(
         node_id="PlanValidatorNode", phase=NodePhase.COMPILE,
         module="nexus.agent.nodes.plan_validator_node",
-        inputs=("_logical_workflow", "_execution_graph"),
+        inputs=("_logical_workflow", "_execution_graph", "_detected_intents"),
         reads=("GlobalContext",),
         writes=("_plan_validator_report", "_plan_validator_action", "_plan_validator_errors",
                 "_plan_validator_rounds", "_logical_workflow", "errors",

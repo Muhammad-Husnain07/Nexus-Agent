@@ -159,8 +159,15 @@ async def emit_planning_completed(
     session_id: str,
     workflow: dict[str, Any] | None = None,
     planner_confidence: float = 0.0,
+    detected_intents: dict[str, Any] | None = None,
 ) -> None:
-    """Emit a PlanningCompleted event with the LogicalWorkflow payload."""
+    """Emit a PlanningCompleted event with the LogicalWorkflow payload.
+
+    Args:
+        detected_intents: P0-C structured intent graph (goals/entities/
+            relationships) — the benchmark's requested-vs-planned intent
+            accounting ("which layer lost the intent").
+    """
     try:
         await append_event(
             session_id=session_id,
@@ -168,6 +175,7 @@ async def emit_planning_completed(
             payload={
                 "logical_workflow": workflow or {},
                 "planner_confidence": planner_confidence,
+                "detected_intents": detected_intents,
             },
         )
     except Exception as exc:

@@ -97,6 +97,7 @@ def rank_candidates(
     semantics_map: dict[str, CapabilitySemantics],
     query: str = "",
     removals: dict[str, str] | None = None,
+    apply_marginal_cut: bool = True,
 ) -> list[RankedCandidate]:
     """Deterministic final ranking with generic suppression.
 
@@ -110,6 +111,11 @@ def rank_candidates(
     generic/fallback candidates are dropped from the result (the
     ``search_meals vs search_web_search`` class — the generic web search
     must not pollute specialized queries).
+
+    Args:
+        apply_marginal_cut: When False, the marginal cutoff is deferred to
+            the caller (``branch_safe_select`` applies it with the
+            distinctness coverage invariant — P0-C).
     """
     q_tokens = set(_tokenize(query))
     ranked: list[RankedCandidate] = []
@@ -184,15 +190,18 @@ def rank_candidates(
     # list means the specialized candidate won and is kept). The minimum
     # sufficient set for the planner.
     survivors = [r for r in ranked if not r.suppressed]
-    if survivors:
-        top = survivors[0].score
-        if removals is not None:
-            for r in survivors[1:]:
-                if r.score < top - _MARGINAL_CUTOFF:
-                    removals[r.name] = (
-                        f"below marginal cutoff (top {top}, margin {_MARGINAL_CUTOFF})"
-                    )
-        survivors = [r for r in survivors if r.score >= top - _MARGINAL_CUTOFF]
+    if not survivors:
+        return survivors
+    if not apply_marginal_cut:
+        return survivors
+    top = survivors[0].score
+    if removals is not None:
+        for r in survivors[1:]:
+            if r.score < top - _MARGINAL_CUTOFF:
+                removals[r.name] = (
+                    f"below marginal cutoff (top {top}, margin {_MARGINAL_CUTOFF})"
+                )
+    survivors = [r for r in survivors if r.score >= top - _MARGINAL_CUTOFF]
     return survivors
 
 
@@ -217,11 +226,24 @@ def branch_safe_select(
     """
     selected: dict[str, float] = {}
     diagnostics: dict[str, str] = {}
+    # P0-C: two-pass branch selection. Pass 1 ranks + suppresses per branch
+    # WITHOUT the marginal cutoff (the coverage truth); the cutoff applies
+    # in pass 2 with the DISTINCTNESS invariant (below). This fixes the
+    # K83 class: branch 2's raw scores (geocode 100.0 vs reverse_geocode
+    # 2.0 — scale-incomparable engine layers) let a shared token's
+    # exact-match candidate dominate, and the marginal cutoff then removed
+    # the branch's ONLY viable capability. The coverage invariant must hold
+    # not only for empty branches, but also when a branch's survivors are
+    # all copies of OTHER branches' picks (no branch-distinct capability).
+    pass1: dict[str, list[RankedCandidate]] = {}
     for unit, cands in intent_scores.items():
         if not cands:
             continue
         removals: dict[str, str] = {}
-        ranked = rank_candidates(cands, semantics_map, query=unit, removals=removals)
+        ranked = rank_candidates(
+            cands, semantics_map, query=unit, removals=removals,
+            apply_marginal_cut=False,
+        )
         for name, reason in removals.items():
             diagnostics.setdefault(name, f"{reason} (intent: {unit[:48]})")
         if not ranked:
@@ -232,7 +254,61 @@ def branch_safe_select(
             diagnostics[top[0]] = (
                 f"coverage_invariant_kept (intent: {unit[:48]})"
             )
-        for r in ranked:
+        pass1[unit] = ranked
+
+    # Pass 2: marginal cutoff with the DISTINCTNESS coverage invariant.
+    # A branch whose post-cut survivors are all shared with other branches
+    # re-admits its top cut candidate — every intent keeps a
+    # branch-distinct viable capability (K83: reverse_geocode survives
+    # even though geocode_location outscored it 100:2 in branch 2).
+    branch_picks: dict[str, set[str]] = {}
+    for unit, ranked in pass1.items():
+        branch_picks[unit] = {r.name for r in ranked if not r.suppressed}
+    for unit, ranked in pass1.items():
+        survivors = [r for r in ranked if not r.suppressed]
+        if not survivors:
+            continue
+        top = survivors[0].score
+        cut: list[RankedCandidate] = []
+        kept: list[RankedCandidate] = []
+        for r in survivors:
+            if r.score < top - _MARGINAL_CUTOFF:
+                cut.append(r)
+            else:
+                kept.append(r)
+        if not kept:
+            # All survivors marginal: keep the branch top (coverage).
+            top_r = max(ranked, key=lambda r: r.score)
+            diagnostics.setdefault(
+                top_r.name,
+                f"coverage_invariant_kept_all_marginal (intent: {unit[:48]})",
+            )
+            kept = [top_r]
+        elif cut:
+            # DISTINCTNESS INVARIANT (P0-C): if every kept candidate is
+            # already the pick of ANOTHER branch, this branch loses its
+            # only distinct path to the planner — re-admit the top cut
+            # candidate, but ONLY when that candidate is itself NOT
+            # another branch's pick (it must give this branch a genuinely
+            # distinct capability — re-admitting a shared noise candidate
+            # like weather into the coordinates branch would pollute the
+            # catalog). Metadata-free: cross-branch set comparison.
+            other_branch_picks = set()
+            for _u, _picks in branch_picks.items():
+                if _u != unit:
+                    other_branch_picks |= _picks
+            if all(r.name in other_branch_picks for r in kept):
+                distinct_cut = [
+                    r for r in cut if r.name not in other_branch_picks
+                ]
+                if distinct_cut:
+                    top_cut = max(distinct_cut, key=lambda r: r.score)
+                    kept.append(top_cut)
+                    diagnostics.setdefault(
+                        top_cut.name,
+                        f"distinctness_invariant_kept (intent: {unit[:48]})",
+                    )
+        for r in kept:
             if r.name not in selected or r.score > selected[r.name]:
                 selected[r.name] = r.score
     return sorted(selected.items(), key=lambda kv: -kv[1]), diagnostics

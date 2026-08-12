@@ -200,6 +200,7 @@ async def _fetch_capabilities(
     query: str | None = None,
     domain_hint: str | None = None,
     snapshot: dict[str, Any] | None = None,
+    intent_graph: Any = None,
 ) -> tuple[list[str], str]:
     """Fetch the capabilities the planner should consider.
 
@@ -217,6 +218,10 @@ async def _fetch_capabilities(
             approval modification when scoped). When None, the full catalog
             is returned (fallback for generic planning).
         domain_hint: Optional deterministic domain to narrow to first.
+        intent_graph: P0-C structured decomposition (optional). When present,
+            its executable intents' GOALS drive the per-intent branch
+            resolution (the resolver maps goals → capabilities; the K83
+            anaphoric chain gains its second branch here).
 
     Returns:
         A tuple of ``(valid_ops, catalog_string)`` — exact ``logical_op_name``
@@ -308,9 +313,18 @@ async def _fetch_capabilities(
 
                     _units: list[str] = []
                     try:
-                        _det = IntentDetector().detect(query or "")
-                        if _det is not None and _det.units:
-                            _units = [u.text for u in _det.units]
+                        # P0-C: prefer the STRUCTURED intent graph's goals
+                        # (from the adaptive decomposition that ran before
+                        # catalog fetch — it may contain intents the clause
+                        # splitter never saw, e.g. the K83 anaphoric chain).
+                        if intent_graph is not None and getattr(intent_graph, "intents", None):
+                            _units = [
+                                i.goal for i in intent_graph.executable
+                            ] or [query or ""]
+                        else:
+                            _det = IntentDetector().detect(query or "")
+                            if _det is not None and _det.units:
+                                _units = [u.text for u in _det.units]
                     except Exception:
                         _units = []
                     if not _units:
@@ -351,6 +365,10 @@ async def _fetch_capabilities(
                         units=_units,
                         intent_scores={
                             u: [n for n, _s in sc[:5]] for u, sc in intent_scores.items()
+                        },
+                        intent_full_scores={
+                            u: [(n, round(_s, 2)) for n, _s in sc[:6]]
+                            for u, sc in intent_scores.items()
                         },
                         selected=[n for n, _s in selected],
                         closed=[n for n, _s in closed],
@@ -1186,12 +1204,63 @@ async def semantic_parser_node(
     # to the domain as one of its metadata layers).
     domain_hint = snapshot.get("_domain_hint")
 
+    # P0-C ADAPTIVE STRUCTURED DECOMPOSITION: BEFORE capability fetch, so
+    # the intent graph drives the resolver's per-intent branches (the K83
+    # anaphoric chain must enter the catalog as TWO goals, not one). The
+    # deterministic compound-signal trigger decides whether the Tier-2 LLM
+    # decomposer is worth its call — simple queries score ~0 (no extra
+    # LLM call), compound/anaphoric queries fire (the reviewer's
+    # latency discipline). The graph is stored on the snapshot so the
+    # validator's coverage check consumes the SAME detected intents.
+    intent_graph: Any = None
+    try:
+        from nexus.agent.planners.intent_detector import (
+            IntentDetector,
+            _compound_signal_strength,
+        )
+
+        _tier1 = IntentDetector()
+        intent_graph = _tier1.detect_graph(last_message)
+        _trigger = _compound_signal_strength(last_message)
+        _replanning_now = bool(
+            snapshot.get("_plan_validator_errors") or snapshot.get("_compile_errors")
+        )
+        _intent_repair_failed = any(
+            any(code in str(e) for code in ("intent coverage", "empty plan",
+                                            "extraneous", "not served"))
+            for e in (snapshot.get("_plan_validator_errors") or [])
+        )
+        if (_trigger >= 0.45 or _intent_repair_failed or _replanning_now):
+            from nexus.agent.planners.intent_decomposer_llm import decompose_with_llm  # noqa: PLC0415
+
+            llm_graph = await decompose_with_llm(llm, model, last_message)
+            if llm_graph is not None and llm_graph.intents:
+                intent_graph = llm_graph
+                logger.info(
+                    "semantic_planner.llm_decomposition",
+                    intents=[i.goal[:50] for i in llm_graph.executable],
+                    relationships=[
+                        f"{r.source_intent}->{r.target_intent}" for r in llm_graph.relationships
+                    ],
+                    trigger=round(_trigger, 2),
+                )
+        logger.info(
+            "semantic_planner.intent_graph",
+            intents=[i.goal[:50] for i in intent_graph.executable],
+            relationships=len(intent_graph.relationships),
+            source=intent_graph.source,
+            trigger=round(_trigger, 2),
+        )
+    except Exception as exc:
+        logger.warning("semantic_planner.intent_detect_failed", error=str(exc)[:150])
+
     # Fetch capabilities — RETRIEVAL-FIRST via the ResolutionEngine: the
     # effective planning message (dynamic step intent / approval modification
     # when scoped) narrows the catalog to ranked, available top-K candidates
     # before the LLM ever sees it. Engine facts + scored catalog text.
     valid_ops, capabilities = await _fetch_capabilities(
-        last_message, domain_hint=domain_hint, snapshot=snapshot
+        last_message, domain_hint=domain_hint, snapshot=snapshot,
+        intent_graph=intent_graph,
     )
 
     # Replan scoping: ops marked unavailable by a replan (structural failure)
@@ -1262,32 +1331,10 @@ async def semantic_parser_node(
         )
         capabilities = (capabilities + "\n\n" + coverage_note) if capabilities else coverage_note
 
-    # P4-4 ADAPTIVE INTENT DECOMPOSITION: the Tier-2 LLM decomposer runs
-    # ONLY on (a) low Tier-1 confidence (ambiguous single long clause) or
-    # (b) a bounded repair cycle already failed on intent-class violations.
-    # The deterministic Tier-1 detector is the default — zero extra calls.
-    # NOTE: the detected units are NOT injected into the planner prompt —
-    # the deterministic validator computes its own units for the coverage
-    # check; prompt injection measurably confused the planning model.
-    try:
-        from nexus.agent.planners.intent_decomposer_llm import decompose_with_llm
-        from nexus.agent.planners.intent_detector import IntentDetector
-
-        detected = IntentDetector().detect(last_message)
-        _intent_repair_failed = any(
-            any(code in str(e) for code in ("intent coverage", "empty plan",
-                                            "extraneous", "not served"))
-            for e in validator_errors
-        )
-        if detected.confidence < 0.7 or _intent_repair_failed:
-            llm_detected = await decompose_with_llm(llm, model, last_message)
-            if llm_detected is not None and llm_detected.units:
-                logger.info(
-                    "semantic_planner.llm_decomposition",
-                    units=[u.text[:40] for u in llm_detected.units],
-                )
-    except Exception as exc:
-        logger.warning("semantic_planner.intent_detect_failed", error=str(exc)[:150])
+    # P4-4 ADAPTIVE INTENT DECOMPOSITION — moved BEFORE capability fetch
+    # (P0-C): the structured intent graph now drives the resolver's
+    # per-intent branches and the validator's coverage check; it is no
+    # longer a post-hoc repair signal computed after the catalog exists.
 
     # Planning memory (Phase 5): preferences / prior tasks / recurring goals
     # retrieved before the LLM reasons — bounded, session-scoped, typed.
@@ -1367,6 +1414,9 @@ async def semantic_parser_node(
                     session_id=snapshot.get("session_id", ""),
                     workflow=cached,
                     planner_confidence=min(0.95, 0.5 + (len(cached.get("nodes") or []) * 0.1)),
+                    detected_intents=(
+                        _detected_intents_payload(intent_graph) if intent_graph is not None else None
+                    ),
                 )
                 return _build_patch(cached, cached=True, latency_ms=round(elapsed * 1000), version=ctx.version + 1,
                                     errors=[f"SemanticPlanner: could not resolve capabilities: {', '.join(_drop_errs[:5])}"] if _drop_errs else None,
@@ -1397,6 +1447,9 @@ async def semantic_parser_node(
                     session_id=snapshot.get("session_id", ""),
                     workflow=cached,
                     planner_confidence=min(0.95, 0.5 + (len(cached.get("nodes") or []) * 0.1)),
+                    detected_intents=(
+                        _detected_intents_payload(intent_graph) if intent_graph is not None else None
+                    ),
                 )
                 return _build_patch(cached, cached=True, latency_ms=round(elapsed * 1000), version=ctx.version + 1,
                                     errors=[f"SemanticPlanner: could not resolve capabilities: {', '.join(_drop_errs[:5])}"] if _drop_errs else None,
@@ -1600,10 +1653,21 @@ async def semantic_parser_node(
     # Emit PlanningCompleted event with confidence derived from node count
     session_id = snapshot.get("session_id", "")
     plan_confidence = min(0.95, 0.5 + (len(nodes) * 0.1)) if nodes else 0.0
+    _intent_payload = None
+    if intent_graph is not None:
+        try:
+            _intent_payload = {
+                "intents": intent_graph.as_dicts(),
+                "relationships": intent_graph.relationships_as_dicts(),
+                "source": intent_graph.source,
+            }
+        except Exception:
+            _intent_payload = None
     await emit_planning_completed(
         session_id=session_id,
         workflow=parsed,
         planner_confidence=plan_confidence,
+        detected_intents=_intent_payload,
     )
 
     logger.info(
@@ -1626,7 +1690,21 @@ async def semantic_parser_node(
         budget_exceeded=_budget_flag("planning", elapsed * 1000),
         invocation_budget=_bud.to_dict(),
         binding_report=binding_report,
+        intent_graph=intent_graph,
     )
+
+
+def _detected_intents_payload(intent_graph: Any) -> dict[str, Any] | None:
+    """P0-C: serialize the structured intent graph for the planning event
+    (the benchmark's requested-vs-planned intent accounting)."""
+    try:
+        return {
+            "intents": intent_graph.as_dicts(),
+            "relationships": intent_graph.relationships_as_dicts(),
+            "source": intent_graph.source,
+        }
+    except Exception:
+        return None
 
 
 def _budget_flag(stage: str, elapsed_ms: float) -> str | None:
@@ -1658,6 +1736,7 @@ def _build_patch(
     budget_exceeded: str | None = None,
     invocation_budget: dict | None = None,
     binding_report: dict[str, Any] | None = None,
+    intent_graph: Any = None,
 ) -> StatePatch:
     """Build a StatePatch with the LogicalWorkflow and metadata.
 
@@ -1692,6 +1771,16 @@ def _build_patch(
 
     if binding_report:
         updates["_binding_report"] = binding_report
+
+    if intent_graph is not None:
+        try:
+            updates["_detected_intents"] = {
+                "intents": intent_graph.as_dicts(),
+                "relationships": intent_graph.relationships_as_dicts(),
+                "source": intent_graph.source,
+            }
+        except Exception:
+            pass
 
     if total_tokens:
         updates["_total_tokens"] = total_tokens

@@ -98,14 +98,34 @@ class PlanValidatorNode:
         # ranked (capability, score) pairs — the validator's alignment
         # verdict is score-based, never a keyword proxy. Deterministic,
         # GC-only, bounded by the unit count.
+        # P0-C: when a STRUCTURED intent graph exists, its GOALS are the
+        # units — engine scores must be computed for those same goals or
+        # the coverage check cannot see the second intent's candidates
+        # (the K83 "find the address at the coordinate" goal).
+        structured_intents = None
+        try:
+            _detected_state = state.get("_detected_intents")
+            if isinstance(_detected_state, dict) and _detected_state.get("intents"):
+                structured_intents = _detected_state
+        except Exception:
+            structured_intents = None
         engine_scores: dict[str, list[tuple[str, float]]] = {}
         try:
             from nexus.agent.planners.intent_detector import IntentDetector  # noqa: PLC0415
 
-            _detected = IntentDetector().detect(user_query) if user_query else None
-            if _detected is not None:
-                for _u in _detected.units:
-                    engine_scores[_u.text] = await _engine_ranked_for_unit(_u.text)
+            if structured_intents is not None:
+                _units_for_scores = [
+                    str(i.get("goal") or "").strip()
+                    for i in structured_intents.get("intents") or []
+                    if isinstance(i, dict) and str(i.get("goal") or "").strip()
+                ]
+            else:
+                _detected = IntentDetector().detect(user_query) if user_query else None
+                _units_for_scores = (
+                    [u.text for u in _detected.units] if _detected is not None else []
+                )
+            for _u in _units_for_scores:
+                engine_scores[_u] = await _engine_ranked_for_unit(_u)
         except Exception as _esc:
             logger.warning("plan_validator.engine_scores_failed", error=str(_esc)[:150])
         report = self.validate(
@@ -115,6 +135,7 @@ class PlanValidatorNode:
             collections=workflow.get("collections") if isinstance(workflow, dict) else None,
             preferred_tools=state.get("_preferred_tools") or None,
             engine_scores=engine_scores,
+            structured_intents=structured_intents,
         )
         # P0-B: surface the binder's provenance ledger on the report metrics
         # (BOUND/MISSING/AMBIGUOUS classification — the benchmark's
@@ -270,6 +291,7 @@ class PlanValidatorNode:
         collections: dict[str, Any] | None = None,
         preferred_tools: list[str] | None = None,
         engine_scores: dict[str, list[tuple[str, float]]] | None = None,
+        structured_intents: dict[str, Any] | None = None,
     ) -> PlanValidatorReport:
         violations: list[Violation] = []
         errors: list[str] = []
@@ -277,8 +299,13 @@ class PlanValidatorNode:
 
         # INTENT DECOMPOSITION (P4, Tier-1 deterministic): detect the
         # current request's intent units BEFORE any structural check — the
-        # empty-plan and coverage/traceability rules need them.
+        # empty-plan and coverage/traceability rules need them. P0-C: when
+        # the planner's adaptive decomposition produced a STRUCTURED intent
+        # graph (goals/entities/relationships — the K83 anaphoric chain),
+        # the coverage check uses those intents instead of the clause split.
         detected = _detect_intents(user_query) if user_query else None
+        if structured_intents is not None and structured_intents.get("intents"):
+            detected = _structured_to_detected(structured_intents)
         if detected is not None and detected.units:
             metrics["detected_intents"] = len(detected.units)
             metrics["intent_confidence"] = round(detected.confidence, 2)
@@ -600,9 +627,22 @@ class PlanValidatorNode:
         # Metadata-driven: unit→capability via the registry keyword index.
         if detected is not None and detected.units:
             planned_ops = {str(n.get("op") or "") for n in nodes if isinstance(n, dict)}
+
+            def _unit_classifiable(u: Any) -> bool:
+                """P0-C: a unit is classifiable when the keyword bridge sees
+                it OR the deterministic engine ranked capabilities for it
+                (structured-intent goals — the K83 "find the address at the
+                coordinate" goal has no keyword-bridge hit but the engine
+                ranks reverse_geocode for it). Engine rank is the same
+                signal the planner's branch resolution used, so coverage
+                and resolution never disagree about intent existence."""
+                if _unit_candidates(u):
+                    return True
+                return bool((engine_scores or {}).get(u.text))
+
             executable = [
                 u for u in detected.units
-                if not u.negated and _unit_candidates(u)
+                if not u.negated and _unit_classifiable(u)
             ]
             # UNCLASSIFIABLE units (no keyword/alias/name signal — e.g. a
             # unit carrying only an entity like a city name) are excluded
@@ -610,7 +650,7 @@ class PlanValidatorNode:
             # entities the keyword bridge cannot see.
             unclassifiable = [
                 u.text for u in detected.units
-                if not u.negated and not _unit_candidates(u)
+                if not u.negated and not _unit_classifiable(u)
             ]
             negated = [u for u in detected.units if u.negated]
             forbidden_ops = set()
@@ -630,14 +670,18 @@ class PlanValidatorNode:
             coverage_evidence: list[dict[str, Any]] = []
             for u in detected.units:
                 candidates = _unit_candidates(u)
-                classifiable = bool(candidates) and not u.negated
-                matches = planned_ops & candidates if classifiable else set()
-                best = _best_capability(u, candidates) if candidates else None
+                engine_ranked = (engine_scores or {}).get(u.text, [])
+                # P0-C: engine-ranked names extend the candidate set — the
+                # structured-intent goals the keyword bridge cannot see.
+                engine_names = {n for n, _s in engine_ranked}
+                all_candidates = candidates | engine_names
+                classifiable = (bool(all_candidates)) and not u.negated
+                matches = planned_ops & all_candidates if classifiable else set()
+                best = _best_capability(u, all_candidates) if all_candidates else None
                 chosen = (
                     _best_capability(u, matches)
                     if matches else None
                 )
-                engine_ranked = (engine_scores or {}).get(u.text, [])
                 engine_verdict = _alignment_verdict(chosen, engine_ranked)
                 engine_top = engine_ranked[0][0] if engine_ranked else None
                 engine_dominant = _engine_dominant(engine_ranked)
@@ -646,7 +690,7 @@ class PlanValidatorNode:
                     "negated": u.negated,
                     "classifiable": classifiable,
                     "instance_hint": u.instance_hint,
-                    "candidates": sorted(candidates),
+                    "candidates": sorted(all_candidates),
                     "planned_matches": sorted(matches),
                     "best": best,
                     "chosen": chosen,
@@ -658,7 +702,9 @@ class PlanValidatorNode:
                 })
             for u in executable:
                 candidates = _unit_candidates(u)
-                matches = planned_ops & candidates
+                engine_ranked = (engine_scores or {}).get(u.text, [])
+                engine_names = {n for n, _s in engine_ranked}
+                matches = planned_ops & (candidates | engine_names)
                 instance_need = max(1, u.instance_hint)
                 if len(matches) >= instance_need and not (matches & forbidden_ops):
                     served.append(u.text)
@@ -687,7 +733,8 @@ class PlanValidatorNode:
             alignments: list[float] = []
             for u in executable:
                 candidates = _unit_candidates(u)
-                matches = planned_ops & candidates
+                engine_names = {n for n, _s in (engine_scores or {}).get(u.text, [])}
+                matches = planned_ops & (candidates | engine_names)
                 if not matches:
                     continue
                 chosen = _best_capability(u, matches)
@@ -898,6 +945,43 @@ def _detect_intents(user_query: str):
         from nexus.agent.planners.intent_detector import IntentDetector
 
         return IntentDetector().detect(user_query)
+    except Exception:
+        return None
+
+
+def _structured_to_detected(structured: dict[str, Any]):
+    """P0-C bridge: the planner's structured intent graph (goals, not tools)
+    onto the validator's ``DetectedIntents`` unit shape.
+
+    Each structured intent becomes one ``IntentUnit`` whose text is its
+    GOAL (the resolver's keyword bridge classifies goals — the K83
+    "reverse geocode the coordinates" goal carries the reverse-geocode
+    signal the raw clause splitter never emitted).
+    """
+    try:
+        from nexus.agent.planners.intent_detector import DetectedIntents, IntentUnit
+
+        raw = structured.get("intents") or []
+        if not isinstance(raw, list):
+            return None
+        units = []
+        for order, item in enumerate(raw):
+            if not isinstance(item, dict):
+                continue
+            goal = str(item.get("goal") or "").strip()
+            if not goal:
+                continue
+            units.append(IntentUnit(
+                text=goal,
+                negated=bool(item.get("negated", False)),
+                order=int(item.get("sequence", order) or order),
+                instance_hint=1,
+                comparison=False,
+                confidence=float(item.get("confidence", 1.0) or 1.0),
+            ))
+        if not units:
+            return None
+        return DetectedIntents(units=tuple(units), confidence=1.0, source="llm")
     except Exception:
         return None
 

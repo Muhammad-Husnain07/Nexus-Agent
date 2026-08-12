@@ -206,3 +206,29 @@ def test_branch_diagnostics_explain_removals():
     assert "search_web_search" in diagnostics
     assert "specialized" in diagnostics["search_web_search"].lower() or \
         "suppress" in diagnostics["search_web_search"].lower()
+
+
+def test_distinctness_invariant_keeps_branch_only_capability():
+    """P0-C K83 class: branch 2's raw scores let a shared-token candidate
+    (geocode 100.0) dominate while the branch's ONLY viable capability
+    (reverse_geocode 2.0) falls below the marginal cutoff. The survivors
+    are ALL copies of branch 1's pick — the distinctness invariant must
+    re-admit reverse_geocode so the intent keeps its own path."""
+    scores = {
+        "obtain the coordinates of the Eiffel Tower": [
+            ("geocode_location", 10.0),
+            ("get_current_weather", 1.0),
+        ],
+        "find the address at the coordinates": [
+            ("geocode_location", 100.0),
+            ("reverse_geocode", 2.0),
+            ("get_current_weather", 1.0),
+        ],
+    }
+    selected, diagnostics = branch_safe_select(scores, SEM)
+    names = {n for n, _s in selected}
+    assert "geocode_location" in names
+    assert "reverse_geocode" in names, (
+        "the branch-distinct capability must survive the marginal cutoff"
+    )
+    assert any("distinctness_invariant_kept" in v for v in diagnostics.values())

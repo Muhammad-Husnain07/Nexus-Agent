@@ -85,7 +85,7 @@ async def chat(sid: str, msg: str, timeout: float = 300) -> list[dict]:
 
 async def fetch_execution_evidence(sid: str) -> dict:
     """Read the persisted execution events for the session."""
-    evidence = {"planned": {}, "waves": []}
+    evidence = {"planned": {}, "waves": [], "detected_intents": [], "intent_relationships": []}
     os.chdir('/mnt/c/Users/Muhammad Husnain/Desktop/Nexus-Agentic-AI/nexus-agent')
     import asyncio as _asyncio
 
@@ -121,6 +121,16 @@ async def fetch_execution_evidence(sid: str) -> dict:
                         "depends_on": list(n.get("depends_on") or []),
                     }
             evidence["planned"] = planned
+            # P0-C intent accounting: the structured decomposition that
+            # produced this plan (requested/detected vs planned).
+            di = p.get("detected_intents") or {}
+            if isinstance(di, dict):
+                evidence["detected_intents"] = [
+                    str(i.get("goal") or i.get("intent_id") or "?")
+                    for i in (di.get("intents") or [])
+                    if isinstance(i, dict) and not i.get("negated")
+                ]
+                evidence["intent_relationships"] = di.get("relationships") or []
         elif et == "WaveCompleted":
             evidence["waves"].append({
                 "index": int(p.get("wave_index", 0)),
@@ -375,6 +385,14 @@ async def run_one(sc: dict, delay_s: float = 0.0) -> dict:
     evidence = await fetch_execution_evidence(sid)
     result = score_scenario(sc, events, evidence)
     result["latency_s"] = round(elapsed, 1)
+    # P0-C intent accounting: requested (detected) vs planned — the
+    # reviewer's "which layer lost the intent" instrumentation.
+    result["intent_accounting"] = {
+        "detected": len(evidence.get("detected_intents") or []),
+        "planned": len(evidence.get("planned") or {}),
+        "executed": len(result.get("tools_used") or []),
+        "relationships": len(evidence.get("intent_relationships") or []),
+    }
     return result
 
 
@@ -414,6 +432,12 @@ async def main() -> None:
         "dimensions": {k: round(sum(r["scores"].get(k, 0) for r in results) / max(1, len(results)), 3)
                        for k in WEIGHTS},
         "failure_classes": {},
+        "intent_accounting": {
+            "detected_avg": round(sum(r["intent_accounting"]["detected"] for r in results) / max(1, len(results)), 2),
+            "planned_avg": round(sum(r["intent_accounting"]["planned"] for r in results) / max(1, len(results)), 2),
+            "executed_avg": round(sum(r["intent_accounting"]["executed"] for r in results) / max(1, len(results)), 2),
+            "relationships_total": sum(r["intent_accounting"]["relationships"] for r in results),
+        },
         "results": results,
     }
     for r in results:
@@ -426,6 +450,7 @@ async def main() -> None:
     print(f"passed: {report['scenarios_passed']}/{report['scenarios_total']}  avg: {report['avg_total']}")
     print("dimensions:", json.dumps(report["dimensions"]))
     print("failure classes:", json.dumps(report["failure_classes"]))
+    print("intent accounting:", json.dumps(report["intent_accounting"]))
     print(f"report: {args.out}")
 
 
