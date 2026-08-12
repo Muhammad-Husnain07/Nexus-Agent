@@ -116,6 +116,34 @@ class PlanValidatorNode:
             preferred_tools=state.get("_preferred_tools") or None,
             engine_scores=engine_scores,
         )
+        # P0-B: surface the binder's provenance ledger on the report metrics
+        # (BOUND/MISSING/AMBIGUOUS classification — the benchmark's
+        # BINDING_FAILED class, never a bare "missing inputs" string).
+        binding_report = state.get("_binding_report")
+        if isinstance(binding_report, dict):
+            missing = [m for m in (binding_report.get("missing") or []) if isinstance(m, dict)]
+            metrics = dict(report.metrics)
+            metrics["binding"] = {
+                "bound_required_params": len(binding_report.get("bindings") or []),
+                "missing_required_params": len(missing),
+                "missing_states": {
+                    m.get("parameter"): m.get("state") for m in missing
+                },
+            }
+            errors = list(report.errors)
+            for m in missing:
+                if m.get("state") == "MISSING":
+                    errors.append(
+                        f"BINDING_FAILED: {m.get('node_id') or '?'} "
+                        f"requires {m.get('parameter') or '?'} — "
+                        f"{m.get('reason') or 'no resolvable source'}"
+                    )
+            report = PlanValidatorReport(
+                valid=report.valid,
+                violations=report.violations,
+                errors=errors,
+                metrics=metrics,
+            )
         rounds = int(state.get("_plan_validator_rounds", 0) or 0)
 
         # Gate: PROCEED when the report is valid (no CRITICAL/ERROR).

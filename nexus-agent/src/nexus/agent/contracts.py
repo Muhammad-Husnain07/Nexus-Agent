@@ -69,7 +69,7 @@ NODE_CONTRACTS: Final[tuple[NodeContract, ...]] = (
         reads=("GlobalContext", "ResolutionEngine", "MemoryScout", "registry"),
         writes=("_logical_workflow", "_extraction_result", "_budget_exceeded", "errors",
                 "_total_tokens", "_cost_breakdown", "total_cost_usd",
-                "_invocation_budget"),
+                "_invocation_budget", "_binding_report"),
         produces=("LogicalWorkflow",),
         consumes=("user_message", "capability_catalog"),
         may_fail=True,

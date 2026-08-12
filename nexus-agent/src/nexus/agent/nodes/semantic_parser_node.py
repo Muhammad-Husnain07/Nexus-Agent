@@ -438,7 +438,17 @@ async def _fetch_capabilities(
                 else:
                     schema_props = _tool_schemas.get(name) or _tool_schemas.get(cap.name)
                     if schema_props:
-                        hints = ", ".join(schema_props.keys())
+                        # Render schema defaults into the hints so the planner
+                        # never invents values for defaulted optional params
+                        # (P0-B: the `namespace` class — the LLM filled the
+                        # repo name into a field that defaults to "library").
+                        parts = []
+                        for _pn, _prop in schema_props.items():
+                            if isinstance(_prop, dict) and _prop.get("default") is not None:
+                                parts.append(f"{_pn}(default={_prop.get('default')})")
+                            else:
+                                parts.append(_pn)
+                        hints = ", ".join(parts)
 
                 meta = cap_meta.get(name) or cap_meta.get(cap.name) or {}
                 domain = str(meta.get("domain") or "")
@@ -1336,8 +1346,31 @@ async def semantic_parser_node(
                 )
                 cached = None
             else:
+                # P0-B: cached plans also pass the DETERMINISTIC binder (L1-L4
+                # only — never an LLM call on the cache-hit path). Pre-P0-B
+                # cache entries gain their bindings here; already-bound plans
+                # are no-ops.
+                _cached_report: dict[str, Any] | None = None
+                try:
+                    from nexus.compiler.binder import bind_parameters  # noqa: PLC0415
+
+                    _cached_report = (
+                        await bind_parameters(cached["nodes"], last_message)
+                    ).model_dump()
+                except Exception as _cexc:
+                    logger.warning("semantic_planner.cache_binding_failed", error=str(_cexc)[:150])
+                # Cache-hit plans still emit PlanningCompleted (the benchmark
+                # evidence layer and downstream observability read the planned
+                # DAG regardless of cache origin — a hit without the event
+                # scores planned={} despite correct execution).
+                await emit_planning_completed(
+                    session_id=snapshot.get("session_id", ""),
+                    workflow=cached,
+                    planner_confidence=min(0.95, 0.5 + (len(cached.get("nodes") or []) * 0.1)),
+                )
                 return _build_patch(cached, cached=True, latency_ms=round(elapsed * 1000), version=ctx.version + 1,
-                                    errors=[f"SemanticPlanner: could not resolve capabilities: {', '.join(_drop_errs[:5])}"] if _drop_errs else None)
+                                    errors=[f"SemanticPlanner: could not resolve capabilities: {', '.join(_drop_errs[:5])}"] if _drop_errs else None,
+                                    binding_report=_cached_report)
         if cached is not None and isinstance(cached, list):
             cached = {"version": "1.0", "nodes": _sanitize_ops(cached, valid_ops), "collections": {}}
             cached["nodes"] = _drop_unresolved(cached["nodes"], valid_ops)
@@ -1350,8 +1383,24 @@ async def semantic_parser_node(
                 )
                 cached = None
             else:
+                # P0-B deterministic binding on the cache-hit path (see above).
+                _cached_report: dict[str, Any] | None = None
+                try:
+                    from nexus.compiler.binder import bind_parameters  # noqa: PLC0415
+
+                    _cached_report = (
+                        await bind_parameters(cached["nodes"], last_message)
+                    ).model_dump()
+                except Exception as _cexc:
+                    logger.warning("semantic_planner.cache_binding_failed", error=str(_cexc)[:150])
+                await emit_planning_completed(
+                    session_id=snapshot.get("session_id", ""),
+                    workflow=cached,
+                    planner_confidence=min(0.95, 0.5 + (len(cached.get("nodes") or []) * 0.1)),
+                )
                 return _build_patch(cached, cached=True, latency_ms=round(elapsed * 1000), version=ctx.version + 1,
-                                    errors=[f"SemanticPlanner: could not resolve capabilities: {', '.join(_drop_errs[:5])}"] if _drop_errs else None)
+                                    errors=[f"SemanticPlanner: could not resolve capabilities: {', '.join(_drop_errs[:5])}"] if _drop_errs else None,
+                                    binding_report=_cached_report)
     # cached None (miss or schema-invalid replay) → fresh planning below
 
     from nexus.agent.prompts.manager import prompt_manager as _pm
@@ -1501,6 +1550,39 @@ async def semantic_parser_node(
 
     elapsed = time.perf_counter() - start_ts
 
+    # P0-B PARAMETER + PROVENANCE BINDING: deterministically resolve WHERE
+    # every required input comes from — user value, artifact-output from a
+    # planned producer (placeholder + dependency edge), or (fresh-planning
+    # only, budget-guarded) a single LLM extraction. The plan is mutated in
+    # place so the bound inputs are what the validator sees and the cache
+    # stores. Missing inputs become explicit MissingInput states — the
+    # validator classifies them instead of a bare "missing inputs" error.
+    binding_report: dict[str, Any] | None = None
+    try:
+        from nexus.compiler.binder import bind_parameters  # noqa: PLC0415
+
+        report = await bind_parameters(
+            nodes,
+            last_message,
+            llm=llm,
+            model=model,
+            budget=_bud,
+            allow_llm=bool(
+                snapshot.get("_force_query_type")
+                or str(snapshot.get("_query_type") or "") != "conversational"
+            ),
+        )
+        binding_report = report.model_dump()
+        logger.info(
+            "semantic_planner.binding_report",
+            query=last_message[:60],
+            bound=len(report.bindings),
+            missing=len(report.missing),
+            states=[m.state for m in report.missing],
+        )
+    except Exception as _bind_exc:
+        logger.warning("semantic_planner.binding_failed", error=str(_bind_exc)[:200])
+
     # NEVER CACHE A STRUCTURALLY INVALID PLAN (D0/P0-C, I11): schema-invalid
     # input values AND invented input keys are statically detectable — a
     # plan carrying either would be replayed forever from the cache and
@@ -1543,6 +1625,7 @@ async def semantic_parser_node(
         errors=planner_errors or None,
         budget_exceeded=_budget_flag("planning", elapsed * 1000),
         invocation_budget=_bud.to_dict(),
+        binding_report=binding_report,
     )
 
 
@@ -1574,6 +1657,7 @@ def _build_patch(
     errors: list[str] | None = None,
     budget_exceeded: str | None = None,
     invocation_budget: dict | None = None,
+    binding_report: dict[str, Any] | None = None,
 ) -> StatePatch:
     """Build a StatePatch with the LogicalWorkflow and metadata.
 
@@ -1586,6 +1670,8 @@ def _build_patch(
         version: Target context version.
         errors: Optional planner errors surfaced on the state patch.
         invocation_budget: The ReasoningBudget ledger (consumed LLM calls).
+        binding_report: P0-B provenance ledger (parameter bindings + missing
+            inputs classified explicitly).
     """
     updates: dict[str, Any] = {
         "_logical_workflow": workflow,
@@ -1603,6 +1689,9 @@ def _build_patch(
 
     if invocation_budget:
         updates["_invocation_budget"] = invocation_budget
+
+    if binding_report:
+        updates["_binding_report"] = binding_report
 
     if total_tokens:
         updates["_total_tokens"] = total_tokens

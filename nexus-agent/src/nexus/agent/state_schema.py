@@ -365,6 +365,7 @@ _EPHEMERAL_FIELDS: list[str] = [
     "_context_snapshot",
     "_extraction_result",
     "_validation_result",
+    "_binding_report",
     "_ready_to_plan",
     "_needs_clarification",
     "_clarification_asked",
@@ -526,6 +527,10 @@ class AgentState(TypedDict, total=False):
     _aggregated_results: dict[str, Any]
     _graph_patch: dict[str, Any] | None
     _memory_persisted: dict[str, Any]
+
+    # P0-B: parameter/provenance binding ledger (BOUND/MISSING/AMBIGUOUS/
+    # INVALID classification with candidate sources) — ephemeral per plan.
+    _binding_report: dict[str, Any]
 
     # Runtime-only ephemeral fields (carried in state but not in TypedDict)
     _total_retry_count: int
