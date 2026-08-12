@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from nexus.capabilities.capability_semantics import (
     CapabilitySemantics,
+    branch_safe_select,
     close_dependencies,
     rank_candidates,
 )
@@ -134,3 +135,74 @@ def test_semantics_derivation_from_registry_shape():
     assert sem.requires == ("latitude", "longitude")
     assert sem.specificity == 0.5  # default when not curated
     assert sem.domains == ("weather",)
+
+
+# ======================================================================
+# P0-A.3 BRANCH-SAFE SELECTION
+# ======================================================================
+
+
+def test_branch_local_cut_keeps_second_intent():
+    """K83-type: two intents, one with a weak second capability. The GLOBAL
+    marginal cut would drop reverse_geocode (5 << 100); branch-local keeps
+    it because the second intent's branch is top-strong on reverse."""
+    scores = {
+        "geocode the Eiffel Tower": [
+            ("geocode_location", 100.0), ("reverse_geocode", 5.0),
+            ("search_web_search", 100.0),
+        ],
+        "reverse geocode the coordinates": [("reverse_geocode", 90.0)],
+    }
+    selected, diagnostics = branch_safe_select(scores, SEM)
+    names = {n for n, _s in selected}
+    assert "geocode_location" in names
+    assert "reverse_geocode" in names, (
+        "the second intent's candidate must survive the branch-local margin"
+    )
+    assert "search_web_search" not in names  # generic suppressed
+
+
+def test_branch_suppression_does_not_leak_across_intents():
+    """The web-search generic is suppressed only where a specialized
+    candidate exists; an intent that genuinely needs the web keeps it."""
+    scores = {
+        "search for chicken recipes": [("search_meals", 6.0), ("search_web_search", 100.0)],
+        "search the web": [("search_web_search", 100.0)],
+    }
+    selected, _d = branch_safe_select(scores, SEM)
+    names = {n for n, _s in selected}
+    assert "search_meals" in names
+    assert "search_web_search" in names  # kept for the explicit-web intent
+
+
+def test_coverage_invariant_top_always_survives():
+    """Every executable intent retains at least one viable capability path —
+    even a weak single-candidate intent is never dropped entirely."""
+    scores = {
+        "search the web": [("search_web_search", 100.0)],
+        "geocode a place": [("geocode_location", 1.0)],
+    }
+    selected, _d = branch_safe_select(scores, SEM)
+    names = {n for n, _s in selected}
+    assert "search_web_search" in names
+    assert "geocode_location" in names, "a weak intent's top path must survive"
+
+
+def test_branch_merge_takes_max_score():
+    scores = {
+        "weather": [("get_current_weather", 5.0)],
+        "current conditions": [("get_current_weather", 9.0)],
+    }
+    selected, _d = branch_safe_select(scores, SEM)
+    by_name = dict(selected)
+    assert by_name["get_current_weather"] == 9.12  # max across branches (+bonus)
+
+
+def test_branch_diagnostics_explain_removals():
+    scores = {
+        "search for chicken recipes": [("search_meals", 6.0), ("search_web_search", 100.0)],
+    }
+    _selected, diagnostics = branch_safe_select(scores, SEM)
+    assert "search_web_search" in diagnostics
+    assert "specialized" in diagnostics["search_web_search"].lower() or \
+        "suppress" in diagnostics["search_web_search"].lower()

@@ -54,22 +54,32 @@ def load_scenarios() -> list[dict]:
 
 async def chat(sid: str, msg: str, timeout: float = 300) -> list[dict]:
     events = []
+
+    async def _do() -> list[dict]:
+        out: list[dict] = []
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as c:
+                async with c.stream("POST", f"{BASE}/sessions/{sid}/chat", json={"message": msg}) as resp:
+                    async for line in resp.aiter_lines():
+                        line = line.strip()
+                        if not line or line.startswith(":") or line.startswith("id:"):
+                            continue
+                        if line.startswith("data: "):
+                            try:
+                                parsed = json.loads(line[6:])
+                                if isinstance(parsed, dict) and "type" in parsed:
+                                    out.append(parsed)
+                            except json.JSONDecodeError:
+                                pass
+        except Exception as exc:
+            out.append({"type": "error", "payload": {"message": str(exc)}})
+        return out
+
     try:
-        async with httpx.AsyncClient(timeout=timeout) as c:
-            async with c.stream("POST", f"{BASE}/sessions/{sid}/chat", json={"message": msg}) as resp:
-                async for line in resp.aiter_lines():
-                    line = line.strip()
-                    if not line or line.startswith(":") or line.startswith("id:"):
-                        continue
-                    if line.startswith("data: "):
-                        try:
-                            parsed = json.loads(line[6:])
-                            if isinstance(parsed, dict) and "type" in parsed:
-                                events.append(parsed)
-                        except json.JSONDecodeError:
-                            pass
-    except Exception as exc:
-        events.append({"type": "error", "payload": {"message": str(exc)}})
+        # Hard total deadline: heartbeat keep-alives defeat per-read timeouts.
+        return await asyncio.wait_for(_do(), timeout=timeout)
+    except asyncio.TimeoutError:
+        events.append({"type": "error", "payload": {"message": "chat total timeout"}})
     return events
 
 
@@ -355,7 +365,9 @@ def score_scenario(sc: dict, events: list[dict], evidence: dict) -> dict:
     }
 
 
-async def run_one(sc: dict) -> dict:
+async def run_one(sc: dict, delay_s: float = 0.0) -> dict:
+    if delay_s:
+        await asyncio.sleep(delay_s)
     sid = str(uuid.uuid4())
     t0 = time.time()
     events = await chat(sid, sc["prompt"])
@@ -371,6 +383,7 @@ async def main() -> None:
     ap.add_argument("--ids", default="", help="comma-separated scenario ids")
     ap.add_argument("--max", type=int, default=0, help="max scenarios to run")
     ap.add_argument("--out", default="benchmark_report.json")
+    ap.add_argument("--delay", type=float, default=0.0, help="seconds between scenarios (rate-limit pacing)")
     args = ap.parse_args()
 
     scenarios = load_scenarios()
@@ -384,7 +397,7 @@ async def main() -> None:
     for i, sc in enumerate(scenarios, 1):
         print(f"[{i}/{len(scenarios)}] {sc['id']} {sc['prompt'][:60]}", flush=True)
         try:
-            r = await run_one(sc)
+            r = await run_one(sc, delay_s=args.delay)
         except Exception as exc:
             r = {"id": sc["id"], "group": sc["group"], "prompt": sc["prompt"],
                  "total": 0.0, "failures": {"run": f"RUNNER: {str(exc)[:150]}"},

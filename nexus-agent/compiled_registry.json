@@ -538,51 +538,6 @@
       ],
       "logical_op_name": "search_books"
     },
-    "get_docker_images": {
-      "name": "get_docker_images",
-      "consumes": [
-        "namespace",
-        "repository"
-      ],
-      "produces": [
-        "docker_image_info"
-      ],
-      "preconditions": [],
-      "postconditions": [],
-      "providers": [
-        {
-          "name": "get_docker_images_provider",
-          "privacy_level": "low",
-          "reliability_score": 1.0,
-          "rate_limit_per_minute": null,
-          "retry_policy": "default",
-          "circuit_breaker_threshold": 5,
-          "endpoints": [
-            {
-              "url": "https://hub.docker.com/v2/repositories/{namespace}/{repository}",
-              "http_method": "GET",
-              "auth_type": "none",
-              "auth_ref": "",
-              "region": "global",
-              "weight": 1,
-              "latency_p99_ms": null,
-              "cost_per_call": 0.0,
-              "supports_batch": false
-            }
-          ],
-          "auth_ref": ""
-        }
-      ],
-      "version": 4,
-      "description": "Retrieve Docker Hub image information for a repository.",
-      "purpose": "",
-      "tags": [
-        "docker",
-        "containers",
-        "devops"
-      ],
-      "logical_op_name": "get_docker_images"
-    },
     "search_anime": {
       "name": "search_anime",
       "consumes": [
@@ -717,6 +672,51 @@
         "language"
       ],
       "logical_op_name": "define_word"
+    },
+    "get_docker_images": {
+      "name": "get_docker_images",
+      "consumes": [
+        "namespace",
+        "repository"
+      ],
+      "produces": [
+        "docker_image_info"
+      ],
+      "preconditions": [],
+      "postconditions": [],
+      "providers": [
+        {
+          "name": "get_docker_images_provider",
+          "privacy_level": "low",
+          "reliability_score": 1.0,
+          "rate_limit_per_minute": null,
+          "retry_policy": "default",
+          "circuit_breaker_threshold": 5,
+          "endpoints": [
+            {
+              "url": "https://hub.docker.com/v2/repositories/{namespace}/{repository}",
+              "http_method": "GET",
+              "auth_type": "none",
+              "auth_ref": "",
+              "region": "global",
+              "weight": 1,
+              "latency_p99_ms": null,
+              "cost_per_call": 0.0,
+              "supports_batch": false
+            }
+          ],
+          "auth_ref": ""
+        }
+      ],
+      "version": 4,
+      "description": "Retrieve Docker Hub image information for a repository.",
+      "purpose": "",
+      "tags": [
+        "docker",
+        "containers",
+        "devops"
+      ],
+      "logical_op_name": "get_docker_images"
     },
     "search_meals": {
       "name": "search_meals",
@@ -974,7 +974,7 @@
     "word"
   ],
   "cycles": [],
-  "compiled_at": "2026-08-10T20:47:51.180710+00:00",
+  "compiled_at": "2026-08-11T12:20:32.879768+00:00",
   "source_registry_version": 0,
   "registry_checksum": "c4c0b4da1bf8d6b7",
   "capability_providers": {
@@ -1146,20 +1146,6 @@
         "weight": 1
       }
     ],
-    "get_docker_images": [
-      {
-        "provider_name": "get_docker_images_provider",
-        "url": "https://hub.docker.com/v2/repositories/{namespace}/{repository}",
-        "http_method": "GET",
-        "auth_type": "none",
-        "auth_ref": "",
-        "latency_p99_ms": null,
-        "cost_per_call": 0.0,
-        "reliability_score": 1.0,
-        "region": "global",
-        "weight": 1
-      }
-    ],
     "search_anime": [
       {
         "provider_name": "search_anime_provider",
@@ -1192,6 +1178,20 @@
       {
         "provider_name": "define_word_provider",
         "url": "https://api.dictionaryapi.dev/api/v2/entries/en/{word}",
+        "http_method": "GET",
+        "auth_type": "none",
+        "auth_ref": "",
+        "latency_p99_ms": null,
+        "cost_per_call": 0.0,
+        "reliability_score": 1.0,
+        "region": "global",
+        "weight": 1
+      }
+    ],
+    "get_docker_images": [
+      {
+        "provider_name": "get_docker_images_provider",
+        "url": "https://hub.docker.com/v2/repositories/{namespace}/{repository}",
         "http_method": "GET",
         "auth_type": "none",
         "auth_ref": "",

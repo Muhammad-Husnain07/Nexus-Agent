@@ -238,8 +238,9 @@ async def _fetch_capabilities(
     _tool_outputs: dict[str, dict[str, Any]] = {}
     _tool_examples: dict[str, list[dict[str, Any]]] = {}
     try:
-        from nexus.db.models.tool import Tool  # noqa: PLC0415
         from sqlalchemy import select as _tool_select  # noqa: PLC0415
+
+        from nexus.db.models.tool import Tool  # noqa: PLC0415
 
         async with _cat_db() as _sem_db:
             _tool_rows = await _sem_db.execute(
@@ -263,7 +264,9 @@ async def _fetch_capabilities(
                         e for e in t_row[3] if isinstance(e, dict) and e.get("user_prompt")
                     ]
                 try:
-                    from nexus.capabilities.capability_semantics import CapabilitySemantics  # noqa: PLC0415
+                    from nexus.capabilities.capability_semantics import (
+                        CapabilitySemantics,  # noqa: PLC0415
+                    )
 
                     _semantics_map[t_name] = CapabilitySemantics.from_registry(t_name, t_row)
                 except Exception:
@@ -287,28 +290,51 @@ async def _fetch_capabilities(
                     top_k=15,
                 )
                 candidates = list(resolution.capability_candidates)
-                # P0-A RESOLVER UPGRADE (vNext Phase 1): deterministic
-                # specificity ranking + generic-fallback suppression +
-                # dependency closure over the engine's raw candidates.
-                # Nemotron/BM25 propose; the ranker decides; the closure
-                # guarantees the planner never operates on an incomplete
-                # capability set (coordinates + weather → geocode_location
-                # is added deterministically).
+                # P0-A.3 BRANCH-SAFE RESOLUTION (vNext Phase 1): the engine
+                # resolves EACH detected intent unit independently; the
+                # ranker/suppression/marginal-cut apply BRANCH-LOCALLY so a
+                # candidate belonging to one intent never disappears because
+                # another intent has a stronger top (the K83-type class).
+                # COVERAGE INVARIANT: every intent keeps >= 1 viable path.
+                # Dependency closure (additive) runs last on the merged set.
                 try:
                     import re as _re  # noqa: PLC0415
+
+                    from nexus.agent.planners.intent_detector import IntentDetector  # noqa: PLC0415
                     from nexus.capabilities.capability_semantics import (  # noqa: PLC0415
+                        branch_safe_select,
                         close_dependencies,
-                        rank_candidates,
                     )
 
-                    ranked = rank_candidates(
-                        [(c.name, float(c.score)) for c in candidates],
-                        _semantics_map,
-                        query=query or "",
+                    _units: list[str] = []
+                    try:
+                        _det = IntentDetector().detect(query or "")
+                        if _det is not None and _det.units:
+                            _units = [u.text for u in _det.units]
+                    except Exception:
+                        _units = []
+                    if not _units:
+                        _units = [query or ""]
+                    intent_scores: dict[str, list[tuple[str, float]]] = {}
+                    for _u in _units:
+                        # P0-A.3: per-intent resolution MUST NOT inherit the
+                        # whole-query domain hint — the router's single
+                        # domain (e.g. "weather") would filter out the other
+                        # intents' capabilities ("Find the coordinates of
+                        # Lahore" would lose geocode under a weather hint).
+                        # The branch ranker handles specialization.
+                        _ures = await get_resolution_engine().resolve(
+                            _u, top_k=15,
+                        )
+                        intent_scores[_u] = [
+                            (c.name, float(c.score))
+                            for c in _ures.capability_candidates
+                        ]
+                    selected, diagnostics = branch_safe_select(
+                        intent_scores, _semantics_map
                     )
                     closed = close_dependencies(
-                        [(r.name, r.score) for r in ranked],
-                        _semantics_map,
+                        selected, _semantics_map,
                         query_entities=set(
                             _re.findall(r"[a-zA-Z]{3,}", (query or "").lower())
                         ),
@@ -316,14 +342,19 @@ async def _fetch_capabilities(
                     candidates = [
                         type("_C", (), {
                             "name": n, "score": s,
-                            "confidence": "high", "match_sources": ("resolver_ranked",),
+                            "confidence": "high", "match_sources": ("resolver_branch",),
                         })()
                         for n, s in closed
                     ]
                     logger.info(
-                        "semantic_planner.resolver_ranked",
-                        ranked=[(r.name, r.score) for r in ranked][:8],
+                        "semantic_planner.resolver_branches",
+                        units=_units,
+                        intent_scores={
+                            u: [n for n, _s in sc[:5]] for u, sc in intent_scores.items()
+                        },
+                        selected=[n for n, _s in selected],
                         closed=[n for n, _s in closed],
+                        diagnostics={k: v for k, v in list(diagnostics.items())[:8]},
                     )
                 except Exception as _rank_exc:
                     logger.warning(
@@ -803,8 +834,8 @@ def _has_schema_invalid_nodes(nodes: list[Any]) -> bool:
     (GC meta) — metadata-driven, never hardcoded."""
     try:
         from nexus.agent.nodes.plan_validator_node import (
-            _schema_type_violations,
             _missing_inputs,
+            _schema_type_violations,
         )
     except Exception:
         return False
@@ -1112,7 +1143,7 @@ async def semantic_parser_node(
         if isinstance(m, dict) and m.get("role") == "user":
             last_message = str(m.get("content", ""))
             break
-        if hasattr(m, "role") and getattr(m, "role") == "user":
+        if hasattr(m, "role") and m.role == "user":
             last_message = str(getattr(m, "content", ""))
             break
 

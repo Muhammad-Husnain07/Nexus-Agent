@@ -96,6 +96,7 @@ def rank_candidates(
     candidates: list[tuple[str, float]],
     semantics_map: dict[str, CapabilitySemantics],
     query: str = "",
+    removals: dict[str, str] | None = None,
 ) -> list[RankedCandidate]:
     """Deterministic final ranking with generic suppression.
 
@@ -174,6 +175,8 @@ def rank_candidates(
                         f"specialized {best_specialized.name} present "
                         f"(base>0) and no explicit web request"
                     )
+                    if removals is not None:
+                        removals[r.name] = r.suppress_reason
     # Marginal cutoff: candidates far below the top carry no
     # discriminative signal (the whole search_* family enters every
     # "search X" query via the shared token). Runs AFTER generic
@@ -183,8 +186,56 @@ def rank_candidates(
     survivors = [r for r in ranked if not r.suppressed]
     if survivors:
         top = survivors[0].score
+        if removals is not None:
+            for r in survivors[1:]:
+                if r.score < top - _MARGINAL_CUTOFF:
+                    removals[r.name] = (
+                        f"below marginal cutoff (top {top}, margin {_MARGINAL_CUTOFF})"
+                    )
         survivors = [r for r in survivors if r.score >= top - _MARGINAL_CUTOFF]
     return survivors
+
+
+def branch_safe_select(
+    intent_scores: dict[str, list[tuple[str, float]]],
+    semantics_map: dict[str, CapabilitySemantics],
+) -> tuple[list[tuple[str, float]], dict[str, str]]:
+    """P0-A.3: per-intent (branch-local) selection with the coverage
+    invariant + removal diagnostics.
+
+    - Each intent unit's candidates are ranked, generics suppressed and
+      marginal candidates cut BRANCH-LOCALLY — a candidate belonging to
+      one independently-detected intent never disappears because another
+      intent has a stronger top (the K83-type multi-intent class).
+    - COVERAGE INVARIANT: an intent whose every candidate was removed
+      re-admits its top RAW candidate (marked ``coverage_invariant_kept``)
+      — every executable intent retains at least one viable capability
+      path. The validator's coverage gate still decides semantics.
+    - MERGE: the union of per-intent selections (max score per capability).
+    - DIAGNOSTICS: ``{capability: removal reason}`` for every name that was
+      suppressed/cut/re-admitted — the resolver explains itself.
+    """
+    selected: dict[str, float] = {}
+    diagnostics: dict[str, str] = {}
+    for unit, cands in intent_scores.items():
+        if not cands:
+            continue
+        removals: dict[str, str] = {}
+        ranked = rank_candidates(cands, semantics_map, query=unit, removals=removals)
+        for name, reason in removals.items():
+            diagnostics.setdefault(name, f"{reason} (intent: {unit[:48]})")
+        if not ranked:
+            top = max(cands, key=lambda c: c[1])
+            ranked = [RankedCandidate(
+                name=top[0], score=top[1], evidence={"base": top[1]},
+            )]
+            diagnostics[top[0]] = (
+                f"coverage_invariant_kept (intent: {unit[:48]})"
+            )
+        for r in ranked:
+            if r.name not in selected or r.score > selected[r.name]:
+                selected[r.name] = r.score
+    return sorted(selected.items(), key=lambda kv: -kv[1]), diagnostics
 
 
 def close_dependencies(
@@ -203,6 +254,12 @@ def close_dependencies(
     latitude/longitude; the query gives "Lahore"; geocode_location
     produces latitude/longitude -> geocode_location is added so the planner
     never operates on an incomplete capability set.
+
+    P0-A.3: the closure is ADDITIVE (producers only ever join) and runs
+    AFTER all per-intent cuts — applying it on the merged branch-safe set
+    is equivalent to per-branch closure + union (a producer added for one
+    intent's consumer is simply part of the merged set; it is never
+    marginal-cut away because the closure is the last step).
     """
     available = set(query_entities)
     for name, _s in candidates:
