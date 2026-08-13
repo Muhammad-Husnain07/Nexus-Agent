@@ -129,6 +129,28 @@ def test_required_entities_from_workflow_inputs():
     assert any(e.entity_id == "lahore" for e in req)
 
 
+def test_required_entities_reject_nontraceable_goal_tails():
+    # The goal extractor can capture sentence tails ("Lahore. if the
+    # geocoder returns a result") — only entities the user query names
+    # are REAL (P0-B traceability).
+    structured = {
+        "intents": [
+            {"intent_id": "intent_1",
+             "goal": "obtain the coordinates for Lahore. if the geocoder returns a result",
+             "entities": ["Lahore"], "sequence": 0, "negated": False},
+        ],
+        "relationships": [],
+        "source": "llm",
+    }
+    req = RequiredEvidenceCompiler(
+        user_query="Get the coordinates of Lahore."
+    ).required_entities(structured, [])
+    ids = {e.entity_id for e in req}
+    assert "lahore" in ids
+    assert not any("geocoder" in e for e in ids)
+    assert len(ids) == 1
+
+
 # ---------------------------------------------------------------------------
 # D6/D8: grounding coverage — required ⊆ available ⊆ rendered
 # ---------------------------------------------------------------------------

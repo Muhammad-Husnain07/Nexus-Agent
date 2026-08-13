@@ -316,8 +316,15 @@ class RequiredEvidenceCompiler:
                     low = cand.lower()
                     if low not in {"the coordinates", "those coordinates", "the address"}:
                         _add(cand, "goal_entity")
-
+        # P0-B traceability: a candidate entity is only REAL when the user
+        # query names it. The goal extractor can capture sentence tails
+        # ("Lahore. if the geocoder returns a result") — the query check
+        # rejects everything the user never said.
         q = (self._user_query or "").lower()
+        traceable = [e for e in entities.values() if e.entity_id in q]
+        if traceable:
+            entities = {e.entity_id: e for e in traceable}
+
         for n in workflow_nodes or []:
             if not isinstance(n, dict):
                 continue
