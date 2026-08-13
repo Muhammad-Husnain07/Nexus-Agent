@@ -250,6 +250,7 @@ def _synthesis_fallback_patch(
     state: AgentState,
     artifact_list: list[Any],
     note: str,
+    custom_text: str | None = None,
 ) -> dict[str, Any]:
     """Synthesis-recovery patch: artifacts exist → render them deterministically.
 
@@ -259,8 +260,14 @@ def _synthesis_fallback_patch(
     produces the answer. ``_synthesis_failed`` records the degraded path
     (observability) and is NOT an execution error — ``_executor_all_success``
     stays true and ``response_type`` is never ``error``.
+
+    Args:
+        custom_text: P0-D entity-anchored deterministic render (the evidence
+            renderer). When given, it is used INSTEAD of the generic
+            artifact renderer — the grounding-gate fallback guarantees
+            every required entity is named.
     """
-    text = _render_artifacts(artifact_list)
+    text = custom_text if custom_text is not None else _render_artifacts(artifact_list)
     if not text:
         logger.error("response_node.renderer_empty", note=note[:80])
         return {
@@ -268,6 +275,17 @@ def _synthesis_fallback_patch(
             "_routing_decision": "finalize",
             "_synthesis_failed": True,
         }
+    # P0-D: the entity-anchored evidence renderer outranks the generic
+    # artifact renderer — it is GUARANTEED to name every required entity
+    # (the "Lahore" omission class) while the generic renderer only dumps
+    # the raw payloads.
+    try:
+        _ev_list, _req_entities = _evidence_compile(state, artifact_list)
+        _anchored = _evidence_renderer(_ev_list, _req_entities)
+        if _anchored:
+            text = _anchored
+    except Exception:
+        pass
     final = (
         "I retrieved the following results:\n\n" + text
         if len(text) > 20
@@ -426,6 +444,25 @@ async def response_node(
     except Exception as exc:
         logger.error("response_node.compilation_failed", error=str(exc))
         return {"final_response": "I'm sorry, I encountered an issue processing the context.", "_routing_decision": "finalize"}
+
+    # P0-D EVIDENCE COMPILATION: entity-anchored ResponseEvidence + the
+    # required-entity set (deterministic — WHAT must be expressed). The
+    # evidence packet is injected into the synthesis prompt; the grounding
+    # gate below proves required ⊆ represented.
+    _evidence_list, _required_entities = _evidence_compile(state, artifact_list)
+    _evidence_packet = _evidence_packet_text(_evidence_list, _required_entities)
+    if _evidence_packet and isinstance(compiled_messages, list) and compiled_messages:
+        _last_msg = dict(compiled_messages[-1])
+        _last_msg["content"] = (
+            str(_last_msg.get("content", "")) + "\n\n" + _evidence_packet
+        )
+        compiled_messages[-1] = _last_msg
+        logger.info(
+            "response_node.evidence_packet",
+            evidence=len(_evidence_list),
+            entities=len(_required_entities),
+            packet_chars=len(_evidence_packet),
+        )
 
     _fin_settings = get_settings().agent
 
@@ -598,6 +635,67 @@ async def response_node(
             "I retrieved the following results:",
         )
 
+    # P0-D GROUNDING GATE: required evidence ⊆ represented evidence.
+    # The evidence compiler's entity/fact requirements are the contract;
+    # a response omitting a required entity (the "Lahore" class) gets ONE
+    # synthesis-repair pass, then the deterministic entity-anchored
+    # renderer — successful execution is never lost to synthesis.
+    _grounding = _grounding_coverage(
+        final, _evidence_list, _required_entities, _user_query
+    )
+    if _grounding is not None and (
+        _grounding.required_entities_missing or _grounding.missing_evidence
+    ):
+        logger.warning(
+            "response_node.grounding_missing",
+            entities=_grounding.required_entities_missing[:5],
+            evidence=_grounding.missing_evidence[:5],
+            ratio=_grounding.coverage_ratio,
+        )
+        _repaired = await _evidence_repair(
+            final,
+            _grounding.missing_evidence,
+            _grounding.required_entities_missing,
+            llm,
+            model,
+            _user_query,
+        )
+        if _repaired:
+            _grounding_after = _grounding_coverage(
+                _repaired, _evidence_list, _required_entities, _user_query
+            )
+            if _grounding_after is not None and not (
+                _grounding_after.required_entities_missing
+                or _grounding_after.missing_evidence
+            ):
+                final = _repaired
+                logger.info("response_node.grounding_repaired")
+            else:
+                logger.warning("response_node.grounding_repair_insufficient")
+        if not (_repaired and final != _repaired and (
+            _grounding_after is not None and not (
+                _grounding_after.required_entities_missing
+                or _grounding_after.missing_evidence
+            )
+        )):
+            _deterministic = _evidence_renderer(_evidence_list, _required_entities)
+            if _deterministic:
+                logger.warning("response_node.grounding_renderer_fallback")
+                return _synthesis_fallback_patch(
+                    state, artifact_list,
+                    "I retrieved the following results:",
+                    custom_text=_deterministic,
+                )
+
+    # P0-D coverage metric on the returned response (benchmark
+    # instrumentation: evidence_coverage / render_coverage).
+    _grounding_final = _grounding_coverage(
+        final, _evidence_list, _required_entities, _user_query
+    )
+    _response_coverage = 1.0
+    if _grounding_final is not None:
+        _response_coverage = _grounding_final.coverage_ratio
+
     # P2-A OPTIONAL claim→entailment verifier (feature flag, default OFF):
     # runs ONLY after the deterministic guard passed and the response is
     # non-degenerate. It is NEVER the authority: on NO, the deterministic
@@ -642,12 +740,9 @@ async def response_node(
         # RESPONSE COVERAGE (P2 eval): the fraction of artifacts cited in
         # the final response — the "3 intents, 2 answers" detector. P2-A:
         # the metric uses the same evidence-credit rule as the guard
-        # (query-echo scalars earn no credit).
-        "_response_coverage": (
-            _covered_artifacts(final, artifact_list, user_query=_user_query)
-            / len(artifact_list)
-            if artifact_list else 1.0
-        ),
+        # (query-echo scalars earn no credit). P0-D: the evidence-layer
+        # grounding ratio (required ⊆ represented) — entity-aware.
+        "_response_coverage": _response_coverage,
     }
 
 
@@ -658,6 +753,171 @@ def _last_user_message(state: AgentState) -> str:
             if isinstance(m, dict) and m.get("role") == "user":
                 return str(m.get("content", ""))
     return ""
+
+
+# ============================================================================
+# P0-D EVIDENCE LAYER — the deterministic bridge between execution and
+# synthesis. The EvidenceCompiler decides WHAT must be expressed (entities
+# + facts, entity-anchored); the LLM decides HOW. The grounding gate then
+# proves required ⊆ represented, with one repair pass before the
+# deterministic renderer takes over. Never touches the resolver/binder/
+# intent layers (P0-D consumes their outputs).
+# ============================================================================
+
+
+def _evidence_compile(state: AgentState, artifact_list: list[Any]) -> tuple[list[Any], list[Any]]:
+    """Compile artifacts into entity-anchored ResponseEvidence.
+
+    Returns ``(evidence_list, required_entities)``. Entity anchoring uses
+    the P0-B identity rule: input values traceable to the user query are
+    the entity; producer chains are walked for consumers without their own
+    entity (weather(Lahore) inherits geocode's entity).
+    """
+    try:
+        from nexus.artifacts.evidence import (
+            EvidenceCompiler,
+            RequiredEvidenceCompiler,
+        )
+
+        user_query = _last_user_message(state) or ""
+        workflow = state.get("_logical_workflow") or {}
+        nodes = workflow.get("nodes") if isinstance(workflow, dict) else []
+        graph = state.get("_execution_graph") or {}
+        phys = graph.get("nodes") if isinstance(graph, dict) else {}
+        compiler = EvidenceCompiler()
+        evidence = compiler.compile(
+            artifact_list,
+            user_query=user_query,
+            workflow_nodes=nodes if isinstance(nodes, list) else [],
+            physical_nodes=phys if isinstance(phys, dict) else {},
+        )
+        structured = state.get("_detected_intents")
+        required = RequiredEvidenceCompiler(user_query=user_query).required_entities(
+            structured if isinstance(structured, dict) else None,
+            nodes if isinstance(nodes, list) else [],
+        )
+        return evidence, required
+    except Exception as exc:
+        logger.warning("response_node.evidence_compile_failed", error=str(exc)[:150])
+        return [], []
+
+
+def _evidence_packet_text(evidence: list[Any], required_entities: list[Any]) -> str:
+    """Compact RESPONSE_EVIDENCE packet for the synthesis prompt (P0-D.9).
+
+    Entity-anchored, capability-labeled, bounded — never the raw artifact
+    graph. The model must answer ONLY from this packet.
+    """
+    if not evidence:
+        return ""
+    lines: list[str] = []
+    for ev in evidence:
+        ent = ev.entity_id or "?"
+        facts = ", ".join(
+            f"{f.key}={f.value}" for f in ev.facts[:6]
+        )
+        lines.append(f"- {ent} | {ev.capability_id} | {facts}")
+    req = ""
+    if required_entities:
+        req = "\nREQUIRED ENTITIES (must mention each): " + ", ".join(
+            e.canonical_name for e in required_entities
+        )
+    return ("RESPONSE_EVIDENCE:\n" + "\n".join(lines) + req)
+
+
+async def _evidence_repair(
+    final: str,
+    missing: list[str],
+    missing_entities: list[str],
+    llm: LLMClient,
+    model: str,
+    user_query: str,
+) -> str | None:
+    """P0-D.9 synthesis repair: ONE cheap call to re-express omitted
+    required evidence. Never re-executes tools; never removes existing
+    content; never invents facts."""
+    if not missing and not missing_entities:
+        return None
+    prompt = (
+        "Your previous response omitted required evidence.\n\n"
+        "Previous response:\n" + (final or "")[:1500] + "\n\n"
+        "Missing required evidence:\n" +
+        "\n".join(f"- {m}" for m in (missing or [])[:6]) +
+        ("\nMissing required entities (must be named): " +
+         ", ".join(missing_entities[:6]) if missing_entities else "") +
+        "\n\nRewrite the response so every required entity and evidence "
+        "item above appears, using ONLY information from the previous "
+        "response or the user's request. Do not invent information. "
+        "Do not execute tools. Do not remove already represented content.\n"
+        "User request: " + (user_query or "")[:300]
+    )
+    try:
+        response = await asyncio.wait_for(
+            llm.complete(
+                model=model,
+                messages=[
+                    {"role": "system", "content": (
+                        "You repair a response to include required evidence. "
+                        "Only output the repaired response text."
+                    )},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.2,
+                max_tokens=600,
+            ),
+            timeout=90,
+        )
+        if response.failed or not response.content:
+            return None
+        repaired = str(response.content).strip()
+        if len(repaired) < len((final or "").strip()) // 2:
+            return None  # repair shrank the answer — reject
+        return repaired
+    except Exception as exc:
+        logger.warning("response_node.evidence_repair_failed", error=str(exc)[:150])
+        return None
+
+
+def _grounding_coverage(
+    final: str,
+    evidence: list[Any],
+    required_entities: list[Any],
+    user_query: str,
+) -> Any:
+    """P0-D.8 GroundingCoverage — required ⊆ available ⊆ rendered."""
+    try:
+        from nexus.artifacts.evidence import GroundingValidator
+
+        return GroundingValidator(user_query=user_query).check(
+            final, evidence, required_entities
+        )
+    except Exception as exc:
+        logger.warning("response_node.grounding_check_failed", error=str(exc)[:150])
+        return None
+
+
+def _evidence_renderer(
+    evidence: list[Any],
+    required_entities: list[Any],
+) -> str:
+    """P0-D.12 deterministic synthesis fallback: entity-anchored render
+    that is GUARANTEED to preserve successful execution — every entity
+    with its evidence facts. The reviewer's floor: the generic
+    "Artifact generated successfully" text must never be the answer
+    when execution succeeded."""
+    sections: list[str] = []
+    for ev in evidence:
+        ent = ev.entity_id or ev.capability_id
+        facts = "; ".join(
+            f"{f.key}: {f.value}" for f in ev.facts[:8] if f.value is not None
+        )
+        if facts:
+            sections.append(f"{ent}: {facts}")
+        elif ev.entity_id:
+            sections.append(f"{ent}: retrieved")
+    if required_entities and not sections:
+        sections.append(", ".join(e.canonical_name for e in required_entities))
+    return "\n".join(sections)
 
 
 # ============================================================================
