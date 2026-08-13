@@ -162,3 +162,98 @@ def test_response_status_stamped_on_success_path():
     out = asyncio.run(rn.response_node(state, type("L", (), {"complete": fake_complete})(), "model"))
     assert out.get("_response_status") in ("SUCCESS", "PARTIAL_SUCCESS")
     monkeypatch.undo()
+
+
+# ---------------------------------------------------------------------------
+# P1-C: nano extraction recovery — diagnosed, bounded, class-appropriate
+# ---------------------------------------------------------------------------
+
+def test_diagnose_empty_plan_class():
+    from nexus.agent.nodes.semantic_parser_node import (
+        _PLAN_FAILURE_EMPTY,
+        _PLAN_FAILURE_LLM,
+        _PLAN_FAILURE_SCHEMA,
+        _PLAN_FAILURE_TIMEOUT,
+        _diagnose_plan_failure,
+    )
+
+    assert _diagnose_plan_failure({"nodes": []}, "", []) == _PLAN_FAILURE_EMPTY
+    assert _diagnose_plan_failure({"nodes": []}, "timeout", []) == _PLAN_FAILURE_EMPTY
+    assert _diagnose_plan_failure(None, "Request timed out.", []) == _PLAN_FAILURE_TIMEOUT
+    assert _diagnose_plan_failure(None, "rate limit", []) == _PLAN_FAILURE_LLM
+    assert _diagnose_plan_failure({"nodes": [{"op": "x"}]}, "", []) == _PLAN_FAILURE_SCHEMA
+
+
+def test_repair_empty_plan_constrains_to_valid_ops():
+    import asyncio
+
+    from nexus.agent.nodes.semantic_parser_node import _repair_empty_plan
+
+    class _Budget:
+        def consume(self, name):
+            return True
+
+    class _Resp:
+        failed = False
+        error = None
+        content = '{"nodes": [{"op": "invented_tool", "ref": "a"}, {"op": "get_current_weather", "ref": "b"}]}'
+
+    class _LLM:
+        async def complete(self, **kw):
+            return _Resp()
+
+    out = asyncio.run(_repair_empty_plan(
+        _LLM(), "model", "weather in Lahore",
+        ["get the weather for Lahore"],
+        "catalog", ["get_current_weather", "geocode_location"],
+        _Budget(),
+    ))
+    assert out is not None
+    ops = [n["op"] for n in out["nodes"]]
+    assert "get_current_weather" in ops
+    assert "invented_tool" not in ops  # constrained to the registered set
+
+
+def test_repair_empty_plan_returns_none_on_bad_json():
+    import asyncio
+
+    from nexus.agent.nodes.semantic_parser_node import _repair_empty_plan
+
+    class _Budget:
+        def consume(self, name):
+            return True
+
+    class _Resp:
+        failed = False
+        error = None
+        content = "not json at all"
+
+    class _LLM:
+        async def complete(self, **kw):
+            return _Resp()
+
+    out = asyncio.run(_repair_empty_plan(
+        _LLM(), "model", "weather",
+        ["get the weather"], "", ["get_current_weather"], _Budget(),
+    ))
+    assert out is None
+
+
+def test_repair_empty_plan_requires_units_and_budget():
+    import asyncio
+
+    from nexus.agent.nodes.semantic_parser_node import _repair_empty_plan
+
+    class _Budget:
+        def consume(self, name):
+            return False
+
+    out = asyncio.run(_repair_empty_plan(
+        None, "model", "q", ["unit"], "", ["op"], _Budget(),
+    ))
+    assert out is None
+    out2 = asyncio.run(_repair_empty_plan(
+        None, "model", "q", [], "", ["op"],
+        type("B", (), {"consume": lambda self, n: True})(),
+    ))
+    assert out2 is None

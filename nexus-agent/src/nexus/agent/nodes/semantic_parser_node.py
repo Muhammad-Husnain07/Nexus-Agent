@@ -18,6 +18,7 @@ returns an error patch.
 from __future__ import annotations
 
 import json
+import re
 import time
 import typing
 from typing import Any
@@ -650,6 +651,124 @@ async def _json_extract(
         return parsed
     except Exception as exc:
         logger.error("semantic_planner.json_extract_failed", error=str(exc))
+        return None
+
+
+# ============================================================================
+# P1-C NANO EXTRACTION RECOVERY — bounded, diagnosed, never a blind retry
+# ============================================================================
+#
+# The nano model's stochastic extraction failures MUST NOT all be treated
+# as "retry the LLM". Each failure class has a different, cheap recovery:
+#
+#   EMPTY_PLAN                → planner repair prompt (the detected intent
+#                               units are executable — the model skipped them)
+#   INVALID_SCHEMA            → schema-constrained repair (the payload is
+#                               well-formed but not a LogicalWorkflow)
+#   UNKNOWN_CAPABILITY        → deterministic resolver repair (sanitize_ops
+#                               already handles; surfaced explicitly)
+#   MODEL_TIMEOUT / LLM_ERROR → bounded retry (transient provider failure)
+#   MALFORMED_INTENT          → clarify (no executable units at all)
+#
+# Cap: ONE repair attempt + ONE constrained retry, then PLANNING_FAILED
+# (the P1-B status machine surfaces it — never a silent empty plan).
+
+_PLAN_FAILURE_EMPTY = "EMPTY_PLAN"
+_PLAN_FAILURE_SCHEMA = "INVALID_SCHEMA"
+_PLAN_FAILURE_TIMEOUT = "MODEL_TIMEOUT"
+_PLAN_FAILURE_LLM = "LLM_ERROR"
+
+
+def _diagnose_plan_failure(
+    parsed: dict[str, Any] | None,
+    extraction_error: str,
+    executable_units: list[str],
+) -> str:
+    """Deterministic diagnosis of a failed planning attempt.
+
+    Args:
+        parsed: The extracted payload (None when extraction failed).
+        extraction_error: The raw error string from the last attempt.
+        executable_units: Detected executable intent goals (P0-C).
+
+    Returns:
+        One of the ``_PLAN_FAILURE_*`` class labels.
+    """
+    err = (extraction_error or "").lower()
+    if parsed is None:
+        if "timeout" in err or "timed out" in err:
+            return _PLAN_FAILURE_TIMEOUT
+        return _PLAN_FAILURE_LLM
+    nodes = parsed.get("nodes")
+    if not isinstance(nodes, list) or not nodes:
+        return _PLAN_FAILURE_EMPTY
+    return _PLAN_FAILURE_SCHEMA
+
+
+async def _repair_empty_plan(
+    llm: LLMClient,
+    model: str,
+    user_message: str,
+    executable_units: list[str],
+    capabilities: str,
+    valid_ops: list[str],
+    budget: Any,
+) -> dict[str, Any] | None:
+    """ONE constrained repair call for the EMPTY_PLAN class.
+
+    The model produced ``nodes: []`` while executable intent units exist —
+    the repair prompt names the units and the available capabilities
+    (never a blind re-prompt of the original planner).
+    """
+    if not executable_units or not budget.consume("llm_calls"):
+        return None
+    prompt = (
+        "You must plan at least one operation. The user's request contains "
+        "the following executable intent units that you previously omitted:\n"
+        + "\n".join(f"- {u}" for u in executable_units[:6]) +
+        "\n\nUse ONLY these capabilities (exact names):\n" +
+        ", ".join(valid_ops[:20]) +
+        "\n\nReturn ONLY JSON: {\"version\":\"1.0\",\"nodes\":[{\"op\":str,"
+        "\"ref\":str,\"inputs\":{},\"depends_on\":[]}],\"collections\":{}}"
+    )
+    try:
+        response = await llm.complete(
+            model=model,
+            messages=[
+                {"role": "system", "content": (
+                    "You are a deterministic plan extractor. Plan one node "
+                    "per executable intent unit using the exact capability "
+                    "names provided. Only output JSON."
+                )},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.0,
+            max_tokens=800,
+            response_format={"type": "json_object"},
+        )
+        if response.failed or not response.content:
+            logger.warning("semantic_planner.repair_llm_failed", error=str(response.error)[:150])
+            return None
+        content = re.sub(r"^```[a-zA-Z]*\n?", "", str(response.content))
+        content = re.sub(r"\n```$", "", content)
+        start = content.find("{")
+        end = content.rfind("}")
+        if start < 0 or end <= start:
+            return None
+        parsed = json.loads(content[start:end + 1])
+        nodes = parsed.get("nodes")
+        if isinstance(nodes, list) and nodes:
+            # Constrain to registered capabilities (deterministic).
+            constrained = [
+                n for n in nodes
+                if isinstance(n, dict) and str(n.get("op") or "") in valid_ops
+            ]
+            if constrained:
+                parsed["nodes"] = constrained
+                return parsed
+        return None
+    except Exception as exc:
+        logger.warning("semantic_planner.repair_failed", error=str(exc)[:150])
         return None
 
 
@@ -1517,6 +1636,34 @@ async def semantic_parser_node(
             "semantic_planner.extraction_failed_retry",
             attempt=_retry + 1,
         )
+
+    # P1-C DIAGNOSED RECOVERY: the 3-attempt loop exhausted — classify the
+    # failure and apply ONE cheap, class-appropriate repair. EMPTY_PLAN is
+    # the dominant nano class (the "got []" benchmark signature): the model
+    # returned a VALID ``{"nodes": []}`` while executable intent units
+    # exist — a single constrained repair prompt re-plans them. Anything
+    # else surfaces as PLANNING_FAILED (never a silent empty plan).
+    if parsed is not None and (
+        not isinstance(parsed.get("nodes"), list) or not parsed.get("nodes")
+    ):
+        _diagnosis = _diagnose_plan_failure(parsed, "", [])
+        _executable_units = []
+        try:
+            if intent_graph is not None:
+                _executable_units = [i.goal for i in intent_graph.executable]
+        except Exception:
+            _executable_units = []
+        if _diagnosis == _PLAN_FAILURE_EMPTY and _executable_units:
+            logger.warning(
+                "semantic_planner.empty_plan_repair",
+                units=len(_executable_units),
+            )
+            repaired = await _repair_empty_plan(
+                llm, model, last_message, _executable_units,
+                capabilities, valid_ops, _bud,
+            )
+            if repaired is not None:
+                parsed = repaired
 
     if parsed is None:
         return _build_error_patch(
