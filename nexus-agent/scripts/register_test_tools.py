@@ -306,17 +306,21 @@ TOOLS: list[dict] = [
             "type": "object",
             "properties": {
                 "meals": {
-                    "type": "array",
+                    "type": ["array", "null"],
                     "items": {
                         "type": "object",
                         "properties": {
-                            "idMeal": {"type": "string"},
-                            "strMeal": {"type": "string"},
-                            "strCategory": {"type": "string"},
-                            "strArea": {"type": "string"},
-                            "strInstructions": {"type": "string"},
+                            "idMeal": {"type": ["string", "null"]},
+                            "strMeal": {"type": ["string", "null"]},
+                            "strCategory": {"type": ["string", "null"]},
+                            "strArea": {"type": ["string", "null"]},
+                            "strInstructions": {"type": ["string", "null"]},
                         },
                     },
+                    # TheMealDB returns {"meals": null} for no-match and
+                    # null item fields for partial records — legitimate
+                    # empty results, never failures.
+                    "x-artifact-optional": True,
                 }
             },
         },
