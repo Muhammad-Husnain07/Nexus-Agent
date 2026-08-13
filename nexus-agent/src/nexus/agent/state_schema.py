@@ -367,6 +367,7 @@ _EPHEMERAL_FIELDS: list[str] = [
     "_validation_result",
     "_binding_report",
     "_detected_intents",
+    "_response_status",
     "_ready_to_plan",
     "_needs_clarification",
     "_clarification_asked",
@@ -536,6 +537,11 @@ class AgentState(TypedDict, total=False):
     # P0-C: structured intent decomposition (goals/entities/relationships —
     # the reviewer's DetectedIntentGraph) — the coverage check consumes it.
     _detected_intents: dict[str, Any]
+
+    # P1-B: explicit terminal response status (SUCCESS / PARTIAL_SUCCESS /
+    # CLARIFICATION_REQUIRED / EXECUTION_FAILED / PLANNING_FAILED) — an
+    # executable request never collapses into silent-success text.
+    _response_status: str
 
     # Runtime-only ephemeral fields (carried in state but not in TypedDict)
     _total_retry_count: int

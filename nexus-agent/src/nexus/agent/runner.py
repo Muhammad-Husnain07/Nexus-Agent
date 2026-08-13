@@ -997,6 +997,10 @@ class AgentRunner:
                 "text": str(fr),
                 "cost_usd": float(state_update.get("total_cost_usd", 0.0) or 0.0),
                 "latency_ms": float(state_update.get("_latency_estimate_ms", 0.0) or 0.0),
+                # P1-B: the explicit terminal status — the benchmark can
+                # distinguish SUCCESS / PARTIAL_SUCCESS / EXECUTION_FAILED /
+                # PLANNING_FAILED instead of inferring from prose.
+                "response_status": str(state_update.get("_response_status", "") or ""),
             })))
 
         # --- KnowledgeAssistantNode → knowledge response ---

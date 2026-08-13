@@ -206,8 +206,15 @@ async def emit_wave_completed(
     wave_index: int,
     tasks_succeeded: int,
     tasks_failed: int,
+    duration_ms: float = 0.0,
 ) -> None:
-    """Emit a WaveCompleted event with per-wave statistics."""
+    """Emit a WaveCompleted event with per-wave statistics.
+
+    Args:
+        duration_ms: P1-A wall-clock duration of the wave — the
+            benchmark's critical-path accounting (wall_time vs
+            critical-path, never wave count alone).
+    """
     try:
         await append_event(
             session_id=session_id,
@@ -216,6 +223,7 @@ async def emit_wave_completed(
                 "wave_index": wave_index,
                 "tasks_succeeded": tasks_succeeded,
                 "tasks_failed": tasks_failed,
+                "duration_ms": duration_ms,
             },
         )
     except Exception as exc:

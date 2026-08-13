@@ -37,6 +37,10 @@ class ViolationAction(str, Enum):
     REFINE = "refine"                          # route to PlanCritic (LLM refine)
     APPROVAL = "approval"                      # gate will handle (not blocking)
     PROCEED = "proceed"                        # informational only
+    # P1-A: drop nodes whose required inputs have NO resolvable source
+    # (binder-classified) and proceed — deterministic partial success on
+    # multi-node plans WITHOUT a full-LLM replan (the wall-time class).
+    DROP_AND_PROCEED = "drop_and_proceed"
 
 
 class Violation(BaseModel):
@@ -69,13 +73,26 @@ class PlanValidatorReport(BaseModel):
 
     @property
     def action(self) -> ViolationAction:
-        """Dominant action: worst severity wins."""
+        """Dominant action: worst severity wins.
+
+        P1-A: DROP_AND_PROCEED wins ONLY when every ERROR-level violation
+        is itself drop-and-proceed class — any repair-worthy error
+        (alignment/coverage/missing-input-without-binder) REFINEs the
+        whole plan instead.
+        """
         for v in self.violations:
             if v.severity == ViolationSeverity.CRITICAL:
                 return v.action
-        for v in self.violations:
-            if v.severity == ViolationSeverity.ERROR:
-                return v.action
+        errors = [v for v in self.violations if v.severity == ViolationSeverity.ERROR]
+        if errors:
+            if all(
+                v.action == ViolationAction.DROP_AND_PROCEED for v in errors
+            ):
+                return ViolationAction.DROP_AND_PROCEED
+            # Mixed verdict: a repair-worthy error outranks partial drops.
+            for v in errors:
+                if v.action != ViolationAction.DROP_AND_PROCEED:
+                    return v.action
         for v in self.violations:
             if v.action != ViolationAction.PROCEED:
                 return v.action
@@ -151,6 +168,7 @@ class PlanValidatorNode:
             engine_scores=engine_scores,
             alignment_scores=filtered_scores,
             structured_intents=structured_intents,
+            binding_report=state.get("_binding_report"),
         )
         # P0-B: surface the binder's provenance ledger on the report metrics
         # (BOUND/MISSING/AMBIGUOUS classification — the benchmark's
@@ -218,6 +236,39 @@ class PlanValidatorNode:
                 "_plan_validator_action": "require_more_info",
                 "_plan_validator_errors": report.errors,
                 "_plan_validator_rounds": rounds,
+            }
+
+        # P1-A DROP_AND_PROCEED: nodes whose required inputs have NO
+        # resolvable source (binder-classified) are physically removed and
+        # the remaining plan proceeds — deterministic partial success, no
+        # full-LLM replan (the large-DAG wall-time class: V134 burned
+        # 50-90s per replan round for one unbound param on a 24-node plan).
+        if report.action == ViolationAction.DROP_AND_PROCEED:
+            _drop_ops = {
+                str(v.node) for v in report.violations
+                if v.action == ViolationAction.DROP_AND_PROCEED
+            }
+            _workflow = workflow if isinstance(workflow, dict) else {}
+            _nodes = _workflow.get("nodes") or []
+            _surviving = [
+                n for n in _nodes
+                if not (isinstance(n, dict) and str(n.get("op") or "") in _drop_ops)
+            ]
+            logger.warning(
+                "plan_validator.drop_and_proceed",
+                dropped=sorted(_drop_ops),
+                surviving=len(_surviving),
+            )
+            _workflow["nodes"] = _surviving
+            return {
+                "_plan_validator_report": report.model_dump(mode="json"),
+                "_plan_validator_action": "proceed",
+                "_plan_validator_errors": [],
+                "_plan_validator_rounds": rounds,
+                # Errors ride the patch so the response reports the drop
+                # honestly (never silent success — PARTIAL_SUCCESS).
+                "errors": report.errors,
+                "_logical_workflow": _workflow,
             }
 
         # Refinable defects (cycle / budget / undefined): bounded replan loop.
@@ -308,6 +359,7 @@ class PlanValidatorNode:
         engine_scores: dict[str, list[tuple[str, float]]] | None = None,
         alignment_scores: dict[str, list[tuple[str, float]]] | None = None,
         structured_intents: dict[str, Any] | None = None,
+        binding_report: dict[str, Any] | None = None,
     ) -> PlanValidatorReport:
         violations: list[Violation] = []
         errors: list[str] = []
@@ -419,6 +471,21 @@ class PlanValidatorNode:
         # required-property list built from the tool's input_schema).
         # Empty/whitespace values are NOT provided — they would fail at
         # execution with a type error, so the plan is invalid as-is.
+        # P1-A: when the P0-B binder already classified the missing param
+        # as UNRESOLVABLE (no source after L1-L5), REFINE cannot help — the
+        # whole-plan replan burns the wall-time budget on a large DAG for a
+        # value that does not exist. DROP the node instead (explicit
+        # partial success — the reviewer's state machine), but ONLY when
+        # other executable nodes remain; a single-node plan still REFINEs.
+        _binding_missing_params: set[str] = set()
+        try:
+            _bm = (binding_report or {}).get("missing") or []
+            _binding_missing_params = {
+                str(m.get("parameter") or "") for m in _bm
+                if isinstance(m, dict) and m.get("clarification_required") is True
+            }
+        except Exception:
+            _binding_missing_params = set()
         for node in nodes:
             op = str(node.get("op") or "")
             node_inputs = node.get("inputs") or {}
@@ -431,11 +498,32 @@ class PlanValidatorNode:
                 provided = set(node_inputs)
             missing = _missing_inputs(op, provided)
             if missing:
-                # P4: REFINE (bounded replan) instead of an immediate
-                # clarification — a fully-specified query (entities present
-                # in the request) deserves the repair chance first; the
-                # rounds cap routes to clarification for genuinely-missing
-                # information.
+                _unbound = missing & _binding_missing_params
+                _has_other_executable = any(
+                    (n is not node) and str(n.get("op") or "").strip()
+                    for n in nodes
+                )
+                if _unbound and _has_other_executable:
+                    # P1-A DROP_AND_PROCEED for genuinely-missing values on
+                    # multi-node plans: keep the valid branches, drop the
+                    # unplannable node, report partial success — WITHOUT a
+                    # full-LLM replan (the large-DAG wall-time class). The
+                    # node is physically removed below in __call__.
+                    violations.append(Violation(
+                        code="missing_input_unresolvable",
+                        severity=ViolationSeverity.ERROR,
+                        action=ViolationAction.DROP_AND_PROCEED,
+                        node=op,
+                        message=(
+                            f"{op} missing inputs with no resolvable source: "
+                            f"{', '.join(sorted(_unbound))} — node dropped, "
+                            "remaining plan proceeds"
+                        ),
+                    ))
+                    errors.append(
+                        f"{op} dropped (unresolvable inputs: {', '.join(sorted(_unbound))})"
+                    )
+                    continue
                 violations.append(Violation(
                     code="missing_input",
                     severity=ViolationSeverity.ERROR,
@@ -651,10 +739,23 @@ class PlanValidatorNode:
                 coordinate" goal has no keyword-bridge hit but the engine
                 ranks reverse_geocode for it). Engine rank is the same
                 signal the planner's branch resolution used, so coverage
-                and resolution never disagree about intent existence."""
+                and resolution never disagree about intent existence.
+
+                P1-A FLOOR: an engine hit at KEYWORD-NOISE scale (sub-
+                floor — the V134 fragments "failed operations" / "final
+                usable artifacts" pick up 1-5.0 noise candidates from
+                unrelated capabilities) does NOT make a fragment an
+                executable intent. A noise-classifiable unit that is
+                unserved must never REFINE the whole plan — the reviewer's
+                L5: weak signals are confidence hints, not rejections.
+                """
                 if _unit_candidates(u):
                     return True
-                return bool((engine_scores or {}).get(u.text))
+                _strong = [
+                    (n, s) for n, s in (engine_scores or {}).get(u.text, [])
+                    if s >= _ALIGNMENT_DOMINANCE_FLOOR
+                ]
+                return bool(_strong)
 
             executable = [
                 u for u in detected.units
@@ -1100,7 +1201,12 @@ def _is_chain_expression(value: str) -> bool:
 
 # B3 (P0-B deferred, now landed): ENGINE-SCORE ALIGNMENT.
 # The engine's top candidate must constitute STRONG evidence to BLOCK:
-# - with a runner-up: top outscores it by ``_ALIGNMENT_DOMINANCE_RATIO``;
+# - with a runner-up: top outscores it by ``_ALIGNMENT_DOMINANCE_RATIO``
+#   AND the top clears ``_ALIGNMENT_DOMINANCE_FLOOR`` (P1-A: the ratio
+#   alone trips on tiny absolute scores — geocode 5.0 vs 1.0 for "the
+#   failing probe" is keyword noise, not dominance; the engine's strong
+#   signal class is the exact-alias 100.0 hit. The reviewer's L5: weak
+#   signals are confidence hints, never hard rejections);
 # - UNIQUE top (no runner-up): its score must reach
 #   ``_ALIGNMENT_STRONG_MIN_SCORE`` — a lone weak keyword hit (e.g. a
 #   single ``keyword:day`` noise candidate at score 3.0) is NOT strong
@@ -1110,17 +1216,23 @@ def _is_chain_expression(value: str) -> bool:
 # positives (scenarios 8/20/38/47) all lived in weak/close territory.
 _ALIGNMENT_DOMINANCE_RATIO = 2.0
 _ALIGNMENT_STRONG_MIN_SCORE = 5.0
+# Ratio-path absolute floor: below this the top is keyword-scale noise
+# (engine keyword/example hits score 1-5; the exact-alias class is 100).
+_ALIGNMENT_DOMINANCE_FLOOR = 10.0
 
 
 def _engine_dominant(engine_ranked: list[tuple[str, float]]) -> bool:
     """True when the engine's top candidate is STRONG evidence (unique
-    high-score, or dominant over the runner-up)."""
+    high-score, or dominant over the runner-up AND strong in absolute
+    terms — P1-A floor so tiny-score ratios never block)."""
     if not engine_ranked:
         return False
     top_score = engine_ranked[0][1]
     if len(engine_ranked) == 1:
         return top_score >= _ALIGNMENT_STRONG_MIN_SCORE
     runner_up = engine_ranked[1][1]
+    if top_score < _ALIGNMENT_DOMINANCE_FLOOR:
+        return False  # keyword-noise top: ambiguous, never blocking
     return top_score >= runner_up * _ALIGNMENT_DOMINANCE_RATIO
 
 

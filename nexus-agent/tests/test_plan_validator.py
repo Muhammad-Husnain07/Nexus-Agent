@@ -391,6 +391,106 @@ def test_semantic_filter_keeps_generic_on_explicit_web(monkeypatch):
     assert "search_web_search" in {n for n, _s in filtered}
 
 
+def test_missing_input_unresolvable_drop_and_proceed(monkeypatch):
+    """P1-A: a node whose required input the binder classified as
+    unresolvable is DROPPED on a multi-node plan (partial success) instead
+    of triggering a full-LLM replan — the large-DAG wall-time class."""
+    from nexus.agent.nodes.plan_validator_node import PlanValidatorNode
+
+    _inject_keyword_gc(monkeypatch, {
+        **KEYWORDS,
+        "docker": (["get_docker_images"], [], []),
+        "word": (["define_word"], [], []),
+    }, {
+        "get_docker_images": ["repository"],
+        "define_word": ["word"],
+    })
+    report = PlanValidatorNode().validate(
+        [
+            _node("get_docker_images", {}),
+            _node("define_word", {"word": "cache"}),
+        ],
+        user_query="Define cache and get the nginx docker image",
+        binding_report={
+            "missing": [
+                {"node_id": "n1", "parameter": "repository",
+                 "state": "MISSING", "clarification_required": True},
+            ],
+        },
+    )
+    codes = [v.code for v in report.violations]
+    assert "missing_input_unresolvable" in codes
+    assert report.action.value == "drop_and_proceed"
+
+
+def test_missing_input_refines_when_binder_unavailable(monkeypatch):
+    """Without binder classification the missing input still REFINEs
+    (the plan gets its repair chance — never a silent drop)."""
+    from nexus.agent.nodes.plan_validator_node import PlanValidatorNode
+
+    _inject_keyword_gc(monkeypatch, {
+        **KEYWORDS,
+        "docker": (["get_docker_images"], [], []),
+    }, {
+        "get_docker_images": ["repository"],
+    })
+    report = PlanValidatorNode().validate(
+        [_node("get_docker_images", {})],
+        user_query="Get the nginx docker image",
+        binding_report=None,
+    )
+    assert any(v.code == "missing_input" for v in report.violations)
+    assert report.action.value != "drop_and_proceed"
+
+
+def test_drop_and_proceed_requires_all_errors_droppable():
+    """DROP_AND_PROCEED wins ONLY when every ERROR violation is that class
+    — a mixed verdict (alignment + unresolvable input) still REFINEs."""
+    from nexus.agent.nodes.plan_validator_node import (
+        PlanValidatorReport,
+        Violation,
+        ViolationAction,
+        ViolationSeverity,
+    )
+
+    report = PlanValidatorReport(
+        valid=False,
+        violations=(
+            Violation(code="missing_input_unresolvable",
+                      severity=ViolationSeverity.ERROR,
+                      action=ViolationAction.DROP_AND_PROCEED, node="a",
+                      message="m"),
+            Violation(code="capability_alignment",
+                      severity=ViolationSeverity.ERROR,
+                      action=ViolationAction.REFINE, node="plan",
+                      message="m"),
+        ),
+        errors=["x"],
+    )
+    assert report.action == ViolationAction.REFINE
+
+
+def test_engine_dominant_requires_absolute_floor():
+    """P1-A: the ratio alone trips on tiny absolute scores (geocode 5.0
+    vs 1.0 for 'the failing probe' is noise, not dominance) — the top
+    must clear the strong-min floor before dominance can block."""
+    from nexus.agent.nodes.plan_validator_node import (
+        _ALIGNMENT_STRONG_MIN_SCORE,
+        _engine_dominant,
+    )
+
+    # 4.9 vs 1.0 = 4.9x ratio but sub-floor → NOT dominant (V134 class).
+    assert not _engine_dominant([("geocode_location", 4.9), ("get_current_weather", 1.0)])
+    # 5.0 vs 1.0 = 5x ratio but keyword-noise-scale → NOT dominant.
+    assert not _engine_dominant([("geocode_location", 5.0), ("get_current_weather", 1.0)])
+    # 100.0 vs 1.0 = dominant (exact-alias class).
+    assert _engine_dominant([("search_web_search", 100.0), ("search_universities", 5.0)])
+    # Unique top below floor → not strong.
+    assert not _engine_dominant([("geocode_location", 3.0)])
+    # Unique top at/above floor → strong.
+    assert _engine_dominant([("geocode_location", _ALIGNMENT_STRONG_MIN_SCORE)])
+
+
 def _async_return(value):
     import asyncio
 

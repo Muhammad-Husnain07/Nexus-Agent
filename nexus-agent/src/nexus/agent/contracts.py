@@ -279,7 +279,7 @@ NODE_CONTRACTS: Final[tuple[NodeContract, ...]] = (
         reads=("artifact graph", "RendererRegistry", "LLM", "PromptCache"),
         writes=("final_response", "_routing_decision", "response_type", "_synthesis_failed",
                 "messages", "working_memory", "errors", "_structured_payload",
-                "_invocation_budget", "_response_coverage"),
+                "_invocation_budget", "_response_coverage", "_response_status"),
         produces=("final_response",),
         consumes=("artifacts",),
         may_fail=True,

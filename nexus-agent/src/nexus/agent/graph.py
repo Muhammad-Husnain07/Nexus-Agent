@@ -1081,7 +1081,8 @@ async def executor_node(
         )
 
     # Emit WaveCompleted events (skipped conditional-branch tasks are not
-    # failures — exclude them from the failure count)
+    # failures — exclude them from the failure count). P1-A: per-wave
+    # durations ride the event for critical-path accounting.
     for i, wave_dict in enumerate(results.by_wave):
         successes = sum(1 for r in wave_dict.values() if r.status == "success")
         failures = sum(1 for r in wave_dict.values() if r.status not in ("success", "skipped"))
@@ -1090,6 +1091,10 @@ async def executor_node(
             wave_index=i,
             tasks_succeeded=successes,
             tasks_failed=failures,
+            duration_ms=(
+                results.wave_durations_ms[i]
+                if i < len(results.wave_durations_ms) else 0.0
+            ),
         )
 
     # Emit ExecutionFinished

@@ -297,6 +297,7 @@ def _synthesis_fallback_patch(
         "_routing_decision": "finalize",
         "response_type": "artifact",
         "_synthesis_failed": True,
+        "_response_status": "PARTIAL_SUCCESS",
     }
 
 
@@ -372,6 +373,8 @@ async def response_node(
                 ),
                 "_routing_decision": "finalize",
                 "response_type": "error",
+                # P1-B: explicit terminal status — never silent success.
+                "_response_status": "PLANNING_FAILED",
             }
 
         messages = state.get("messages", [])
@@ -408,6 +411,48 @@ async def response_node(
             return {"final_response": "I'm not sure how to respond.", "_routing_decision": "finalize", "response_type": "error"}
 
     if not artifact_list and not errors:
+        # P1-B EMPTY-PLAN SAFETY INVARIANT: an EXECUTABLE request that
+        # produced neither artifacts nor errors must NEVER be answered as
+        # a silent success ("I processed your request."). The dangerous
+        # state — plan exists, execution produced nothing — is either a
+        # PLANNING failure (empty/invalid plan) or an EXECUTION anomaly.
+        # Both are explicit failures, never generic success text.
+        _workflow_nodes = nodes or []
+        _validator_report = state.get("_plan_validator_report")
+        _executable = (
+            state.get("_query_type") in ("action", "workflow", "analysis")
+            or bool(state.get("_preferred_tools"))
+            or bool(_workflow_nodes)
+            or bool(
+                isinstance(_validator_report, dict)
+                and (_validator_report.get("metrics") or {}).get("detected_executable", 0)
+            )
+        )
+        if _executable:
+            _plan_errors = state.get("errors") or []
+            _plan_failed = bool(
+                state.get("_plan_validator_errors")
+                or state.get("_compile_errors")
+            )
+            logger.warning(
+                "response_node.executable_no_output",
+                query_type=state.get("_query_type"),
+                planned_nodes=len(_workflow_nodes),
+                plan_failed=_plan_failed,
+            )
+            reason = (
+                "no executable plan could be produced"
+                if not _workflow_nodes
+                else "the planned operations produced no results"
+            )
+            return {
+                "final_response": (
+                    "I couldn't complete that request: " + reason + "."
+                ),
+                "_routing_decision": "finalize",
+                "response_type": "error",
+                "_response_status": "PLANNING_FAILED" if not _workflow_nodes else "EXECUTION_FAILED",
+            }
         return {"final_response": "I processed your request.", "_routing_decision": "finalize", "response_type": "tool"}
 
     if errors and not artifact_list:
@@ -422,6 +467,7 @@ async def response_node(
             "final_response": final,
             "_routing_decision": "finalize",
             "response_type": "error",
+            "_response_status": "EXECUTION_FAILED",
         }
 
     # ExecutionBudget degradation (Phase 3): planning over budget → the
@@ -695,6 +741,12 @@ async def response_node(
     _response_coverage = 1.0
     if _grounding_final is not None:
         _response_coverage = _grounding_final.coverage_ratio
+    # P1-B response-status state machine: SUCCESS / PARTIAL_SUCCESS /
+    # CLARIFICATION_REQUIRED / EXECUTION_FAILED / PLANNING_FAILED — the
+    # final renderer never collapses failure into success-looking text.
+    _response_status = "SUCCESS"
+    if _response_coverage < 1.0:
+        _response_status = "PARTIAL_SUCCESS"
 
     # P2-A OPTIONAL claim→entailment verifier (feature flag, default OFF):
     # runs ONLY after the deterministic guard passed and the response is
@@ -743,6 +795,8 @@ async def response_node(
         # (query-echo scalars earn no credit). P0-D: the evidence-layer
         # grounding ratio (required ⊆ represented) — entity-aware.
         "_response_coverage": _response_coverage,
+        # P1-B: explicit terminal status (never silent success on failure).
+        "_response_status": _response_status,
     }
 
 

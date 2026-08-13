@@ -29,6 +29,7 @@ import asyncio
 import hashlib
 import json
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -69,6 +70,8 @@ class ExecutionResults:
     failed: list[str] = field(default_factory=list)
     timed_out: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
+    # P1-A: per-wave wall-clock durations (ms) — critical-path accounting.
+    wave_durations_ms: list[float] = field(default_factory=list)
 
     @property
     def all_successful(self) -> bool:
@@ -481,6 +484,7 @@ class ConcurrentExecutor:
         try:
             async with asyncio.timeout(global_timeout):
                 for wave in waves:
+                    _wave_start = time.perf_counter()
                     logger.info(
                         "concurrent_executor.wave_start",
                         wave=wave.wave,
@@ -506,6 +510,7 @@ class ConcurrentExecutor:
                         max_concurrency=max_concurrency,
                         per_tool_timeout=per_tool_timeout,
                     )
+                    _wave_elapsed_ms = round((time.perf_counter() - _wave_start) * 1000, 1)
 
                     # Record results and update accumulated data
                     wave_dict: dict[str, ToolExecutionResult] = {}
@@ -523,6 +528,7 @@ class ConcurrentExecutor:
                             results.failed.append(outcome.task_id)
 
                     results.by_wave.append(wave_dict)
+                    results.wave_durations_ms.append(_wave_elapsed_ms)
 
                     # Log errors for debugging (skip silent branch skips)
                     for outcome in wave_outcomes:
@@ -533,9 +539,16 @@ class ConcurrentExecutor:
                                 error=outcome.error,
                             )
 
+                    # P1-A TIMING: per-wave duration — the benchmark's
+                    # critical-path accounting. Whether the 8-wave DAG is
+                    # structurally serialized or just slow per-wave is
+                    # decided by wall_time vs critical-path, not by wave
+                    # count alone. (The WaveCompleted EVENT is emitted by
+                    # the executor wrapper in graph.py.)
                     logger.info(
                         "concurrent_executor.wave_done",
                         wave=wave.wave,
+                        duration_ms=_wave_elapsed_ms,
                         success=len(wave_outcomes) - sum(1 for o in wave_outcomes if o.status != "success"),
                         failed=len(results.failed),
                     )

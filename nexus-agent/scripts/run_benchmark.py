@@ -136,6 +136,9 @@ async def fetch_execution_evidence(sid: str) -> dict:
                 "index": int(p.get("wave_index", 0)),
                 "succeeded": int(p.get("tasks_succeeded", 0)),
                 "failed": int(p.get("tasks_failed", 0)),
+                # P1-A: per-wave wall-clock duration (ms) — critical-path
+                # accounting (wall_time vs critical-path, not wave count).
+                "duration_ms": float(p.get("duration_ms", 0.0) or 0.0),
             })
     return evidence
 
@@ -145,6 +148,7 @@ def events_summary(events: list[dict]) -> dict:
     tool_errors: list[str] = []
     final_text = ""
     clarification = False
+    response_status = ""
     for e in events:
         t = e.get("type", "")
         p = e.get("payload", {}) or {}
@@ -154,6 +158,7 @@ def events_summary(events: list[dict]) -> dict:
             tool_errors.append(str(p.get("message", ""))[:200])
         if t == "final_response" and isinstance(p, dict):
             final_text = str(p.get("text", ""))
+            response_status = str(p.get("response_status") or p.get("status") or "")
         if t == "clarification_question":
             clarification = True
     return {
@@ -161,6 +166,7 @@ def events_summary(events: list[dict]) -> dict:
         "tool_errors": tool_errors,
         "final_text": final_text,
         "clarification": clarification,
+        "response_status": response_status,
     }
 
 
@@ -393,6 +399,19 @@ async def run_one(sc: dict, delay_s: float = 0.0) -> dict:
         "executed": len(result.get("tools_used") or []),
         "relationships": len(evidence.get("intent_relationships") or []),
     }
+    # P1-A critical-path accounting: sum of wave durations vs the wall
+    # clock — tells whether a large DAG is structurally serialized
+    # (waves ≈ wall) or per-wave-slow (waves << wall, scheduling
+    # overhead dominates).
+    result["wave_timing"] = {
+        "waves": len(evidence.get("waves") or []),
+        "wave_sum_ms": round(sum(w.get("duration_ms", 0) for w in evidence.get("waves") or []), 1),
+        "max_wave_ms": round(max((w.get("duration_ms", 0) for w in evidence.get("waves") or []), default=0.0), 1),
+        "wall_s": round(elapsed, 1),
+    }
+    result["response_status"] = (
+        events_summary(events).get("response_status") or ""
+    )
     return result
 
 
