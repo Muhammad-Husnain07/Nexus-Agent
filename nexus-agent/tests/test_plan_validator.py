@@ -346,3 +346,55 @@ def test_parameter_provenance_numeric_canonical(monkeypatch):
     assert _value_in_message(34.0, "what is 34 degrees in fahrenheit")
     assert _value_in_message(7, "fetch post 7")
     assert _value_in_message(35.6895, "Weather in Islamabad") is False
+
+
+def test_semantic_filter_engine_suppresses_generic_fallback(monkeypatch):
+    """P0-D.1 (D48/D49 class): the alignment verdict must consume the SAME
+    semantic representation as the resolver — a generic fallback that
+    outscored the specialized pick in raw terms (search alias 100.0 vs
+    search_universities 5.0) is removed so the correct specialized pick
+    is not rejected by raw-engine dominance."""
+    import asyncio
+
+    from nexus.agent.nodes import plan_validator_node as pvn
+
+    sem = type("S", (), {"generic": True, "fallback": True, "specificity": 0.1})()
+    sem2 = type("S", (), {"generic": False, "fallback": False, "specificity": 0.85})()
+    monkeypatch.setattr(pvn, "_load_semantics_map", lambda: _async_return(
+        {"search_web_search": sem, "search_universities": sem2}
+    ))
+    ranked = [
+        ("search_web_search", 100.0),
+        ("search_universities", 5.0),
+        ("geocode_location", 3.0),
+    ]
+    filtered = asyncio.run(pvn._semantic_filter_engine(ranked, "Search universities for Waseda"))
+    names = {n for n, _s in filtered}
+    assert "search_web_search" not in names, "generic fallback must be suppressed"
+    assert "search_universities" in names
+
+
+def test_semantic_filter_keeps_generic_on_explicit_web(monkeypatch):
+    """An explicit web request keeps the generic fallback in the alignment
+    evidence (the user asked for the web — it is not a misalignment)."""
+    import asyncio
+
+    from nexus.agent.nodes import plan_validator_node as pvn
+
+    sem = type("S", (), {"generic": True, "fallback": True, "specificity": 0.1})()
+    sem2 = type("S", (), {"generic": False, "fallback": False, "specificity": 0.85})()
+    monkeypatch.setattr(pvn, "_load_semantics_map", lambda: _async_return(
+        {"search_web_search": sem, "search_universities": sem2}
+    ))
+    ranked = [("search_web_search", 100.0), ("search_universities", 5.0)]
+    filtered = asyncio.run(pvn._semantic_filter_engine(ranked, "Search the web for universities"))
+    assert "search_web_search" in {n for n, _s in filtered}
+
+
+def _async_return(value):
+    import asyncio
+
+    async def _f():
+        return value
+
+    return _f()

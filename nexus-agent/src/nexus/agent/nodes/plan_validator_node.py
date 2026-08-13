@@ -9,6 +9,7 @@ Compiler, structural → RequirementCollector, refinable → PlanCritic.
 
 from __future__ import annotations
 
+import re
 from enum import Enum
 from typing import Any
 
@@ -128,6 +129,19 @@ class PlanValidatorNode:
                 engine_scores[_u] = await _engine_ranked_for_unit(_u)
         except Exception as _esc:
             logger.warning("plan_validator.engine_scores_failed", error=str(_esc)[:150])
+        # P0-D.1: the ALIGNMENT verdict must consume the SAME semantic
+        # representation as the resolver — generic-suppressed engine scores.
+        # A correct specialized pick is never rejected because the generic
+        # fallback outscored it in raw terms (the D48/D49 class). The
+        # filtered scores feed the alignment loop only; coverage keeps the
+        # raw candidates (the planner must still SEE the generic exists).
+        try:
+            filtered_scores = {
+                u: await _semantic_filter_engine(ranked, u)
+                for u, ranked in (engine_scores or {}).items()
+            }
+        except Exception:
+            filtered_scores = engine_scores
         report = self.validate(
             nodes,
             prior_chain=prior_chain,
@@ -135,6 +149,7 @@ class PlanValidatorNode:
             collections=workflow.get("collections") if isinstance(workflow, dict) else None,
             preferred_tools=state.get("_preferred_tools") or None,
             engine_scores=engine_scores,
+            alignment_scores=filtered_scores,
             structured_intents=structured_intents,
         )
         # P0-B: surface the binder's provenance ledger on the report metrics
@@ -291,6 +306,7 @@ class PlanValidatorNode:
         collections: dict[str, Any] | None = None,
         preferred_tools: list[str] | None = None,
         engine_scores: dict[str, list[tuple[str, float]]] | None = None,
+        alignment_scores: dict[str, list[tuple[str, float]]] | None = None,
         structured_intents: dict[str, Any] | None = None,
     ) -> PlanValidatorReport:
         violations: list[Violation] = []
@@ -738,14 +754,46 @@ class PlanValidatorNode:
                 if not matches:
                     continue
                 chosen = _best_capability(u, matches)
-                engine_ranked = (engine_scores or {}).get(u.text, [])
+                engine_ranked = (
+                    alignment_scores or {}
+                ).get(u.text) or (engine_scores or {}).get(u.text, [])
                 verdict = _alignment_verdict(chosen, engine_ranked)
                 if verdict == "misaligned":
                     top = engine_ranked[0][0] if engine_ranked else "?"
                     misaligned.append(f"{u.text[:40]} -> {chosen} (engine best: {top})")
                     alignments.append(0.0)
+                    logger.info(
+                        "plan_validator.alignment_misaligned",
+                        unit=u.text[:60],
+                        chosen=chosen,
+                        engine_top=top,
+                        engine=engine_ranked[:4],
+                        candidates=sorted(candidates | {n for n, _s in engine_ranked})[:6],
+                    )
                 elif verdict == "aligned":
                     alignments.append(1.0)
+                    # P0-D.1 alignment evidence trail (the reviewer's
+                    # CapabilityAlignment record) — every ACCEPT is
+                    # explainable: lexical + semantic (generic-filtered)
+                    # scores, domain/alias/produces signals, decision.
+                    _aligned_ev = {
+                        "capability_id": chosen,
+                        "intent_id": u.text[:80],
+                        "lexical_score": round(
+                            (engine_scores or {}).get(u.text, [(None, 0.0)])[0][1], 2
+                        ),
+                        "semantic_score": round(
+                            engine_ranked[0][1] if engine_ranked else 0.0, 2
+                        ),
+                        "domain_match": bool(
+                            _unit_candidates(u) & {chosen}
+                        ),
+                        "resolver_evidence": bool(
+                            chosen in {n for n, _s in (engine_scores or {}).get(u.text, [])}
+                        ),
+                        "decision": "ACCEPT",
+                    }
+                    metrics.setdefault("alignment_evidence", []).append(_aligned_ev)
                 else:
                     alignments.append(1.0)  # ambiguous/no_signal: not a defect
             metrics["capability_alignment"] = (
@@ -1074,6 +1122,82 @@ def _engine_dominant(engine_ranked: list[tuple[str, float]]) -> bool:
         return top_score >= _ALIGNMENT_STRONG_MIN_SCORE
     runner_up = engine_ranked[1][1]
     return top_score >= runner_up * _ALIGNMENT_DOMINANCE_RATIO
+
+
+_SEMANTICS_MAP_CACHE: dict[str, Any] | None = None
+
+
+async def _load_semantics_map() -> dict[str, Any]:
+    """CapabilitySemantics map from the registry tool rows — the SAME
+    metadata the resolver's branch ranker consumes (P0-A). Cached per
+    process; the registry is immutable per deployment."""
+    global _SEMANTICS_MAP_CACHE
+    if _SEMANTICS_MAP_CACHE is not None:
+        return _SEMANTICS_MAP_CACHE
+    semantics: dict[str, Any] = {}
+    try:
+        from sqlalchemy import select as _sem_select  # noqa: PLC0415
+
+        from nexus.capabilities.capability_semantics import (  # noqa: PLC0415
+            CapabilitySemantics,
+        )
+        from nexus.db.base import async_session as _sem_db  # noqa: PLC0415
+        from nexus.db.models.tool import Tool  # noqa: PLC0415
+
+        async with _sem_db() as _s:
+            _rows = await _s.execute(
+                _sem_select(
+                    Tool.name, Tool.validation_rules, Tool.input_schema,
+                    Tool.consumes, Tool.produces, Tool.category,
+                )
+            )
+            for _r in _rows.all():
+                try:
+                    semantics[str(_r[0])] = CapabilitySemantics.from_registry(
+                        str(_r[0]), _r
+                    )
+                except Exception:
+                    pass
+    except Exception as _sem_exc:
+        logger.warning("plan_validator.semantics_load_failed", error=str(_sem_exc)[:150])
+    _SEMANTICS_MAP_CACHE = semantics
+    return semantics
+
+
+async def _semantic_filter_engine(
+    engine_ranked: list[tuple[str, float]],
+    unit_text: str,
+) -> list[tuple[str, float]]:
+    """P0-D.1: apply the P0-A generic-suppression semantics to the engine's
+    raw per-unit scores BEFORE the alignment verdict.
+
+    The raw engine scores are scale-incomparable across layers: the
+    generic "search" alias fires at 100.0 for any query containing
+    "search", while the SPECIALIZED capability (search_universities at
+    5.0) wins the resolver's branch. The validator must judge alignment
+    on the SAME representation the resolver uses (CapabilitySemantics) —
+    otherwise a correct specialized pick is rejected because the generic
+    fallback outscored it in raw terms (the D48/D49 class).
+
+    Metadata-driven (generic/fallback flags + specificity), never a
+    capability-name list.
+    """
+    if len(engine_ranked) < 2:
+        return engine_ranked
+    semantics = await _load_semantics_map()
+    if not semantics:
+        return engine_ranked
+    web_tokens = set(re.findall(r"[a-zA-Z]+", (unit_text or "").lower()))
+    explicit_web = bool(web_tokens & {"web", "internet", "online"})
+    specialized = [
+        (name, score)
+        for name, score in engine_ranked
+        if not getattr(semantics.get(name), "generic", False)
+        and not getattr(semantics.get(name), "fallback", False)
+    ]
+    if specialized and not explicit_web:
+        return [s for s in engine_ranked if s[0] in {n for n, _s in specialized}]
+    return engine_ranked
 
 
 def _alignment_verdict(
