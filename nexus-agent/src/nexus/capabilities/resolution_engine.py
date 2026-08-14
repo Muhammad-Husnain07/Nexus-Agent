@@ -137,6 +137,28 @@ class ResolutionEngine:
         if not retrieved:
             layers.append("bm25")
 
+        # D10 EMBEDDING A/B (flag-gated, isolated): nv-embed-v1 semantic
+        # retrieval over the registered tool embeddings (pgvector cosine)
+        # adds candidates to the pool. DETERMINISTIC semantics still decide
+        # — embeddings only retrieve. The flag keeps this experiment fully
+        # switchable without touching any frozen contract.
+        try:
+            from nexus.config.settings import get_settings as _emb_settings
+
+            if bool(getattr(_emb_settings().resolver, "enable_embedding_retrieval", False)):
+                _emb_hits = await self._embedding_retrieve(query, top_k=top_k or self.top_k)
+                if _emb_hits:
+                    _existing = {r.name for r in retrieved}
+                    retrieved = list(retrieved) + [h for h in _emb_hits if h.name not in _existing]
+                    layers.append("embedding")
+                    logger.info(
+                        "resolution_engine.embedding_retrieval",
+                        added=len(retrieved) - len([r for r in retrieved if r.name in _existing]),
+                        query=query[:50],
+                    )
+        except Exception as _emb_exc:
+            logger.debug("resolution_engine.embedding_retrieval_failed", error=str(_emb_exc)[:150])
+
         candidates = self._to_candidates(retrieved, cap_meta_all, gc)
 
         # Domain narrowing (metadata-driven: domain_index from registry).
@@ -193,6 +215,47 @@ class ResolutionEngine:
             return retriever.retrieve(query, top_k=top_k or self.top_k, gc=gc)
         except Exception as exc:
             logger.warning("resolution_engine.retrieval_failed", error=str(exc)[:200])
+            return []
+
+    async def _embedding_retrieve(
+        self, query: str, top_k: int
+    ) -> list[Any]:
+        """D10: nv-embed-v1 semantic retrieval (pgvector cosine distance).
+
+        Queries the registered tool embeddings (metadata-driven: the
+        registry generates embeddings from the tool's description/purpose/
+        aliases/keywords) and maps hits onto the retriever's
+        ``RetrievedCapability`` shape. Embeddings RETRIEVE; the
+        deterministic ranker and CapabilitySemantics decide.
+        """
+        try:
+            from nexus.capabilities.retrieval import RetrievedCapability  # noqa: PLC0415
+            from nexus.db.base import async_session as _emb_db  # noqa: PLC0415
+            from nexus.llm.client import LLMClient  # noqa: PLC0415
+            from nexus.tools.registry import ToolRegistry  # noqa: PLC0415
+
+            async with _emb_db() as _s:
+                reg = ToolRegistry(LLMClient())
+                hits = await reg.search_semantic(_s, query, k=max(4, top_k))
+            out: list[Any] = []
+            for h in hits:
+                tool = getattr(h, "tool", None)
+                name = getattr(tool, "name", "") or getattr(tool, "logical_op_name", "")
+                if not name:
+                    continue
+                score = float(getattr(h, "score", 0.0) or 0.0)
+                if score <= 0:
+                    continue
+                out.append(RetrievedCapability(
+                    name=str(name),
+                    domain=str(getattr(tool, "category", "") or ""),
+                    score=round(score, 4),
+                    matched_by="embedding",
+                    reasons=("embedding",),
+                ))
+            return out
+        except Exception as exc:
+            logger.debug("resolution_engine.embedding_retrieve_failed", error=str(exc)[:150])
             return []
 
     def _to_candidates(

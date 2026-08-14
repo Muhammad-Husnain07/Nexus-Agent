@@ -1001,6 +1001,9 @@ class AgentRunner:
                 # distinguish SUCCESS / PARTIAL_SUCCESS / EXECUTION_FAILED /
                 # PLANNING_FAILED instead of inferring from prose.
                 "response_status": str(state_update.get("_response_status", "") or ""),
+                # D10: synthesis-coverage breakdown — evidence/entities
+                # required vs rendered (generation-reliability split).
+                "coverage_breakdown": state_update.get("_response_coverage_breakdown") or {},
             })))
 
         # --- KnowledgeAssistantNode → knowledge response ---

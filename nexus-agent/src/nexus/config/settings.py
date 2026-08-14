@@ -610,6 +610,15 @@ class CapabilityResolverSettings(BaseModel):
         le=1.0,
         description="Score multiplier for deprecated endpoints (applied after sum)",
     )
+    # D10 EMBEDDING A/B: nv-embed-v1 semantic retrieval as an ADDITIONAL
+    # candidate-pool source (pgvector cosine over tool embeddings).
+    # Embeddings RETRIEVE; the deterministic ranker + CapabilitySemantics
+    # still DECIDE. Flag-gated so the experiment is fully switchable —
+    # baseline (off) vs experiment (on), byte-for-byte elsewhere.
+    enable_embedding_retrieval: bool = Field(
+        default=False,
+        description="Add nv-embed-v1 semantic retrieval to the resolver candidate pool (D10 A/B)",
+    )
 
     max_latency_ms: int = Field(
         default=5000, ge=1, description="Latency at or above this value scores 0.0"

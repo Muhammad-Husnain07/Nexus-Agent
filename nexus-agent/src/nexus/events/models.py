@@ -98,6 +98,13 @@ class FinalResponseEvent(BaseModel):
     text: str = Field(default="", description="Final response text")
     cost_usd: float = Field(default=0.0, description="Total turn cost")
     latency_ms: float = Field(default=0.0, description="Total turn latency")
+    # P1-B: explicit terminal status (SUCCESS / PARTIAL_SUCCESS /
+    # EXECUTION_FAILED / PLANNING_FAILED) — the benchmark distinguishes
+    # failure classes instead of inferring from prose.
+    response_status: str = Field(default="", description="Terminal response status")
+    # D10: synthesis-coverage breakdown (evidence/entities required vs
+    # rendered) — generation-reliability instrumentation.
+    coverage_breakdown: dict[str, Any] = Field(default_factory=dict)
 
 
 class NodeStartedEvent(BaseModel):

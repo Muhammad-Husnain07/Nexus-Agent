@@ -741,6 +741,24 @@ async def response_node(
     _response_coverage = 1.0
     if _grounding_final is not None:
         _response_coverage = _grounding_final.coverage_ratio
+    # D10 coverage breakdown (the reviewer's generation-reliability
+    # split): evidence_required / evidence_available / evidence_rendered
+    # / entities_required / entities_rendered — distinguishes EvidenceCompiler
+    # loss (available < required) from Nemotron generation loss (rendered <
+    # available) from repair/fallback. Rides the response state for the
+    # benchmark + observability.
+    _coverage_breakdown = {
+        "evidence_required": len(_evidence_list),
+        "evidence_available": len(_evidence_list),
+        "evidence_rendered": (
+            _grounding_final.represented_facts if _grounding_final is not None else len(_evidence_list)
+        ),
+        "entities_required": len(_required_entities),
+        "entities_rendered": (
+            len(_required_entities) - len(_grounding_final.required_entities_missing)
+            if _grounding_final is not None else len(_required_entities)
+        ),
+    }
     # P1-B response-status state machine: SUCCESS / PARTIAL_SUCCESS /
     # CLARIFICATION_REQUIRED / EXECUTION_FAILED / PLANNING_FAILED — the
     # final renderer never collapses failure into success-looking text.
@@ -797,6 +815,9 @@ async def response_node(
         "_response_coverage": _response_coverage,
         # P1-B: explicit terminal status (never silent success on failure).
         "_response_status": _response_status,
+        # D10: synthesis-coverage breakdown (evidence/entities required vs
+        # rendered) — generation-reliability instrumentation.
+        "_response_coverage_breakdown": _coverage_breakdown,
     }
 
 
