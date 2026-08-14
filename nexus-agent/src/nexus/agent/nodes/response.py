@@ -274,6 +274,7 @@ def _synthesis_fallback_patch(
             "final_response": note,
             "_routing_decision": "finalize",
             "_synthesis_failed": True,
+            "_response_status": "EXECUTION_FAILED",
         }
     # P0-D: the entity-anchored evidence renderer outranks the generic
     # artifact renderer — it is GUARANTEED to name every required entity
@@ -292,12 +293,30 @@ def _synthesis_fallback_patch(
         else note
     )
     logger.info("response_node.synthesis_fallback", response_type="artifact")
+    # D10: the fallback path still reports its coverage (rendered = whatever
+    # the deterministic renderer produced — the benchmark's fallback rate).
+    _breakdown: dict[str, Any] = {}
+    try:
+        _ev, _req = _evidence_compile(state, artifact_list)
+        _g = _grounding_coverage(final, _ev, _req, _last_user_message(state))
+        if _g is not None:
+            _breakdown = {
+                "evidence_required": len(_ev),
+                "evidence_available": len(_ev),
+                "evidence_rendered": _g.represented_facts,
+                "entities_required": len(_req),
+                "entities_rendered": len(_req) - len(_g.required_entities_missing),
+                "renderer_fallback": True,
+            }
+    except Exception:
+        _breakdown = {}
     return {
         "final_response": final,
         "_routing_decision": "finalize",
         "response_type": "artifact",
         "_synthesis_failed": True,
         "_response_status": "PARTIAL_SUCCESS",
+        "_response_coverage_breakdown": _breakdown,
     }
 
 

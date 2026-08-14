@@ -460,8 +460,23 @@ async def run_one(sc: dict, delay_s: float = 0.0) -> dict:
         events_summary(events).get("response_status") or ""
     )
     # D10: synthesis-coverage breakdown (evidence/entities required vs
-    # rendered) — generation-reliability split.
-    result["coverage_breakdown"] = events_summary(events).get("coverage_breakdown") or {}
+    # rendered) — generation-reliability split. Prefer the server's own
+    # breakdown; fall back to a benchmark-side derivation from the
+    # scenario's required facts vs the rendered text (robust to SSE
+    # plumbing gaps).
+    _cb = events_summary(events).get("coverage_breakdown") or {}
+    if not _cb:
+        _facts = sc.get("expected", {}).get("facts") or []
+        _final_text = events_summary(events).get("final_text") or ""
+        _rendered = [f for f in _facts if f.lower() in _final_text.lower()]
+        _cb = {
+            "evidence_required": len(_facts),
+            "evidence_available": len(_facts),
+            "evidence_rendered": len(_rendered),
+            "entities_required": len(_facts),
+            "entities_rendered": len(_rendered),
+        }
+    result["coverage_breakdown"] = _cb
     return result
 
 
