@@ -272,6 +272,11 @@ class EvidenceCompiler:
         flattened one level with dotted paths. List payloads produce one
         fact per item's first fields (bounded — the evidence packet must
         stay small for the 30B model).
+
+        MODEL-AB-01 renderer fix: a LIST-valued field (e.g. the promoted
+        ``book_titles`` array from ``x-artifact-fields``) becomes a single
+        list fact so the deterministic renderer can display its items —
+        not just "count: N".
         """
         from types import MappingProxyType
 
@@ -289,6 +294,9 @@ class EvidenceCompiler:
             for k, v in data.items():
                 if _scalar(v):
                     _add(str(k), v, str(k))
+                elif isinstance(v, (list, tuple)) and v:
+                    # List fact (displayable items — bounded).
+                    _add(str(k), list(v)[:6], str(k))
                 elif isinstance(v, (dict, MappingProxyType)) and not isinstance(v, list):
                     inner = dict(v) if isinstance(v, MappingProxyType) else v
                     for ik, iv in inner.items():

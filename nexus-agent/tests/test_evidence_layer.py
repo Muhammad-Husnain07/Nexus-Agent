@@ -291,3 +291,36 @@ def test_evidence_renderer_names_required_entities_when_no_facts():
         [], [type("E", (), {"canonical_name": "Lahore", "entity_id": "lahore", "aliases": []})()]
     )
     assert "Lahore" in text
+
+
+def test_evidence_renderer_displays_list_facts_numbered():
+    """MODEL-AB-01: list facts (book_titles) render as numbered entries
+    with title/author — never 'count: N' alone."""
+    from nexus.agent.nodes.response import _evidence_renderer
+
+    evidence = [_ev("search_books", None, [
+        ("book_count", 2),
+        ("book_titles", [
+            {"title": "Pride and Prejudice", "authors": ["Jane Austen"]},
+            {"title": "Dracula", "authors": ["Bram Stoker"]},
+        ]),
+    ])]
+    text = _evidence_renderer(evidence, [])
+    assert "Pride and Prejudice" in text
+    assert "Dracula" in text
+    assert "Jane Austen" in text
+    assert "1." in text and "2." in text
+    assert "count" not in text.split("\n")[0] or "book_count: 2" in text
+
+
+def test_evidence_extract_facts_promotes_list_values():
+    from nexus.artifacts.evidence import EvidenceCompiler
+
+    compiler = EvidenceCompiler()
+    facts = compiler._extract_facts("search_books", {
+        "count": 2,
+        "results": [{"title": "Pride and Prejudice"}, {"title": "Dracula"}],
+    })
+    list_facts = [f for f in facts if isinstance(f.value, list)]
+    assert list_facts, "list-valued field must become a list fact"
+    assert len(list_facts[0].value) == 2

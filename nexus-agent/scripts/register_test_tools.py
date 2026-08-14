@@ -547,6 +547,14 @@ TOOLS: list[dict] = [
                     },
                 },
             },
+            # MODEL-AB-01 renderer fix: the deterministic fallback must
+            # render actual book titles/authors, not just "count: N".
+            # The artifact contract declares which list fields survive
+            # normalization as display evidence.
+            "x-artifact-fields": {
+                "book_count": "count",
+                "book_titles": "results",
+            },
         },
         "examples": [
             {"user_prompt": "Search books by Pride and Prejudice", "expected_tool": "search_books", "sample_input": {"query": "Pride and Prejudice"}}

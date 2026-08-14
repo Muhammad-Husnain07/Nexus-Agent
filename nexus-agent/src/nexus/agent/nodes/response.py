@@ -1000,15 +1000,47 @@ def _evidence_renderer(
     that is GUARANTEED to preserve successful execution — every entity
     with its evidence facts. The reviewer's floor: the generic
     "Artifact generated successfully" text must never be the answer
-    when execution succeeded."""
+    when execution succeeded.
+
+    MODEL-AB-01: LIST facts (e.g. the promoted ``book_titles`` array)
+    render as numbered entries — item dicts use their title/name fields
+    when present, scalars render directly. Never "count: N" alone.
+    """
     sections: list[str] = []
     for ev in evidence:
         ent = ev.entity_id or ev.capability_id
-        facts = "; ".join(
-            f"{f.key}: {f.value}" for f in ev.facts[:8] if f.value is not None
-        )
-        if facts:
-            sections.append(f"{ent}: {facts}")
+        lines: list[str] = []
+        for f in ev.facts[:8]:
+            if f.value is None:
+                continue
+            if isinstance(f.value, list):
+                if not f.value:
+                    continue
+                items: list[str] = []
+                for item in f.value[:6]:
+                    if isinstance(item, dict):
+                        title = (
+                            item.get("title") or item.get("name")
+                            or item.get("strMeal") or item.get("query")
+                        )
+                        author = item.get("author") or item.get("authors")
+                        if title:
+                            items.append(
+                                f"{title} — {author}" if author else str(title)
+                            )
+                        else:
+                            items.append(
+                                "; ".join(f"{k}: {v}" for k, v in list(item.items())[:4])
+                            )
+                    else:
+                        items.append(str(item))
+                if items:
+                    for i, item in enumerate(items, 1):
+                        lines.append(f"{i}. {item}")
+                continue
+            lines.append(f"{f.key}: {f.value}")
+        if lines:
+            sections.append(f"{ent}:\n" + "\n".join(lines))
         elif ev.entity_id:
             sections.append(f"{ent}: retrieved")
     if required_entities and not sections:
