@@ -125,6 +125,14 @@ class LLMSettings(BaseModel):
     default_model: str = Field(default="gpt-4o", description="Default model identifier")
     temperature: float = Field(default=0.7, ge=0, le=2, description="Sampling temperature")
     max_tokens: int = Field(default=4096, ge=1, description="Max tokens per response")
+    # MODEL-AB-01 hybrid synthesis: an optional model override for the
+    # FINAL SYNTHESIS only (empty = use default_model). Lets the planner
+    # stay on the fast model while a stronger model composes the response
+    # (Config D/E — Nano planner + Step/Ultra synthesis). Planner/
+    # decomposition/extraction still use default_model.
+    synthesis_model: str = Field(
+        default="", description="Optional model override for final synthesis (empty = default)"
+    )
     embedding_model: str = Field(
         default="text-embedding-3-small", description="Default embedding model"
     )

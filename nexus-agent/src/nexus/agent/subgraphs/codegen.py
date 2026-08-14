@@ -12,6 +12,20 @@ from nexus.agent.state import AgentState
 
 
 def build_codegen(graph: StateGraph, llm: object, model: str) -> None:
-    """Register Codegen nodes into the parent graph."""
-    graph.add_node("ResponseNode", node(_response_node, llm, model))
+    """Register Codegen nodes into the parent graph.
+
+    MODEL-AB-01: final synthesis honors the optional ``synthesis_model``
+    override (empty = the planner's model) — Config D/E (fast planner +
+    stronger synthesis) without touching any frozen contract.
+    """
+    _synth_model = model
+    try:
+        from nexus.config.settings import get_settings
+
+        _override = get_settings().llm.synthesis_model
+        if _override:
+            _synth_model = str(_override)
+    except Exception:
+        _synth_model = model
+    graph.add_node("ResponseNode", node(_response_node, llm, _synth_model))
     graph.add_node("MemoryHelperNode", node(_memory_helper_node, llm, model))
