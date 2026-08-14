@@ -257,3 +257,77 @@ def test_repair_empty_plan_requires_units_and_budget():
         type("B", (), {"consume": lambda self, n: True})(),
     ))
     assert out2 is None
+
+
+# ---------------------------------------------------------------------------
+# P1-D: map/fan-out collapse — independent same-capability entity instances
+# → ONE Map node + a declared collection (the reviewer's D48 abstraction)
+# ---------------------------------------------------------------------------
+
+def test_map_collapse_three_meals_into_one_map():
+    from nexus.agent.nodes.semantic_parser_node import _collapse_map_candidates
+
+    nodes = [
+        {"op": "search_meals", "ref": "m1", "inputs": {"query": "chicken"}, "depends_on": []},
+        {"op": "search_meals", "ref": "m2", "inputs": {"query": "pasta"}, "depends_on": []},
+        {"op": "search_meals", "ref": "m3", "inputs": {"query": "rice"}, "depends_on": []},
+    ]
+    collapsed, collections = _collapse_map_candidates(nodes)
+    assert len(collapsed) == 1
+    map_node = collapsed[0]
+    assert map_node["op"] == "search_meals"
+    assert map_node["iterate_over"] == "search_meals_items"
+    assert map_node["inputs"]["query"] == "${item}"
+    assert collections["search_meals_items"] == ["chicken", "pasta", "rice"]
+
+
+def test_map_collapse_skips_different_ops():
+    from nexus.agent.nodes.semantic_parser_node import _collapse_map_candidates
+
+    nodes = [
+        {"op": "search_meals", "ref": "m1", "inputs": {"query": "chicken"}, "depends_on": []},
+        {"op": "search_books", "ref": "b1", "inputs": {"query": "Austen"}, "depends_on": []},
+    ]
+    collapsed, collections = _collapse_map_candidates(nodes)
+    assert len(collapsed) == 2
+    assert collections == {}
+
+
+def test_map_collapse_skips_nodes_with_dependencies():
+    from nexus.agent.nodes.semantic_parser_node import _collapse_map_candidates
+
+    nodes = [
+        {"op": "search_meals", "ref": "m1", "inputs": {"query": "chicken"}, "depends_on": ["g1"]},
+        {"op": "search_meals", "ref": "m2", "inputs": {"query": "pasta"}, "depends_on": ["g1"]},
+        {"op": "search_meals", "ref": "m3", "inputs": {"query": "rice"}, "depends_on": []},
+    ]
+    collapsed, collections = _collapse_map_candidates(nodes)
+    # m1/m2 share deps and are map-compatible; m3 differs → untouched.
+    assert len(collapsed) == 2  # 1 map (m1+m2) + 1 passthrough (m3)
+    assert collections.get("search_meals_items") == ["chicken", "pasta"]
+
+
+def test_map_collapse_skips_multiple_varying_params():
+    from nexus.agent.nodes.semantic_parser_node import _collapse_map_candidates
+
+    nodes = [
+        {"op": "get_current_weather", "ref": "w1",
+         "inputs": {"latitude": 31.5, "longitude": 74.3}, "depends_on": []},
+        {"op": "get_current_weather", "ref": "w2",
+         "inputs": {"latitude": 31.5, "longitude": 74.4}, "depends_on": []},
+    ]
+    collapsed, collections = _collapse_map_candidates(nodes)
+    assert len(collapsed) == 2  # two varying numeric params — not a map
+    assert collections == {}
+
+
+def test_map_collapse_skips_duplicate_values():
+    from nexus.agent.nodes.semantic_parser_node import _collapse_map_candidates
+
+    nodes = [
+        {"op": "search_meals", "ref": "m1", "inputs": {"query": "chicken"}, "depends_on": []},
+        {"op": "search_meals", "ref": "m2", "inputs": {"query": "chicken"}, "depends_on": []},
+    ]
+    collapsed, collections = _collapse_map_candidates(nodes)
+    assert len(collapsed) == 2  # same value twice — not distinct entities
+    assert collections == {}

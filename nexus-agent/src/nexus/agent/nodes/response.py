@@ -836,6 +836,7 @@ def _evidence_compile(state: AgentState, artifact_list: list[Any]) -> tuple[list
         user_query = _last_user_message(state) or ""
         workflow = state.get("_logical_workflow") or {}
         nodes = workflow.get("nodes") if isinstance(workflow, dict) else []
+        collections = workflow.get("collections") if isinstance(workflow, dict) else {}
         graph = state.get("_execution_graph") or {}
         phys = graph.get("nodes") if isinstance(graph, dict) else {}
         compiler = EvidenceCompiler()
@@ -844,6 +845,7 @@ def _evidence_compile(state: AgentState, artifact_list: list[Any]) -> tuple[list
             user_query=user_query,
             workflow_nodes=nodes if isinstance(nodes, list) else [],
             physical_nodes=phys if isinstance(phys, dict) else {},
+            collections=collections if isinstance(collections, dict) else {},
         )
         structured = state.get("_detected_intents")
         required = RequiredEvidenceCompiler(user_query=user_query).required_entities(

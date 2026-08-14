@@ -824,7 +824,13 @@ async def executor_node(
     ref_to_id: dict[str, str] = {}
     # Map of map-node id → list of fan-out task ids (for wave expansion)
     fan_out: dict[str, list[str]] = {}
+    # P1-D: the LogicalWorkflow's declared collections (MapNode iteration
+    # sources — the planner's map-collapse pass) feed the executor's fan-out.
     collections = state.get("_collections", {})
+    if not collections:
+        _wf = state.get("_logical_workflow") or {}
+        if isinstance(_wf, dict) and _wf.get("collections"):
+            collections = _wf.get("collections") or {}
     for nid, ndata in nodes.items():
         kind = ndata.get("kind", "")
         if kind == "map":

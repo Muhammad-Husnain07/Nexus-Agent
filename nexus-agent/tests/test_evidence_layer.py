@@ -91,6 +91,31 @@ def test_evidence_compile_preserves_entity_identity():
     assert entities == {"lahore", "karachi"}
 
 
+def test_evidence_compile_anchors_map_items_from_collections():
+    """P1-D: a MapNode fan-out's item artifacts anchor to the COLLECTION
+    ITEM (chicken/pasta/rice), never the ${item} placeholder."""
+    arts = [
+        _artifact("search_meals", {"meals": [{"strMeal": "Chicken Curry"}]}, "m_map_item_0"),
+        _artifact("search_meals", {"meals": [{"strMeal": "Pasta Salad"}]}, "m_map_item_1"),
+        _artifact("search_meals", {"meals": [{"strMeal": "Rice Bowl"}]}, "m_map_item_2"),
+    ]
+    workflow = [
+        {"op": "search_meals", "ref": "m",
+         "inputs": {"query": "${item}"}, "depends_on": [],
+         "iterate_over": "search_meals_items"},
+    ]
+    phys = {
+        "m": {"symbolic_ref": "m_map"},
+    }
+    evidence = EvidenceCompiler().compile(
+        arts, user_query="Search for chicken, pasta, and rice recipes",
+        workflow_nodes=workflow, physical_nodes=phys,
+        collections={"search_meals_items": ["chicken", "pasta", "rice"]},
+    )
+    entities = {e.entity_id for e in evidence}
+    assert entities == {"chicken", "pasta", "rice"}
+
+
 def test_entity_from_inputs_skips_placeholders_and_query_echoes():
     assert _entity_from_inputs({"query": "Lahore"}, "weather in Lahore") == "Lahore"
     assert _entity_from_inputs({"query": "${g1.result.latitude}"}, "weather") is None

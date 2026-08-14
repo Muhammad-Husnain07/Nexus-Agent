@@ -1783,6 +1783,26 @@ async def semantic_parser_node(
     except Exception as _bind_exc:
         logger.warning("semantic_planner.binding_failed", error=str(_bind_exc)[:200])
 
+    # P1-D MAP COLLAPSE (post-binding, pre-cache): independent same-
+    # capability entity instances become ONE Map node + a declared
+    # collection (the reviewer's fan-out abstraction). The bound inputs
+    # are final here, so the collapse is deterministic and the cached plan
+    # carries the canonical representation.
+    try:
+        _map_nodes, _map_collections = _collapse_map_candidates(nodes)
+        if _map_collections:
+            parsed["nodes"] = _map_nodes
+            parsed.setdefault("collections", {}).update(_map_collections)
+            nodes = _map_nodes
+            logger.info(
+                "semantic_planner.map_collapse",
+                maps=list(_map_collections.keys()),
+                cardinalities=[len(v) for v in _map_collections.values()],
+                nodes_after=len(nodes),
+            )
+    except Exception as _map_exc:
+        logger.warning("semantic_planner.map_collapse_failed", error=str(_map_exc)[:150])
+
     # NEVER CACHE A STRUCTURALLY INVALID PLAN (D0/P0-C, I11): schema-invalid
     # input values AND invented input keys are statically detectable — a
     # plan carrying either would be replayed forever from the cache and
@@ -1839,6 +1859,91 @@ async def semantic_parser_node(
         binding_report=binding_report,
         intent_graph=intent_graph,
     )
+
+
+def _collapse_map_candidates(
+    nodes: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, list[Any]]]:
+    """P1-D MAP COLLAPSE (deterministic, post-binding): independent same-
+    capability entity instances → ONE Map node + a declared collection.
+
+    The reviewer's D48 abstraction: "one capability + multiple entity
+    instances + map-compatible operation" compiles to a Map/fan-out rather
+    than N unrelated planner decisions. Conditions (all deterministic,
+    metadata-free):
+
+    - at least 2 nodes with the SAME ``op``;
+    - identical ``depends_on`` (independent leaves — never collapse nodes
+      with differing dependencies);
+    - identical inputs EXCEPT exactly one string value (the entity
+      parameter — chicken/pasta/rice for search_meals);
+    - the varying values are the collection items.
+
+    Returns ``(collapsed_nodes, new_collections)``. Nodes that do not
+    satisfy every condition are passed through untouched.
+    """
+    if not nodes or len(nodes) < 2:
+        return nodes, {}
+    collapsed: list[dict[str, Any]] = []
+    consumed: set[int] = set()
+    collections: dict[str, list[Any]] = {}
+    seen: dict[tuple[str, tuple, frozenset], list[int]] = {}
+    for i, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            continue
+        op = str(node.get("op") or "")
+        if not op:
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        deps = tuple(sorted(str(d) for d in (node.get("depends_on") or [])))
+        key = (op, deps, frozenset(inputs.keys()))
+        seen.setdefault(key, []).append(i)
+    for key, idxs in seen.items():
+        if len(idxs) < 2:
+            continue
+        op, deps, _ = key
+        group = [nodes[i] for i in idxs]
+        varying: str | None = None
+        values: list[Any] = []
+        ok = True
+        for param in (group[0].get("inputs") or {}):
+            vals = [str((n.get("inputs") or {}).get(param, "")) for n in group]
+            if len(set(vals)) == 1:
+                continue
+            if varying is not None:
+                ok = False  # more than one varying param — not a map
+                break
+            varying = param
+            values = [(n.get("inputs") or {}).get(param) for n in group]
+        if not ok or varying is None or len(values) < 2:
+            continue
+        # Map-compatible: all varying values are distinct scalar strings.
+        if len({str(v) for v in values}) != len(values):
+            continue
+        if not all(isinstance(v, str) and v.strip() for v in values):
+            continue
+        # Build the Map node: identical inputs with the varying param
+        # replaced by the ${item} placeholder.
+        base_inputs = dict(group[0].get("inputs") or {})
+        base_inputs[varying] = "${item}"
+        map_node = {
+            "op": op,
+            "ref": str(group[0].get("ref") or f"{op}_map"),
+            "inputs": base_inputs,
+            "depends_on": list(deps),
+            "iterate_over": f"{op}_items",
+        }
+        collections[f"{op}_items"] = values
+        collapsed.append(map_node)
+        consumed.update(idxs)
+    surviving = [
+        node for i, node in enumerate(nodes)
+        if i not in consumed
+    ]
+    surviving.extend(collapsed)
+    return surviving, collections
 
 
 def _detected_intents_payload(intent_graph: Any) -> dict[str, Any] | None:

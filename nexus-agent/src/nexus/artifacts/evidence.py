@@ -160,6 +160,7 @@ class EvidenceCompiler:
         user_query: str = "",
         workflow_nodes: list[dict[str, Any]] | None = None,
         physical_nodes: dict[str, Any] | None = None,
+        collections: dict[str, list[Any]] | None = None,
     ) -> list[ResponseEvidence]:
         """Compile artifacts into entity-anchored evidence.
 
@@ -170,6 +171,10 @@ class EvidenceCompiler:
                 — the entity source of truth.
             physical_nodes: Physical node map (id → inputs) for execution_id
                 → logical-ref resolution.
+            collections: P1-D declared MapNode iteration collections — a
+                map-item artifact (``{nid}_item_{i}``) whose body iterates a
+                collection is anchored to the COLLECTION ITEM (the entity
+                — chicken/pasta/rice), not the `${item}` placeholder.
 
         Returns:
             Ordered ResponseEvidence list (one per artifact).
@@ -192,6 +197,19 @@ class EvidenceCompiler:
                 ref = str(pnode.get("symbolic_ref") or pnode.get("ref") or "")
             phys_to_ref[str(pid)] = ref
 
+        # P1-D MAP-ITEM ANCHORING: MapNode ids resolve via their symbolic
+        # ref (``{ref}_map``); item execution ids are ``{map_id}_item_{i}``.
+        # The collection the map iterates holds the per-item ENTITY.
+        collections = collections or {}
+        map_ref_by_item_prefix: dict[str, tuple[str, list[Any]]] = {}
+        for ref, node in logical_by_ref.items():
+            io_key = node.get("iterate_over") if isinstance(node, dict) else None
+            if not io_key:
+                continue
+            items = collections.get(str(io_key)) or []
+            if items:
+                map_ref_by_item_prefix[f"{ref}_map"] = (str(io_key), items)
+
         # Artifact → (entity, node) mapping, then chain-walk for entities.
         for i, art in enumerate(artifact_list):
             cap = str(getattr(art, "capability_id", "") or "")
@@ -202,12 +220,23 @@ class EvidenceCompiler:
 
             entity = _logical_node_entity(node, user_query)
             if entity is None:
-                # Walk the producer chain: depends_on refs → their inputs.
-                for dep in node.get("depends_on") or []:
-                    dep_node = logical_by_ref.get(str(dep)) or {}
-                    entity = _logical_node_entity(dep_node, user_query)
-                    if entity:
+                # P1-D: map-item artifact → the collection item IS the entity.
+                _item_match = None
+                for _prefix, (_key, _items) in map_ref_by_item_prefix.items():
+                    if exec_id.startswith(f"{_prefix}_item_"):
+                        _idx = exec_id.rsplit("_", 1)[-1]
+                        if _idx.isdigit() and int(_idx) < len(_items):
+                            _item_match = _items[int(_idx)]
                         break
+                if _item_match is not None:
+                    entity = str(_item_match)
+                else:
+                    # Walk the producer chain: depends_on refs → their inputs.
+                    for dep in node.get("depends_on") or []:
+                        dep_node = logical_by_ref.get(str(dep)) or {}
+                        entity = _logical_node_entity(dep_node, user_query)
+                        if entity:
+                            break
 
             facts = self._extract_facts(cap, data)
             evidence.append(ResponseEvidence(
