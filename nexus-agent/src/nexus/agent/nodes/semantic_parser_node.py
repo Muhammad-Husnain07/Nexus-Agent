@@ -1959,6 +1959,9 @@ async def semantic_parser_node(
     # Planner-level errors surfaced on the state patch (kept OUT of the
     # strict LogicalWorkflow dict which forbids extra keys).
     planner_errors: list[str] = []
+    # P2-A.2: map-degradation ledger (dangling iterate_over stripped to a
+    # single body) — surfaced so a lost fan-out is never invisible.
+    _planner_map_degradations: list[dict[str, Any]] = []
 
     # SANITIZE OPS: layered deterministic resolution (exact → domain →
     # alias → RapidFuzz ≥ threshold). Unresolvable ops are collected for
@@ -2086,8 +2089,10 @@ async def semantic_parser_node(
         # collection is absent (the node degrades to a single body
         # execution — never a dangling map).
         _wf_collections = parsed.get("collections") if isinstance(parsed, dict) else {}
-        nodes = _strip_dangling_maps(nodes, _wf_collections)
+        nodes, _map_degradations = _strip_dangling_maps(nodes, _wf_collections)
         parsed["nodes"] = nodes
+        if _map_degradations:
+            _planner_map_degradations = _map_degradations
     except Exception as _map_exc:
         logger.warning("semantic_planner.map_collapse_failed", error=str(_map_exc)[:150])
 
@@ -2146,21 +2151,28 @@ async def semantic_parser_node(
         invocation_budget=_bud.to_dict(),
         binding_report=binding_report,
         intent_graph=intent_graph,
+        map_degradations=_planner_map_degradations or None,
     )
 
 
 def _strip_dangling_maps(
     nodes: list[dict[str, Any]],
     collections: dict[str, Any] | None,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """P2-A.2 collections-persistence guard: every ``iterate_over`` ref
     must have a declared collection. A dangling map node (collections lost
     across a replan/chunked-merge boundary) degrades to a single body
-    execution — never a validation-failing map. Returns the pruned nodes.
+    execution — never a validation-failing map.
+
+    Returns ``(pruned_nodes, degradations)`` where each degradation is
+    ``{"node": ref, "iterate_over": key, "reason": "missing collection"}``
+    — the caller surfaces it so a lost fan-out is NEVER indistinguishable
+    from successful map execution (the reviewer's instrumentation).
     """
     if not isinstance(collections, dict):
         collections = {}
     pruned: list[dict[str, Any]] = []
+    degradations: list[dict[str, Any]] = []
     for n in nodes:
         if not isinstance(n, dict):
             pruned.append(n)
@@ -2174,8 +2186,13 @@ def _strip_dangling_maps(
             )
             n = dict(n)
             n.pop("iterate_over", None)
+            degradations.append({
+                "node": str(n.get("ref") or "?"),
+                "iterate_over": str(_io),
+                "reason": "missing collection (replan/merge boundary)",
+            })
         pruned.append(n)
-    return pruned
+    return pruned, degradations
 
 
 def _collapse_map_candidates(
@@ -2306,6 +2323,7 @@ def _build_patch(
     invocation_budget: dict | None = None,
     binding_report: dict[str, Any] | None = None,
     intent_graph: Any = None,
+    map_degradations: list[dict[str, Any]] | None = None,
 ) -> StatePatch:
     """Build a StatePatch with the LogicalWorkflow and metadata.
 
@@ -2340,6 +2358,9 @@ def _build_patch(
 
     if binding_report:
         updates["_binding_report"] = binding_report
+
+    if map_degradations:
+        updates["_map_degradations"] = map_degradations
 
     if intent_graph is not None:
         try:

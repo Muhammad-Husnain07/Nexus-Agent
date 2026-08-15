@@ -568,10 +568,18 @@ async def main() -> None:
         "failure_classes": {},
         "benchmark_contract_scenarios": [],
         "intent_accounting": {
-            "detected_avg": round(sum(r["intent_accounting"]["detected"] for r in results) / max(1, len(results)), 2),
-            "planned_avg": round(sum(r["intent_accounting"]["planned"] for r in results) / max(1, len(results)), 2),
-            "executed_avg": round(sum(r["intent_accounting"]["executed"] for r in results) / max(1, len(results)), 2),
-            "relationships_total": sum(r["intent_accounting"]["relationships"] for r in results),
+            "detected_avg": round(sum(
+                (r.get("intent_accounting") or {}).get("detected", 0) for r in results
+            ) / max(1, len(results)), 2),
+            "planned_avg": round(sum(
+                (r.get("intent_accounting") or {}).get("planned", 0) for r in results
+            ) / max(1, len(results)), 2),
+            "executed_avg": round(sum(
+                (r.get("intent_accounting") or {}).get("executed", 0) for r in results
+            ) / max(1, len(results)), 2),
+            "relationships_total": sum(
+                (r.get("intent_accounting") or {}).get("relationships", 0) for r in results
+            ),
         },
         # D10: synthesis-coverage aggregates — evidence required vs
         # rendered (generation-reliability, separated from orchestration).

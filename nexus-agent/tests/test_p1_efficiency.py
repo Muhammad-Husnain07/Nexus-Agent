@@ -377,7 +377,8 @@ def test_chunk_intent_units_preserves_dependency_pair():
 def test_collections_persistence_guard_strips_dangling_map():
     """P2-A.2: a node whose iterate_over has no declared collection (lost
     across a replan/chunked-merge boundary) degrades to a single body —
-    never a dangling map that fails validation."""
+    never a dangling map that fails validation; the degradation is
+    REPORTED (never invisible)."""
     from nexus.agent.nodes.semantic_parser_node import _strip_dangling_maps
 
     nodes = [
@@ -385,14 +386,19 @@ def test_collections_persistence_guard_strips_dangling_map():
          "iterate_over": "search_meals_items", "depends_on": []},
         {"op": "define_word", "ref": "w", "inputs": {"word": "cache"}, "depends_on": []},
     ]
-    # Collection exists -> map preserved.
-    kept = _strip_dangling_maps(nodes, {"search_meals_items": ["chicken", "pasta"]})
+    # Collection exists -> map preserved, no degradation.
+    kept, deg = _strip_dangling_maps(nodes, {"search_meals_items": ["chicken", "pasta"]})
     assert kept[0].get("iterate_over") == "search_meals_items"
-    # Collection missing (replan boundary) -> iterate_over stripped.
-    pruned = _strip_dangling_maps(nodes, {})
+    assert deg == []
+    # Collection missing (replan boundary) -> iterate_over stripped AND
+    # the degradation is reported (a lost fan-out is never invisible).
+    pruned, deg2 = _strip_dangling_maps(nodes, {})
     assert "iterate_over" not in pruned[0]
     assert pruned[0]["op"] == "search_meals"
-    assert pruned[1]["op"] == "define_word"
+    assert len(deg2) == 1
+    assert deg2[0]["node"] == "m"
+    assert deg2[0]["iterate_over"] == "search_meals_items"
+    assert "missing collection" in deg2[0]["reason"]
 
 
 def test_chunk_intent_units_empty():

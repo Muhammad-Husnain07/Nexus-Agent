@@ -368,6 +368,7 @@ _EPHEMERAL_FIELDS: list[str] = [
     "_binding_report",
     "_detected_intents",
     "_response_status",
+    "_map_degradations",
     "_ready_to_plan",
     "_needs_clarification",
     "_clarification_asked",
@@ -537,6 +538,10 @@ class AgentState(TypedDict, total=False):
     # P0-C: structured intent decomposition (goals/entities/relationships —
     # the reviewer's DetectedIntentGraph) — the coverage check consumes it.
     _detected_intents: dict[str, Any]
+
+    # P2-A.2: map-degradation ledger (dangling iterate_over stripped to a
+    # single body — a lost fan-out is never invisible).
+    _map_degradations: list[dict[str, Any]]
 
     # P1-B: explicit terminal response status (SUCCESS / PARTIAL_SUCCESS /
     # CLARIFICATION_REQUIRED / EXECUTION_FAILED / PLANNING_FAILED) — an
