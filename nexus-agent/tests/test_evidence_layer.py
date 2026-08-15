@@ -236,8 +236,47 @@ def test_grounding_detects_hallucinated_numeric_fact_case_c():
     assert not cov.complete
 
 
+def test_grounding_hallucination_breaks_completeness_at_full_ratio():
+    """PH-2 (Class C): hallucinated_evidence must affect the outcome even
+    when every required fact is represented (ratio 1.0) — completeness is
+    never granted on a response that invents values."""
+    evidence = [_ev("get_current_weather", "lahore", [("temperature", 32)])]
+    req = [type("E", (), {"canonical_name": "Lahore", "entity_id": "lahore", "aliases": []})()]
+    cov = GroundingValidator(user_query="weather in Lahore").check(
+        "Lahore: temperature is 32 degrees, but also 99 degrees at night.",
+        evidence, req,
+    )
+    assert cov.coverage_ratio >= 0.999  # required facts all represented
+    assert cov.hallucinated_evidence  # 99 is held by no evidence
+    assert not cov.complete  # hallucination invalidates completeness
+
+
+def test_evidence_compile_fails_closed_on_exception():
+    """PH-2 (Class A): an EvidenceCompiler exception must surface as the
+    (None, None) sentinel — never as silently-empty evidence that the
+    grounding gate would read as 'nothing missing' (coverage 1.0)."""
+    import nexus.agent.nodes.response as rn
+    import nexus.artifacts.evidence as ev_mod
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("evidence compiler exploded")
+
+    state = {
+        "messages": [{"role": "user", "content": "weather in Lahore"}],
+        "_logical_workflow": {"nodes": []},
+        "_execution_graph": {"nodes": {}},
+        "_detected_intents": None,
+    }
+    orig = ev_mod.EvidenceCompiler
+    ev_mod.EvidenceCompiler = type("BoomCompiler", (), {"compile": _boom})  # type: ignore
+    try:
+        evidence, required = rn._evidence_compile(state, ["artifact"])
+    finally:
+        ev_mod.EvidenceCompiler = orig
+    assert evidence is None and required is None
+
+
 def test_grounding_query_tainted_scalar_earns_no_credit():
-    # "Lahore" appears in the user query — echoing it is not evidence.
     evidence = [_ev("geocode_location", "lahore", [("display_name", "Lahore, Pakistan")])]
     req = [type("E", (), {"canonical_name": "Lahore", "entity_id": "lahore", "aliases": []})()]
     cov = GroundingValidator(user_query="Find the coordinates of Lahore").check(

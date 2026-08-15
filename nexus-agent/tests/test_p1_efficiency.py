@@ -136,6 +136,53 @@ def test_conversational_no_output_is_not_failure():
     monkeypatch.undo()
 
 
+def test_response_evidence_compile_failure_fails_closed():
+    """PH-2 (Class A): when evidence compilation fails, the response must
+    NEVER claim SUCCESS/coverage-1.0 — coverage 0.0, PARTIAL_SUCCESS, and a
+    breakdown showing available < required."""
+    import asyncio
+
+    from nexus.agent.nodes import response as rn
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(rn, "_evidence_compile", lambda *a, **k: (None, None))
+    monkeypatch.setattr(
+        rn,
+        "_compile_and_render",
+        lambda *a, **k: _async_result((None, [{"role": "user", "content": "ctx"}])),
+    )
+    monkeypatch.setattr(rn, "get_artifact_graph", lambda sid: type(
+        "G", (), {"all": lambda self: ["artifact1"]}
+    )())
+    monkeypatch.setattr(rn, "_last_user_message", lambda state: "weather in Lahore")
+    monkeypatch.setattr(rn, "_synthesis_incorporates_data", lambda *a, **k: True)
+    monkeypatch.setattr(rn, "_synthesis_covers_each_artifact", lambda *a, **k: True)
+    monkeypatch.setattr(rn, "_is_degenerate", lambda *a, **k: False)
+
+    class _FakeLLM:
+        async def complete(self, model=None, messages=None, **kw):  # noqa: ARG002
+            return type("R", (), {
+                "failed": False,
+                "content": "The weather in Lahore is 32 degrees.",
+                "error": None,
+            })()
+
+    state = _state()
+    state["_logical_workflow"] = {"nodes": [{"op": "get_current_weather", "ref": "w"}]}
+    out = asyncio.run(rn.response_node(state, _FakeLLM(), "model"))
+    assert out["_response_status"] == "PARTIAL_SUCCESS"
+    assert out["_response_coverage"] == 0.0
+    bd = out.get("_response_coverage_breakdown") or {}
+    assert bd.get("evidence_compile_failed") is True
+    assert bd.get("evidence_required", 0) >= 1
+    assert bd.get("evidence_available", 1) == 0  # available < required
+    monkeypatch.undo()
+
+
+async def _async_result(value):  # type: ignore[no-untyped-def]
+    return value
+
+
 def test_response_status_machine_is_total():
     """PH-1: every ResponseNode exit stamps exactly one status — the status
     machine must never leave _response_status at None. AST-level guard:

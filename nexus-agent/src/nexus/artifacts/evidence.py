@@ -105,7 +105,14 @@ class GroundingCoverage(BaseModel):
 
     @property
     def complete(self) -> bool:
-        return self.coverage_ratio >= 0.999 and not self.required_entities_missing
+        """Grounding is complete only when every required entity and evidence
+        item is represented AND no hallucinated values were detected (PH-2:
+        hallucinated_evidence must affect the outcome, never just the log)."""
+        return (
+            self.coverage_ratio >= 0.999
+            and not self.required_entities_missing
+            and not self.hallucinated_evidence
+        )
 
 
 def _entity_from_inputs(inputs: dict[str, Any] | None, user_query: str = "") -> str | None:

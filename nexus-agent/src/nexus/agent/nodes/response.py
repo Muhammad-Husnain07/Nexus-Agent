@@ -282,7 +282,13 @@ def _synthesis_fallback_patch(
     # the raw payloads.
     try:
         _ev_list, _req_entities = _evidence_compile(state, artifact_list)
-        _anchored = _evidence_renderer(_ev_list, _req_entities)
+        # PH-2: sentinel-safe — a compile failure falls back to the generic
+        # renderer (the anchored render is a bonus, not a requirement).
+        _anchored = (
+            _evidence_renderer(_ev_list, _req_entities)
+            if _ev_list is not None
+            else ""
+        )
         if _anchored:
             text = _anchored
     except Exception:
@@ -298,16 +304,17 @@ def _synthesis_fallback_patch(
     _breakdown: dict[str, Any] = {}
     try:
         _ev, _req = _evidence_compile(state, artifact_list)
-        _g = _grounding_coverage(final, _ev, _req, _last_user_message(state))
-        if _g is not None:
-            _breakdown = {
-                "evidence_required": len(_ev),
-                "evidence_available": len(_ev),
-                "evidence_rendered": _g.represented_facts,
-                "entities_required": len(_req),
-                "entities_rendered": len(_req) - len(_g.required_entities_missing),
-                "renderer_fallback": True,
-            }
+        if _ev is not None:
+            _g = _grounding_coverage(final, _ev, _req, _last_user_message(state))
+            if _g is not None:
+                _breakdown = {
+                    "evidence_required": len(_ev),
+                    "evidence_available": len(_ev),
+                    "evidence_rendered": _g.represented_facts,
+                    "entities_required": len(_req),
+                    "entities_rendered": len(_req) - len(_g.required_entities_missing),
+                    "renderer_fallback": True,
+                }
     except Exception:
         _breakdown = {}
     return {
@@ -538,6 +545,12 @@ async def response_node(
     # evidence packet is injected into the synthesis prompt; the grounding
     # gate below proves required ⊆ represented.
     _evidence_list, _required_entities = _evidence_compile(state, artifact_list)
+    # PH-2: a compile failure is a typed condition, never silent empty
+    # evidence — the coverage metric fails closed below (no SUCCESS on
+    # unverifiable grounding).
+    _evidence_compile_failed = _evidence_list is None
+    if _evidence_compile_failed:
+        _evidence_list, _required_entities = [], []
     _evidence_packet = _evidence_packet_text(_evidence_list, _required_entities)
     if _evidence_packet and isinstance(compiled_messages, list) and compiled_messages:
         _last_msg = dict(compiled_messages[-1])
@@ -744,12 +757,18 @@ async def response_node(
         final, _evidence_list, _required_entities, _user_query
     )
     if _grounding is not None and (
-        _grounding.required_entities_missing or _grounding.missing_evidence
+        _grounding.required_entities_missing
+        or _grounding.missing_evidence
+        # PH-2: hallucinated values (numbers absent from the evidence) also
+        # fail the gate — repair asks the model to stick to the evidence;
+        # if it cannot, the deterministic renderer takes over.
+        or _grounding.hallucinated_evidence
     ):
         logger.warning(
             "response_node.grounding_missing",
             entities=_grounding.required_entities_missing[:5],
             evidence=_grounding.missing_evidence[:5],
+            hallucinated=_grounding.hallucinated_evidence[:5],
             ratio=_grounding.coverage_ratio,
         )
         _repaired = await _evidence_repair(
@@ -767,6 +786,7 @@ async def response_node(
             if _grounding_after is not None and not (
                 _grounding_after.required_entities_missing
                 or _grounding_after.missing_evidence
+                or _grounding_after.hallucinated_evidence
             ):
                 final = _repaired
                 logger.info("response_node.grounding_repaired")
@@ -776,6 +796,7 @@ async def response_node(
             _grounding_after is not None and not (
                 _grounding_after.required_entities_missing
                 or _grounding_after.missing_evidence
+                or _grounding_after.hallucinated_evidence
             )
         )):
             _deterministic = _evidence_renderer(_evidence_list, _required_entities)
@@ -788,30 +809,42 @@ async def response_node(
                 )
 
     # P0-D coverage metric on the returned response (benchmark
-    # instrumentation: evidence_coverage / render_coverage).
+    # instrumentation: evidence_coverage / render_coverage). PH-2
+    # FAIL-CLOSED: an evidence-compilation failure (sentinel) or a
+    # grounding-validator exception means grounding was NOT verified —
+    # coverage is 0.0, never a defaulted 1.0 (no SUCCESS on unverifiable
+    # grounding).
     _grounding_final = _grounding_coverage(
         final, _evidence_list, _required_entities, _user_query
     )
     _response_coverage = 1.0
-    if _grounding_final is not None:
+    if _evidence_compile_failed:
+        _response_coverage = 0.0
+    elif _grounding_final is not None:
         _response_coverage = _grounding_final.coverage_ratio
+    elif artifact_list and _evidence_list:
+        logger.error("response_node.grounding_check_failed")
+        _response_coverage = 0.0
     # D10 coverage breakdown (the reviewer's generation-reliability
     # split): evidence_required / evidence_available / evidence_rendered
     # / entities_required / entities_rendered — distinguishes EvidenceCompiler
-    # loss (available < required) from Nemotron generation loss (rendered <
-    # available) from repair/fallback. Rides the response state for the
-    # benchmark + observability.
+    # loss (available < required, Class A) from Nemotron generation loss
+    # (rendered < available, Class B) from repair/fallback. Rides the
+    # response state for the benchmark + observability. PH-2: required is
+    # the artifact count (every artifact demands evidence), so a compile
+    # failure is visible as available < required.
     _coverage_breakdown = {
-        "evidence_required": len(_evidence_list),
+        "evidence_required": len(artifact_list),
         "evidence_available": len(_evidence_list),
         "evidence_rendered": (
-            _grounding_final.represented_facts if _grounding_final is not None else len(_evidence_list)
+            _grounding_final.represented_facts if _grounding_final is not None else 0
         ),
         "entities_required": len(_required_entities),
         "entities_rendered": (
             len(_required_entities) - len(_grounding_final.required_entities_missing)
-            if _grounding_final is not None else len(_required_entities)
+            if _grounding_final is not None else 0
         ),
+        "evidence_compile_failed": bool(_evidence_compile_failed),
     }
     # P1-B response-status state machine: SUCCESS / PARTIAL_SUCCESS /
     # CLARIFICATION_REQUIRED / EXECUTION_FAILED / PLANNING_FAILED — the
@@ -929,8 +962,13 @@ def _evidence_compile(state: AgentState, artifact_list: list[Any]) -> tuple[list
         )
         return evidence, required
     except Exception as exc:
-        logger.warning("response_node.evidence_compile_failed", error=str(exc)[:150])
-        return [], []
+        # PH-2 FAIL-CLOSED: an evidence-compilation exception must NEVER
+        # degrade into "empty evidence" (which the grounding gate would read
+        # as "nothing missing" and the coverage metric as 1.0). The caller
+        # treats the (None, None) sentinel as EVIDENCE_COMPILATION_FAILED:
+        # coverage 0.0, PARTIAL_SUCCESS, available < required.
+        logger.error("response_node.evidence_compile_failed", error=str(exc)[:150])
+        return None, None
 
 
 def _evidence_packet_text(evidence: list[Any], required_entities: list[Any]) -> str:
