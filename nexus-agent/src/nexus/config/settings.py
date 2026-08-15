@@ -442,6 +442,16 @@ class AgentSettings(BaseModel):
         le=3600,
         description="TTL in seconds for the per-session run lock (heartbeat renews every ttl/3)",
     )
+    # PH-3: an approval checkpoint expires after this many seconds — the
+    # live resume path re-requests approval instead of honoring a stale
+    # decision (the operation-hash binding covers content drift; expiry
+    # covers time drift).
+    approval_expiry_s: int = Field(
+        default=3600,
+        ge=60,
+        le=86400 * 7,
+        description="Approval checkpoints older than this expire and require a fresh decision",
+    )
     max_planning_tools: int = Field(
         default=10, ge=1, le=50, description="Max tools passed to planner"
     )

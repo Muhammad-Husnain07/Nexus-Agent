@@ -3,6 +3,10 @@
 The orchestrator hands heavy work to the task queue (Redis Streams) and the
 ``nexus-worker`` process; this router is the control plane: enqueue new
 tasks, watch progress, and manage lifecycle.
+
+PH-3 tenant scoping: a task created under a session is addressable only by
+the session's owner (same boundary as chat/memory). Session-less tasks
+(operator/system) remain open.
 """
 
 from __future__ import annotations
@@ -11,11 +15,12 @@ import uuid
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from nexus.providers.queue.base import TaskQueue
 from nexus.providers.queue.redis_streams import RedisStreamsQueue
+from nexus.security.ownership import accessible_session_ids
 from nexus.tasks.registry import TaskRegistry
 
 logger = structlog.get_logger("nexus.api.tasks")
@@ -42,10 +47,32 @@ async def _queue() -> TaskQueue:
     return RedisStreamsQueue()
 
 
+async def _task_accessible(request: Request, task: dict[str, Any] | None) -> bool:
+    """PH-3: a session-bound task is visible only to the session's owner.
+
+    Session-less tasks (system/operator, legacy rows) stay open — the same
+    posture the session layer uses for legacy NULL-owner rows.
+    """
+    if not task:
+        return False
+    session_id = task.get("session_id")
+    if not session_id:
+        return True
+    try:
+        accessible = await accessible_session_ids(request)
+        return uuid.UUID(str(session_id)) in accessible
+    except Exception:
+        return False
+
+
 @router.post("", status_code=201)
-async def create_task(body: TaskCreate) -> dict[str, Any]:
+async def create_task(body: TaskCreate, request: Request) -> dict[str, Any]:
     """Create a task record and enqueue it (or schedule it)."""
     from datetime import UTC, datetime
+
+    if body.session_id:
+        if not await _task_accessible(request, {"session_id": body.session_id}):
+            raise HTTPException(status_code=403, detail="Session not accessible")
 
     next_run = None
     if body.next_run_at:
@@ -95,29 +122,39 @@ async def create_task(body: TaskCreate) -> dict[str, Any]:
 
 @router.get("")
 async def list_tasks(
+    request: Request,
     status: str | None = None,
     task_type: str | None = None,
     limit: int = 50,
 ) -> dict[str, Any]:
-    """List tasks with optional filters."""
+    """List tasks with optional filters (PH-3: session-scoped)."""
     registry = await _registry()
     tasks = await registry.list(status=status, task_type=task_type, limit=min(limit, 200))
-    return {"tasks": tasks, "count": len(tasks)}
+    visible = [t for t in tasks if await _task_accessible(request, t)]
+    return {"tasks": visible, "count": len(visible)}
 
 
-@router.get("/{task_id}")
-async def get_task(task_id: str) -> dict[str, Any]:
-    """Get a single task by id."""
+async def _owned_task(request: Request, task_id: str) -> dict[str, Any]:
+    """Fetch a task and enforce tenant access (PH-3)."""
     registry = await _registry()
     task = await registry.get(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
+    if not await _task_accessible(request, task):
+        raise HTTPException(status_code=403, detail="Task not accessible")
     return task
 
 
+@router.get("/{task_id}")
+async def get_task(task_id: str, request: Request) -> dict[str, Any]:
+    """Get a single task by id."""
+    return await _owned_task(request, task_id)
+
+
 @router.post("/{task_id}/pause")
-async def pause_task(task_id: str) -> dict[str, Any]:
+async def pause_task(task_id: str, request: Request) -> dict[str, Any]:
     """Pause a task (worker stops advancing it)."""
+    await _owned_task(request, task_id)
     registry = await _registry()
     task = await registry.pause(task_id)
     if task is None:
@@ -126,8 +163,9 @@ async def pause_task(task_id: str) -> dict[str, Any]:
 
 
 @router.post("/{task_id}/resume")
-async def resume_task(task_id: str) -> dict[str, Any]:
+async def resume_task(task_id: str, request: Request) -> dict[str, Any]:
     """Resume a paused task (re-enqueues for worker pickup)."""
+    await _owned_task(request, task_id)
     registry = await _registry()
     task = await registry.resume(task_id)
     if task is None:
@@ -138,8 +176,9 @@ async def resume_task(task_id: str) -> dict[str, Any]:
 
 
 @router.post("/{task_id}/cancel")
-async def cancel_task(task_id: str) -> dict[str, Any]:
+async def cancel_task(task_id: str, request: Request) -> dict[str, Any]:
     """Request cancellation — the worker checks the flag between steps."""
+    await _owned_task(request, task_id)
     registry = await _registry()
     task = await registry.request_cancel(task_id)
     if task is None:

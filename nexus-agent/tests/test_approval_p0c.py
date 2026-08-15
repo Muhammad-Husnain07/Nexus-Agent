@@ -181,3 +181,53 @@ class TestC2ApprovalBinding:
         hash_b = result_b["_approval_pending"]["operation_hash"]
         assert hash_a != hash_b
 
+
+class TestApprovalLifecyclePh3:
+    """PH-3: approval expiry + denied-tools source of truth."""
+
+    def test_pending_approval_expires_after_window(self):
+        import time as _time
+
+        from nexus.agent.nodes.approval_checkpoint_resume_node import _approval_expired
+
+        pending = {"requested_at": _time.time() - 4000}  # > default 3600s window
+        assert _approval_expired(pending) is True
+
+    def test_pending_approval_within_window_not_expired(self):
+        import time as _time
+
+        from nexus.agent.nodes.approval_checkpoint_resume_node import _approval_expired
+
+        pending = {"requested_at": _time.time() - 100}  # well inside the window
+        assert _approval_expired(pending) is False
+
+    def test_missing_or_invalid_timestamp_never_expires(self):
+        from nexus.agent.nodes.approval_checkpoint_resume_node import _approval_expired
+
+        assert _approval_expired({}) is False
+        assert _approval_expired({"requested_at": "nope"}) is False
+        assert _approval_expired({"requested_at": 0}) is False
+
+    def test_denied_tools_reads_live_pending_field(self):
+        """The reject-blocks-graph rule must read _approval_pending (the
+        LIVE checkpoint) — the legacy _approval_checkpoint key is never
+        written, so reading it alone made the denied set always empty."""
+        from nexus.agent.nodes.approval_checkpoint_resume_node import _checkpoint_denied_tools
+
+        snapshot = {
+            "_approval_pending": {
+                "tools": ["delete_users", "purge_logs"],
+                "operation_hash": "abc",
+            },
+            "_approval_checkpoint": {"tools": ["delete_users"]},
+        }
+        denied = _checkpoint_denied_tools(snapshot)
+        assert denied == {"delete_users", "purge_logs"}
+
+    def test_denied_tools_legacy_fallback(self):
+        from nexus.agent.nodes.approval_checkpoint_resume_node import _checkpoint_denied_tools
+
+        assert _checkpoint_denied_tools({}) == set()
+        legacy = {"_approval_checkpoint": {"tools": ["echo_bookmark"]}}
+        assert _checkpoint_denied_tools(legacy) == {"echo_bookmark"}
+

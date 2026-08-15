@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexus-worker
+  labels:
+    app: nexus-worker
+spec:
+  # PH-3: the background-task worker is a first-class component — without
+  # it, enqueued tasks (workflow_run handoff beyond the 15s threshold,
+  # scheduled jobs) stay queued forever. Scale for throughput; the DB
+  # task lease + Redis Streams XCLAIM make concurrent workers safe.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nexus-worker
+  template:
+    metadata:
+      labels:
+        app: nexus-worker
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: worker
+          image: nexus-agent:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "nexus.tasks"]
+          envFrom:
+            - configMapRef:
+                name: nexus-config
+            - secretRef:
+                name: nexus-secrets
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          # No HTTP probes: the worker has no network listener; liveness is
+          # the process itself (restartPolicy Always covers crashes).

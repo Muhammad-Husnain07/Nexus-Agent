@@ -44,6 +44,27 @@ async def approval_checkpoint_resume_node(
         # Nothing pending — fall through to the router
         return StatePatch(version=ctx.version + 1, updates={})
 
+    # PH-3 APPROVAL EXPIRY: an approval left open past its expiry window
+    # (operation-hash binding covers content drift; this covers time
+    # drift) must NEVER be honored — require a fresh decision.
+    if _approval_expired(pending):
+        logger.warning(
+            "approval_checkpoint.expired",
+            requested_at=pending.get("requested_at"),
+        )
+        return StatePatch(version=ctx.version + 1, updates={
+            "_approval_pending": None,
+            "_approval_checkpoint_context": None,
+            "_approval_modification": None,
+            "_needs_approval": False,
+            "_routing_decision": "finalize",
+            "final_response": (
+                "The approval request has expired — nothing was executed. "
+                "Please send your request again."
+            ),
+            "response_type": "cancellation",
+        })
+
     intent = await _classify_approval_reply(llm, model, user_msg, pending)
 
     if intent == "approve":
@@ -171,10 +192,39 @@ def _last_user_message(snapshot: dict[str, Any]) -> str:
 
 
 def _checkpoint_denied_tools(snapshot: dict[str, Any]) -> set[str]:
-    """Tools named in the pending approval checkpoint (the denied set)."""
+    """Tools named in the pending approval checkpoint (the denied set).
+
+    PH-3: the LIVE pending decision lives in ``_approval_pending`` (the
+    gate's conversational checkpoint) — the legacy ``_approval_checkpoint``
+    field is never written. Reads the live field first, then the legacy
+    key for compatibility.
+    """
+    pending = snapshot.get("_approval_pending") or {}
     checkpoint = snapshot.get("_approval_checkpoint") or {}
-    tools = checkpoint.get("tools") if isinstance(checkpoint, dict) else None
+    tools = (
+        pending.get("tools")
+        if isinstance(pending, dict)
+        else None
+    )
+    if not tools and isinstance(checkpoint, dict):
+        tools = checkpoint.get("tools")
     return {str(t) for t in (tools or []) if t}
+
+
+def _approval_expired(pending: dict[str, Any]) -> bool:
+    """PH-3: is the pending approval older than the expiry window?"""
+    requested_at = pending.get("requested_at")
+    if not isinstance(requested_at, (int, float)) or requested_at <= 0:
+        return False
+    try:
+        from nexus.config.settings import get_settings
+
+        expiry_s = float(get_settings().agent.approval_expiry_s)
+    except Exception:
+        return False
+    import time as _time
+
+    return (_time.time() - float(requested_at)) > expiry_s
 
 
 def _denial_blocks_graph(graph: dict[str, Any] | None, denied: set[str]) -> bool:

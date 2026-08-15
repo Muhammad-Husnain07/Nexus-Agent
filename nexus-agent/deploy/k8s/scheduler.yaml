@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexus-scheduler
+  labels:
+    app: nexus-scheduler
+spec:
+  # PH-3: standalone scheduler — advances cron/one-shot scheduled tasks
+  # (tasks/scheduler_cli.py) and the in-process memory/outbox maintenance
+  # scheduler runs inside the API process. Exactly one scheduler should
+  # tick; keep replicas at 1 (the task claim is atomic, but cron advance
+  # is designed for a single ticker).
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nexus-scheduler
+  template:
+    metadata:
+      labels:
+        app: nexus-scheduler
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: scheduler
+          image: nexus-agent:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "nexus.tasks.scheduler_cli"]
+          envFrom:
+            - configMapRef:
+                name: nexus-config
+            - secretRef:
+                name: nexus-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
