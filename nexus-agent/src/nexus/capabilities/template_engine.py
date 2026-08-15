@@ -238,38 +238,6 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     return max(0.0, min(1.0, dot / (na * nb)))
 
 
-def _fuzzy_match(query: str, pattern: str) -> bool:
-    """Fuzzy match a trigger pattern against a user query.
-
-    Uses RapidFuzz ``token_set_ratio`` — the standard multi-token overlap
-    scorer (a pattern like ``"create report export"`` matches
-    ``"I want to create a report and export it"``). Threshold is the
-    configured resolver fuzzy threshold (default 95) so template matching
-    and capability resolution share one consistent bar.
-    """
-    if not pattern or not query:
-        return False
-    try:
-        from rapidfuzz import fuzz
-
-        from nexus.config.settings import get_settings as _tpl_settings
-
-        threshold = 95.0
-        try:
-            threshold = float(_tpl_settings().resolver.fuzzy_threshold)
-        except Exception:
-            threshold = 95.0
-        score = fuzz.token_set_ratio(query.lower(), pattern.lower())
-        return score >= threshold
-    except Exception:
-        # Fallback: token-overlap boolean (never raises).
-        pattern_tokens = set(pattern.split())
-        query_tokens = set(query.split())
-        if not pattern_tokens:
-            return False
-        matches = pattern_tokens & query_tokens
-        return len(matches) / len(pattern_tokens) >= 0.5  # noqa: PLR2004
-
 
 async def expand_template_chain(
     chain: list[dict[str, Any]],

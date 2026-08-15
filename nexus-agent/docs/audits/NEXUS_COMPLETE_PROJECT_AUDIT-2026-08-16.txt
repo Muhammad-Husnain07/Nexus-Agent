@@ -1,0 +1,1485 @@
+================================================================================
+NEXUS COMPLETE PROJECT AUDIT
+================================================================================
+AUDIT DATE: 2026-08-16
+GIT COMMIT: 1cce15916c254a06873000cc0690ccdd49670fbb
+BRANCH: main
+REPOSITORY: C:\Users\Muhammad Husnain\Desktop\Nexus-Agentic-AI
+AUDITOR: AI audit agent (read-only; no files modified)
+WORKTREE STATUS: clean except untracked "registered_tools.txt" (generated tool
+  dump from 2026-08-11, not part of the repo)
+METHOD: deep source inspection of src/, tests/, scripts/, frontend/, deploy/,
+  config; claims cite file:line; statuses use the mandated classifications
+  (IMPLEMENTED / PARTIALLY IMPLEMENTED / DEAD CODE / UNWIRED CODE /
+  DUPLICATED CODE / TEST-ONLY / CONFIG-ONLY / DOCUMENTED BUT MISSING /
+  WORKING BUT FRAGILE / UNKNOWN / NOT VERIFIED FROM REPOSITORY).
+
+================================================================================
+1. PROJECT STRUCTURE
+================================================================================
+Monorepo: python backend (nexus-agent/) + React frontend (frontend/) + root
+assets (Makefile, README.md, SECURITY.md, .env, .github/workflows/ci.yml,
+tests/ [orphaned root-level], registered_tools.txt).
+
+LANGUAGES: Python 3.12 (requires-python >=3.12; pyproject.toml), TypeScript
+(frontend; react 19.2.7, TS ~6.0.2).
+FRAMEWORKS: FastAPI >=0.115, LangGraph 1.x, Pydantic v2, SQLAlchemy 2.0 async
+(asyncpg), Alembic, LiteLLM >=1.50, instructor >=1.3, pgvector, Redis,
+tenacity, structlog, OpenTelemetry SDK, LangSmith dep present.
+RUNTIME: uvicorn (async); worker: `python -m nexus.tasks` / scheduler_cli
+(separate process, NOT started by the API process).
+PACKAGE MANAGERS: uv (backend), npm (frontend).
+APPLICATION ENTRYPOINTS:
+  - API: uvicorn nexus.main:create_app --factory (Dockerfile:64; AGENTS.md)
+  - CLI: `nexus` = nexus.compiler.registry_compiler:main (pyproject.toml:128)
+  - Worker: python -m nexus.tasks (tasks/__main__.py) — NO [project.scripts]
+    entry; deployment-dependent.
+  - Scheduler: python -m nexus.tasks.scheduler_cli; in-process maintenance
+    scheduler started in lifespan (api/main.py:215-218).
+API ENTRYPOINTS: /api/v1 (routes.py:15-26) — sessions, chat (SSE+JSON), tools,
+memory, projects, tasks, workflows, long-running, learning, notifications,
+state; /mcp (SSE, FastApiMCP); /healthz /readyz; WS /sessions/{id}/ws.
+WORKER/BACKGROUND: tasks/worker.py + registry.py (DB-lease claim/heartbeat) +
+providers/queue/redis_streams.py (XADD/XREADGROUP/XCLAIM) + tasks/scheduler.py
++ api/tasks.py control plane; background handoff in executor_node
+(agent/graph.py:750-816) via ExecutionRequest (execution/lifecycle.py).
+DATABASE: PostgreSQL 16 + pgvector (27 alembic revisions, head
+c2d3e4f5a6b7; single linear chain).
+CACHE: Redis (nexus:cache:* keys, ParseCache/PlanCache dual Redis+memory) +
+Redis rate limiter + per-session run lock (lock:agent_run:{sid}).
+QUEUES: Redis Streams (queue adapter exists; nothing selects queue.provider
+config — worker hard-wired to redis_streams).
+VECTOR/EMBEDDING: Tool.embedding VECTOR(4096), Memory.embedding VECTOR(4096),
+WorkflowDefinition.embedding; HNSW index migration conditional on dims <=2000;
+resolver embedding retrieval flag-gated OFF (D10 verdict); memory semantic
+search fully live regardless.
+EXTERNAL APIS: mock servers (scripts/web_search_server.py, mock_server.py)
+for seeded demo tools; demo tools hit external public APIs (pokeapi,
+Open-Meteo, anime/manga DBs, meal DB, etc.).
+LLM PROVIDERS: NVIDIA NIM (production; nemotron-3-ultra-550b-a55b),
+Ollama (embeddings/dev), OpenAI/other via LiteLLM; provider registry in
+llm/provider.py.
+CONFIGURATION: pydantic-settings, env_prefix NEXUS_, nested delimiter "__",
+extra="ignore" (settings.py:997-1004); .env + .env.example; large dead-config
+surface (section 28).
+TEST INFRASTRUCTURE: 64 test files (~630 test functions) + 29 scenario YAMLs
++ golden snapshots + stability_score.py + scripts/run_benchmark.py.
+BENCHMARK INFRASTRUCTURE: scripts/run_benchmark.py (135 scenarios in
+benchmark_scenarios_part{1,2,3}.py) + tests/scenarios/*.yaml runner.
+SCRIPTS: ~50 scripts (seed_registry, register_*_tools, mock servers,
+setup/dev helpers, fix_* scripts, torture_suite, comprehensive_test, etc.).
+MIGRATIONS: 27 alembic revisions (section 2f inventory).
+DEPLOYMENT: docker/Dockerfile + docker-compose(.override).yml (backend,
+frontend nginx, postgres+pgvector, redis, optional ollama, migrate job only
+under profiles); deploy/k8s/ (deployment/hpa/pdb/ingress/service/configmap/
+secret/network-policy/migration-job).
+CI/CD: root .github/workflows/ci.yml (backend lint+test, frontend build; has
+broken steps — section 23); nexus-agent/.github/workflows/ci.yml is DEAD
+(GitHub only reads root workflows).
+OBSERVABILITY: structlog JSON, OpenTelemetry spans (no-op without endpoint),
+invocation_outcomes table (OUTCOME_VERSION=3), execution_events append-only
+table, ToolExecution rows, EWMA reliability, SSE events, Redis pub/sub
+(publish-only), transactional outbox (external consumers), audit log.
+
+================================================================================
+2. ARCHITECTURE RECONSTRUCTION (from code)
+================================================================================
+ACTUAL END-TO-END PATH (verified from graph.py routing + node implementations):
+
+USER REQUEST
+ -> POST /sessions/{sid}/chat (api/chat.py:120) — SSE default
+ -> AgentRunner.invoke (agent/runner.py:338): checkpoint load + contract
+    check (388-409), terminal-abnormal reset, ephemeral clear, initial state
+    build, Redis lock (558-570), ReasoningBudget (582-595), astream
+    stream_mode="updates" (605)
+ -> RouterNode (agent/router.py:348 node_classify_query -> classify_query
+    :506; heuristic + LLM fallback; sets _query_type/_goals/...)
+ -> route_after_router (graph.py:219): reject/approval-pending/workflow/
+    needs_requirements/conversation/information/action
+ -> SemanticPlannerNode (nodes/semantic_parser_node.py:1580): intent
+    decomposition (Tier-1 deterministic + Tier-2 LLM rare, :1641-1681),
+    capability fetch+engine resolve (:1687-1690), ParseCache (replan
+    bypass), single-shot instructor extract / json fallback (3 attempts,
+    :1960-1989), P1-C repair (:1997-2052), chunked mega-DAG pre-check
+    (:1931-1954), sanitize/repair ops, binder bind_parameters
+    (:2153-2163), map collapse (:2181), dangling-map strip (:2200), cache
+    write (:2214)
+ -> PlanValidatorNode (nodes/plan_validator_node.py:125): engine scores,
+    semantic filter, 12+ check classes (section 9), DROP_AND_PROCEED
+    (:263-289), bounded replan loop (:291-363), cache gatekeeper (:232)
+ -> route_after_plan_validator: proceed -> CompilerNode
+ -> CompilerNode (nodes/compiler_node.py:50): PlanCache, Compiler.compile
+    (codegen.py:219): RESOLVE() producer synthesis (:64-216), Kahn waves
+    (:367-406), implicit deps (:408-461), map collapse (:302-325)
+ -> route_after_compiler: OptimizerNode (7 dynamic passes) or EstimatorNode
+    bypass (<=3 nodes)
+ -> EstimatorNode (nodes/estimator_node.py:23): cost/latency, strategy,
+    background decision (threshold 15s)
+ -> ValidationNode -> route_after_validation -> ApprovalGateNode
+    (multi_approval_gate_node; operation-hash binding; conversational
+    checkpoint) or RequirementCollectorNode
+ -> ExecutorNode (agent/graph.py:725): map fan-out expansion (:834-902),
+    wave rebuild (:821), ConcurrentExecutor.execute (concurrent_executor.py
+    :457): waves sequential, tasks parallel, per-domain semaphores,
+    placeholder resolution, idempotency ledger claim/replay (:918-996),
+    artifact cache (:1252-1375), retries only for idempotent tools
+ -> route_after_executor: all success -> ResponseNode; else AggregatorNode
+    -> ValidatorNode -> RecoveryManagerNode -> ReflectionNode (retry,
+    default max_reflection_retries=0 -> finalize) | ReplanNode ->
+    SemanticPlannerNode | ResponseNode
+ -> ResponseNode (nodes/response.py:323): artifact graph, evidence compile
+    (:517-530), synthesis (finalize v4.1 pipeline, synthesis_model),
+    coverage guards, degenerate retries, grounding gate + one repair,
+    deterministic renderer fallback (_evidence_renderer), _response_status
+ -> MemoryHelperNode (memory_helper_node.py:85): gated persistence
+ -> Runner finalization: _invocation_status COMPLETED, outcome persistence
+    (runner.py:777-787), lock release, SSE translation
+
+COMPONENT MAP (component -> files -> classification):
+- API layer: api/*.py — IMPLEMENTED (auth default none; ownership partial)
+- Request/session layer: sessions/*, api/chat.py, websocket — IMPLEMENTED
+- Router/classifier: agent/router.py, nodes/router_node — IMPLEMENTED
+- Intent detector: planners/intent_detector.py (Tier-1), intent_decomposer
+  _llm.py (Tier-2) — IMPLEMENTED
+- Planner: nodes/semantic_parser_node.py — IMPLEMENTED
+- Capability registry/retrieval: capabilities/retrieval.py (BM25/alias/
+  keyword), resolution_engine.py, capability_semantics.py, registry/client.py
+  — IMPLEMENTED
+- Semantic ranking: capabilities/capability_semantics.py rank_candidates +
+  branch_safe_select + close_dependencies — IMPLEMENTED
+- Parameter binder: compiler/binder.py — IMPLEMENTED
+- Validator: nodes/plan_validator_node.py — IMPLEMENTED
+- Compiler/IR: compiler/ir_models.py, codegen.py — IMPLEMENTED
+- Graph execution: agent/executors/concurrent_executor.py — IMPLEMENTED
+- Worker/queue/background: tasks/*, providers/queue/*, execution/lifecycle.py
+  — IMPLEMENTED but worker NOT started by API (separate process, no console
+  script); PARTIAL deployment wiring
+- Checkpoint/resume: memory/checkpointer.py (AsyncPostgresSaver),
+  agent/checkpoint_manager.py (time-travel recover — UNWIRED from API),
+  approval checkpoint resume node — IMPLEMENTED
+- Recovery/replan: agent/recovery.py, nodes/{reflection,replan}_node —
+  IMPLEMENTED (RETRY disabled by default config; SELF_HEAL unreachable)
+- Artifact graph: artifacts/{base,graph,normalizer}.py — IMPLEMENTED
+- Evidence: artifacts/evidence.py — IMPLEMENTED (consumed by response only)
+- Response synthesis: nodes/response.py + prompts/finalize v4.1 —
+  IMPLEMENTED
+- Renderer/fallback: artifacts/renderers/* + _evidence_renderer —
+  PARTIALLY IMPLEMENTED (7 capability renderers; rest GenericRenderer)
+- Caching: compiler/cache.py ParseCache/PlanCache, artifact cache in
+  executor, MemoryStore — IMPLEMENTED; invalidate_all_caches() DEAD
+- Observability: observability/outcomes.py, execution/events.py, metrics/
+  store.py — IMPLEMENTED (planner latency lost, _stage_metrics transient)
+- Benchmark: scripts/run_benchmark.py + scenarios part1-3 — IMPLEMENTED
+
+================================================================================
+3. END-TO-END DATA FLOW (request types)
+================================================================================
+A. SINGLE-TOOL QUERY ("current weather in Lahore"):
+ router(action) -> planner(1 unit) -> validator(coverage 1/1, alignment,
+ provenance) -> compiler(RESOLVE none; 1 ToolNode) -> optimizer bypass
+ (<=3 nodes) -> estimator -> validation -> approval (policy; default no
+ approval below high risk) -> executor(wave 1; ledger claim; tool call with
+ idempotency key; artifact register) -> response(evidence compile ->
+ synthesis -> coverage guard -> status SUCCESS) -> memory(persist_after
+ _response). Verified path: graph.py:219-269, semantic_parser_node.py:1931,
+ response.py:323-840.
+
+B. MULTI-INTENT ("define orchestration and search books by Austen"):
+ planner emits 2 nodes (intent graph -> 2 units) -> validator per-unit
+ coverage + distinctness -> single execution wave (parallel) -> artifact
+ graph 2 entries -> response: per-artifact coverage guard requires BOTH
+ data-sets in text (response.py:128-143); missing one -> fallback render.
+ Verified: _collapse_map_candidates (semantic_parser_node.py:2306),
+ executor waves (concurrent_executor.py:486).
+
+C. DEPENDENCY CHAIN ("geocode Lahore then reverse geocode it"):
+ planner: 2 units + relationship; binder: L2/L3 producer matching rewrites
+ reverse_geocode input to ${geo.result.coordinates} + depends_on edge
+ (binder.py:242-266); validator: producer completeness (_producer_ops),
+ chain constructible; codegen: RESOLVE synthesis; executor: wave 2 waits
+ for wave 1 (Kahn waves codegen.py:367-406); placeholder resolution fail-
+ closed (concurrent_executor.py:190-210). Verified.
+
+D. PARALLEL BRANCHES: independent nodes -> same wave (parallel); per-domain
+ semaphores cap concurrency (concurrent_executor.py:884-888); benchmark
+ parallelism dimension expects waves<=1 (run_benchmark.py:394-410).
+
+E. MAP/FAN-OUT (P1-D): _collapse_map_candidates detects same-op groups with
+ one varying scalar param -> single MapNode + collections
+ (semantic_parser_node.py:2306-2388); executor expands fan-out per
+ collection item (:834-902); map-item artifacts + evidence anchoring via
+ execution ids {ref}_map_item_{i} (evidence.py:203-232). Verified.
+
+F. MISSING PARAMETER: binder -> MissingInput(state=MISSING) -> validator
+ missing_input ERROR -> DROP_AND_PROCEED if multi-node
+ (plan_validator_node.py:529-543) else REFINE; after validator-round cap ->
+ require_more_info (RequirementCollectorNode) or explicit error. LLM L5
+ extraction only accepts values literally present in the request
+ (binder.py:332-338). Verified.
+
+G. AMBIGUOUS PARAMETER: binder _pick_producer returns None on claim
+ conflicts -> AMBIGUOUS + clarification_required (binder.py:225-239,
+ 458-475); validator surfaces; user is asked. Verified.
+
+H. BACKGROUND EXECUTION: estimator flags estimate >= 15s
+ (estimator_node.py:73, settings background_threshold_ms:598-602) ->
+ executor_node creates workflow_run task + enqueues to Redis stream,
+ replies "started in the background" (_background_task_id; runner.py:737).
+ Worker process consumes ExecutionRequest -> full AgentRunner.invoke
+ (tasks/executors.py:52-55). IMPLEMENTED end-to-end BUT requires an
+ operator-started worker; worker heartbeat/lease (tasks/worker.py:99-127).
+ Risk: no worker console script; queue.provider config dead.
+
+I. FAILURE + RECOVERY: executor failure -> partial -> Aggregator ->
+ Validator -> RecoveryManager decide (recovery.py:53-137): retry only if
+ transient_retries_left>0 (default 0 -> RETRY disabled); SELF_HEAL
+ unreachable (hardcoded False, graph.py:202); replan bounded by
+ max_replan_rounds=1 + shared replans budget (max 4); else FAIL ->
+ ResponseNode EXECUTION_FAILED/PARTIAL. Quorum failure -> compensation
+ (reflection_node.py:101 -> sagas/compensation.py, compensating_operation
+ only). Verified.
+
+J. CACHED EXECUTION: ParseCache hit -> planner replay + binder L1-L4
+ (semantic_parser_node.py:1831,1868; no LLM L5) -> validator revalidates
+ + removes semantically ineligible cached plans (plan_validator_node.py
+ :1417-1443); PlanCache hit in compiler_node.py:84-119 (recompile if
+ invalid); artifact cache in executor (concurrent_executor.py:1252-1375)
+ replay of completed executions from durable ledger (ledger.py:918-953).
+ Verified.
+
+K. MEGA-DAG (W135 class): intent graph > 12 units -> direct chunked path
+ (semantic_parser_node.py:1931-1954): _chunk_intent_units (sequential
+ dependency-respecting, default chunk_size=6) or interleaved partition
+ (P3 diagnostic, default sequential), rotation/concurrency knobs default
+ control, parallel extraction via asyncio.gather, deterministic merge +
+ coverage recovery via per-unit engine resolve (P2-A.1, :960-1011),
+ dangling-map strip + degradation ledger (:2200, :2471). Verified from
+ source; chunk_timing log shows chunk_sizes/start_order/per_chunk_llm_ms.
+
+L. SYNTHESIS/GROUNDING: evidence compile -> packet injected into last
+ message (response.py:517-530) -> synthesis (finalize v4.1) -> data-
+ incorporation + per-artifact coverage guards (_synthesis_covers_each
+ _artifact) -> degenerate retries (2) -> grounding gate (entities +
+ evidence values) -> one evidence repair -> deterministic entity-anchored
+ renderer fallback -> _response_status SUCCESS/PARTIAL_SUCCESS/
+ EXECUTION_FAILED. Verified (response.py:595-786).
+
+STATE CREATED/TRANSFORMED/PERSISTED: checkpoint (AsyncPostgresSaver,
+ thread_id=session_id), initial_state ephemeral per turn, _logical_workflow
+ (planner->validator->compiler), _execution_graph (compiler->executor),
+ artifacts (executor, session-scoped graph + durable ArtifactRegistry best-
+ effort), execution_events (append-only), ToolExecution rows, invocation_
+ outcomes, memory (post-response, gated), approval state (checkpoint).
+
+================================================================================
+4. STATE MANAGEMENT AUDIT
+================================================================================
+STATE OBJECTS (owner / lifecycle / mutability / persistence / risks):
+
+- AgentState (state_schema.py): 3-tier TypedDict; owner runner+all nodes;
+  per-invocation lifecycle; checkpoint-persisted; _EPHEMERAL_FIELDS
+  (drift-tested) cleared each turn (runner.py:436-438).
+  RISK: `_executor_failed` listed TWICE in _EPHEMERAL_FIELDS
+  (state_schema.py:357-358) — duplication in the drift-test surface.
+- _logical_workflow: planner writes; validator MUTATES IN PLACE on
+  DROP_AND_PROCEED (plan_validator_node.py:279 `_workflow["nodes"] =
+  _surviving`) — plan_validator_node is NOT @context_node-wrapped
+  (graph.py:1205 registers class directly) so the immutability decorator
+  does not cover this mutation. WORKING BUT FRAGILE.
+- _invocation_budget: carrier across nodes; merged with max() per key
+  (budget.py:100) — monotonic, safe; wall-clock survives round-trips via
+  serialized _started_at (budget.py:116-141).
+- _approval_chain_state: defensively deep-copied (multi_approval_gate_node
+  .py:191-192) — OK.
+- _map_degradations: WRITTEN (semantic_parser_node.py:2471) — NEVER READ
+  anywhere in src. Dead channel (P2-A.2 "never invisible" ledger has no
+  consumer; degradation is invisible to anything that matters).
+- _extraction_result (2452), _memory_persisted (memory_helper:189),
+  _recovery_action (graph.py:215), _recovery_available/_recovery_failed
+  _tasks/_pending_tasks (reflection_node.py:52-142), _execution_plan
+  (estimator:125), _needs_replan (replan:61), _stage_metrics (runner:650):
+  all written, never read. Dead channels.
+- _approval_checkpoint (singular) READ by approval_checkpoint_resume_node
+  .py:175 but NEVER WRITTEN (live field is _approval_pending) -> the
+  reject-blocks-graph replan rule reads an always-empty denied list —
+  blocking-denial replan is DEAD at runtime; rejection always finalizes.
+- _completed_tools READ (replan_node.py:27) NEVER WRITTEN -> replan does
+  not preserve completed-tool results as documented (replan_node.py:8-9).
+- _user_preferences READ (optimizer:54) never written; _ir_stack READ
+  (graph.py:301) never produced (removed node); _force_query_type (runner
+  :483 constant "") / _safety_result (runner:479 constant "allow") — forced
+  type + safety-reject branches unreachable.
+- _approval_requested_at: written by live gate (:413) but expiry check only
+  in DEAD approval_gate_node (graph.py:644-647) -> live approval has NO
+  expiry enforcement.
+- Initial state seeds with user message; last-response/context fields
+  preserved across invokes; _contract_meta stamped (runner.py:461-524).
+- invocation budget-exceeded terminal marker: TIMED_OUT/INTERRUPTED written
+  to initial_state (runner.py:625-627), then the finally branch overwrites
+  the PERSISTED checkpoint with COMPLETED (runner.py:740-747) — verified by
+  direct read. The checkpoint records COMPLETED for budget-exceeded runs;
+  only the SSE error + outcome record capture the failure. P1 severity.
+- Working memory: 2-turn pruning, capacity eviction (working.py:45-129).
+- ArtifactRegistry (durable DB): every op best-effort, failures logged and
+  silently swallowed (registry.py:57-91) — in-memory ArtifactGraph is the
+  source of truth; DB is a best-effort mirror. WORKING BUT FRAGILE.
+- Stale-state risks: ParseCache entries removed on validator verdict
+  (self-healing, plan_validator_node.py:1417-1443); PlanCache has NO
+  explicit invalidation (key versioning only). Terminal-abnormal checkpoints
+  refuse silent continuation (runner.py:144-147, I6) — good.
+- Implicit globals: module-level cached compiled graph (runner.py:265-283),
+  GlobalContext singleton indexes (refreshed on tool mutation), process
+  caches (_SEMANTICS_MAP_CACHE, PromptCache 50MB), in-memory circuit breaker
+  (per-process, tools/circuit_breaker.py:6-8) — multi-worker inconsistency
+  (4 workers in .env NEXUS_SERVER__WORKERS but that knob is DEAD; uvicorn
+  workers external).
+
+================================================================================
+5. PLANNER AUDIT
+================================================================================
+All findings verified from nodes/semantic_parser_node.py (2466 lines).
+
+- Prompt: logical_planner v2.4 (prompts/logical_planner.py:79-83), rendered
+  with capability catalog (engine-ranked, _fetch_capabilities), history
+  (replan scoping); chunked variant names ONLY chunk units + catalog.
+- Valid ops: instructor StrictLogicalWorkflow with Literal[valid_ops]
+  (semantic_parser_node.py:578-592) — structural bar on hallucinated ops.
+- Extraction: instructor JSON_SCHEMA mode (max_retries=3 validation-
+  feedback loops — silent); fallback _json_extract; 3-attempt loop.
+- Sanitization: _sanitize_ops -> resolve_operation L1-L4
+  (resolution.py:209-278); L5 LLM repair caller-side (_repair_ops,
+  :2090-2104, budget-gated) for unresolved ops -> _unresolved_ops
+  (:1161); strong-signal correction _apply_strong_signal_correction
+  (mutates nodes in place, :71-181).
+- Repair/retry/timeout: _diagnose_plan_failure classes EMPTY_PLAN /
+  INVALID_SCHEMA / MODEL_TIMEOUT / LLM_ERROR (:683-706);
+  _repair_empty_plan single constrained call (:1015-1079); wall-clock
+  timeouts surface as MODEL_TIMEOUT -> PLANNING_FAILED.
+- Empty plan: never silent — I3 guard (response.py:371-397) -> explicit
+  PLANNING_FAILED; validator empty_plan ERROR/REFINE; after cap ->
+  require_more_info (plan_validator_node.py:318-335).
+- Multi-intent: IntentDetector Tier-1 (grammar connectors; unit ->
+  capability bridge), Tier-2 LLM decomposer rare (trigger
+  _compound_signal_strength >= 0.45 or repair/replan flags, :1659-1664);
+  IntentGraph (entities + relationships) feeds validator coverage.
+- Mega-DAG: pre-check + post-repair fallback (P2-A); chunkers
+  _chunk_intent_units (:709, sequential, boundary shift for dep pairs),
+  _partition_units_interleaved (:785, P3), _schedule_chunk_pairs (:765,
+  rotation); parallel extract + deterministic merge (:923-958); coverage
+  recovery per unit via engine resolve (:960-1011); ref de-dup (:943-950).
+- Map collapse (_collapse_map_candidates :2306-2388) -> 1 MapNode +
+  collections; dangling-map strip (_strip_dangling_maps :2266-2303,
+  degradation recorded to _map_degradations — READ NOWHERE).
+- LLM failure modes enumerated (hallucinate/omit/duplicate/reorder/invalid
+  JSON/empty/timeout): every mode has a deterministic backstop — op Literal
+  + sanitize + repair; JSON fallback; empty-plan repair; chunked fallback;
+  coverage recovery; validator rejection + bounded replan.
+
+Classification: PLANNER = IMPLEMENTED (hybrid: deterministic guards around
+LLM proposals). Fragilities: instructor silent internal retries inflate
+latency; _map_degradations unconsumed; chunk latency endpoint-bound
+(section 11).
+
+================================================================================
+6. CAPABILITY REGISTRY AUDIT
+================================================================================
+- Tool schema (db/models/tool.py): input_schema, output_schema, validation
+  _rules (allowed_roles, cache_scope, idempotency_header, semantics,
+  compensating_operation), embedding VECTOR(4096), enabled flag.
+- Registry sync: RegistryClient caches DB reads (TTL 300s in-memory dict);
+  GlobalContext indexes (aliases/domains/keywords) rebuilt on tool mutation
+  via _refresh_resolution_indexes (tools/api.py:88-93,156,175);
+  compiled_registry.json (compiled graph: nodes/goal_templates/adjacency/
+  ontology_parents/...) with registry_checksum (registry_compiler.py:385-
+  398) used in cache keys.
+- Stale/duplicate risk: tool names unique (409 on dup, tools/api.py:70-94);
+  soft-delete; embedding regenerated on name/desc/purpose/tags change
+  (registry.py:417-420).
+- metadata consumers verified: input_required/schema consumed by binder +
+  validator; produces/consumes by validator producer checks + benchmark
+  contract; semantics (generic/fallback/domains) by CapabilitySemantics
+  .from_registry; cache_scope by artifact cache; allowed_roles by
+  ToolExecutor (executor.py:483-509); idempotency_header stamping
+  (executor.py:521-530); compensating_operation by sagas.
+- NOT consumed anywhere: ProviderConfig.supports_streaming,
+  default_headers; resolver flags use_alias_index / use_domain_classification
+  (always-on behavior); ToolPerformance degradation knobs (unwired class).
+- failing_probe: referenced ONLY by benchmark scenarios H63-H67/V134 and
+  scorer; NOT registered in any seed script / registry (verified grep) —
+  refusal scenarios rest on a tool that does not exist (scorer checks only
+  absence, vacuous).
+- compiled_registry.json: structure = {nodes, goal_templates, adjacency,
+  ontology_parents, missing_producers, cycles, compiled_at,
+  source_registry_version}; 21 capabilities claimed by seeds; NOT VERIFIED
+  FROM REPOSITORY that the checked-in file matches the live DB registry.
+
+================================================================================
+7. RESOLUTION ENGINE AUDIT
+================================================================================
+- Order (resolution_engine.py:107-201): retrieval.py (alias exact + multi-
+  alias -> example/keyword boost with generic-word demotion :284-294 ->
+  keyword/domain prefilter -> BM25 Okapi -> name-token fallback -> dedup
+  top-K, per-query sha256 cache cap 512) -> [flag-gated embedding
+  retrieval :148] -> _to_candidates (confidence bands :261-281) -> domain
+  narrowing -> availability facts (endpoint existence + circuit breaker
+  :283-333) -> workflow template matching (:339-370).
+- CapabilitySemantics rank_candidates: specificity/generic/fallback from
+  registry semantics or derived; generic suppression (_GENERIC_SUPPRESSION
+  _THRESHOLD 0.70, _GENERIC_PENALTY 0.35, _SPECIALIZED_BONUS 0.12,
+  _MARGINAL_CUTOFF 3.0); branch_safe_select two-pass with coverage
+  invariant (re-admits only candidate) + distinctness invariant (:287-310,
+  K83); close_dependencies fixed-point producer closure at 0.9 (:317-373).
+- EMBEDDING VERIFICATION (D10):
+  (a) flag exists: settings.py:669-672 (default False), env
+      NEXUS_RESOLVER__ENABLE_EMBEDDING_RETRIEVAL; sole consumer
+      resolution_engine.py:148.
+  (b) path exists: _embedding_retrieve (:220-259) -> ToolRegistry
+      .search_semantic (registry.py:583-625) -> LLMClient.embed
+      (registry.py:819) -> raw pgvector SQL cosine (registry.py:595-601).
+  (c) OFF -> embeddings never queried in resolution (gate is the only
+      entry); ON -> results APPENDED after deterministic hits, never
+      re-ranked (embedding-only tools always trail).
+  (d) Outside resolution embeddings are LIVE unconditionally: memory
+      semantic search (memory/store.py:181-191, manager, scout), tool
+      registration embedding writes (registry.py:323-327,417-420), /tools
+      search API (tools/api.py:125), workflow template hybrid
+      (template_engine.py:107-113 — hybrid cosine+fuzzy live for workflow
+      rows with embeddings).
+  (e) Unused/residual: PromptRenderer dead registration; HNSW migration
+      conditional; rebuild_embedding_dim.py manual script.
+  FINDING: resolution_engine.py:12-14 documents "NO embedding generation,
+  NO HTTP calls" — violated when flag ON (embed call). When OFF, contract
+  holds in resolution.
+- Duplicate code: registry_version() defined TWICE (resolution_engine.py
+  :63-76 and :79-93), second shadows first (identical) — DUPLICATED CODE.
+- Planner-side: whole-query resolve + per-unit resolve (N+1 engine
+  resolves per planning turn, bounded by unit count; no budget consumption)
+  -> branch_safe_select -> close_dependencies (:294-364).
+- Sanitization layer L1 exact/L2 domain/L3 alias/L4 fuzzy (wratio, 95.0)
+  — resolve_operation (resolution.py:209-278).
+- Verdict: IMPLEMENTED, deterministic (GC + engine state); embedding
+  CONFIG-ONLY (OFF by default, functional when ON); noise risk when ON
+  (append-not-rank).
+
+================================================================================
+8. PARAMETER BINDING / PROVENANCE AUDIT
+================================================================================
+compiler/binder.py: ParameterBinding (extra="forbid"), MissingInput
+(states MISSING/AMBIGUOUS/INVALID), BindingReport.
+
+- Pre-L1: schema-default override guard — planner value on an OPTIONAL
+  param with a schema default is DELETED (binder.py:394-416), so defaults
+  never hide a missing user value... (guard direction verified: protects
+  defaults from being overridden by absent values).
+- L1: direct user values (:421-427).
+- L2/L3: producer/consumer matching — planned producers with type
+  compatibility (L4 guard _type_compatible :126-148) + produced artifact
+  names (_produced_artifact_names :108-123); rewrites input to
+  ${producer_ref.result.<artifact>} + adds depends_on (confidence 0.95,
+  :242-266).
+- Entity identity: _entity_overlap (input values + camelCase ref labels,
+  :164-185); _pick_producer overlap-sorted with positional fallback
+  (position % len(scored), :240); reuse_allowed for single-entity queries.
+- AMBIGUOUS: producer claim conflicts / consumers > distinct producers ->
+  MissingInput(AMBIGUOUS, clarification_required) (:225-239, :458-475);
+  never silently binds.
+- L5 LLM fallback: single bounded call, budget-gated; values ACCEPTED ONLY
+  when they literally appear in the request (:332-338) — no invented
+  values; confidence 0.7; fresh-planning path only (allow_llm);
+  failure -> MISSING.
+- Provenance: every bound input recorded in BindingReport; consumed by
+  validator (plan_validator_node.py:193-217 -> BINDING_FAILED + binding
+  metrics).
+- Call sites: fresh planning (semantic_parser_node.py:2153-2163),
+  cache-hit (1831, 1868 — L1-L4 only, no LLM).
+- Traceability filter: validator _value_in_message requires literal
+  presence for non-producer inputs (plan_validator_node.py:1457-1473).
+- Risks: positional fallback can bind the WRONG entity when multiple
+  same-type producers exist and no entity signal — mitigated by
+  AMBIGUOUS only when claims conflict; a single-entity query with multiple
+  producers uses reuse_allowed (documented P108 fix). No stale-artifact
+  binding found: producer must be in the SAME plan (workflow-scoped).
+  Verdict: IMPLEMENTED, no silent binds, no invented values.
+
+================================================================================
+9. VALIDATOR AUDIT
+================================================================================
+plan_validator_node.py validate() (:369-1049) — checks in order:
+undefined ops (CRITICAL/DROP_OP), cycles incl. implicit placeholder edges
+(DFS :1510-1580), iterate_over resolvability, missing inputs (alias-aware;
+multi-node unresolvable -> DROP_AND_PROCEED :529-543; else REFINE),
+schema type violations (placeholders + RESOLVE() exempt :1657-1660),
+unknown input keys (I11), parameter provenance (literal presence),
+continuation completeness (missing_consumer), producer completeness
+(_producer_ops/_chain_constructible), intent coverage + traceability
+(per-unit evidence, coverage ERROR/REFINE :935-949; extraneous ops
+WARNING/REFINE + negation-forbidden DROP_OP :989-1012), budget (when
+budget_cap_usd set), approval pre-check.
+Alignment: _ALIGNMENT_DOMINANCE_RATIO 2.0 / STRONG_MIN 5.0 / FLOOR 10.0
+(:1234-1238); _engine_dominant (:1241-1253); _semantic_filter_engine
+(generic/fallback removed unless explicit web tokens :1296-1329);
+_verdict aligned/misaligned/ambiguous/no_signal (:1332-1366); evidence
+trail per unit.
+Actions: proceed / require_more_info / DROP_AND_PROCEED (removes ops,
+errors ride patch -> PARTIAL_SUCCESS) / REFINE (bounded:
+max_plan_validator_rounds 2 + shared replans budget; after cap:
+require_more_info for empty/missing, best-effort proceed for coverage,
+abort otherwise).
+Cache gatekeeper: _semantic_cache_eligible (valid + coverage==1.0 + no
+alignment violation) + _remove_semantically_ineligible_plan (:1391-1443).
+Infinite-loop risk: all loops bounded (validator rounds, compile retries 2,
+recovery replans 1, shared replans 4, graph_steps 50, wall 180s) — no
+unbounded loop found.
+False-reject risk: coverage checks use per-unit engine evidence; negation
+forbidden ops drop; specialized capabilities protected by suppression
+semantics (generic penalty), distinctness invariant.
+Verdict: IMPLEMENTED. Fragilities: in-place mutation of the state-carried
+workflow on DROP_AND_PROCEED (not context-node-wrapped); alignment uses
+deterministic engine only (by design).
+
+================================================================================
+10. EXECUTION ENGINE AUDIT
+================================================================================
+concurrent_executor.py: waves sequential (:486), in-wave parallel
+(gather :1040-1042), per-domain semaphores (cap max_domain_concurrency),
+conditional pruning per wave (:578-636), global asyncio.timeout (:485)
+with uncertain re-collection (:1043-1048), per-tool wait_for (:1422-1431).
+Idempotency: _compute_execution_key SHA256(tool, resolved inputs)
+(:638-641); in-run dedup (_completed_keys :895-903); durable PG ledger
+claim/complete/release (ledger.py:114-223; claim conflict -> explicit
+error :954-994; uncertain never releases :1009-1019); replay on ledger hit
+(:918-953); provider idempotency header sha256(session:task:exec)[:40]
+stable across retries (:1409-1417).
+Retries: ONLY idempotent tools (task.max_retries if idempotent else 0,
+:1120-1124); permanent 4xx/validation never retried (_is_permanent_http
+_error :223-249); endpoint fallback idempotent-only (:1545-1562);
+backoff 2^attempt.
+Cancellation: CancelledError -> "uncertain" (:1432-1450) — never retried
+(recovery.py:157-161); WS cancel; SSE disconnect cancels run.
+Partial failure: wave continues; _executor_failed = failed + timed_out
+(graph.py:1117); all success -> ResponseNode else Aggregator (reduce also
+on SUCCESS) -> Validator -> RecoveryManager.
+Recovery classification (recovery.py:53-137): workflow_owned -> FAIL;
+replan_rounds >= 1 -> FAIL; structural/approval_blocked/budget_violated ->
+REPLAN; contract + has_fallback_candidates -> SELF_HEAL (UNREACHABLE:
+hardcoded False graph.py:202); transient_retries_left>0 -> RETRY (default
+max_reflection_retries=0 -> DISABLED by default); else FAIL.
+Race risks found: budget merge one-event lag (runner.py:614 vs 682);
+double-gather re-collection relies on cancellable children; ledger degrade-
+open on DB errors (durability loss, documented tradeoff); compensation
+uses PLANNED not resolved inputs + tool_id=None (sagas/compensation.py)
+— may compensate the wrong invocation on replayed plans. Duplicate
+execution: prevented by ledger claims + session lock; replay architecture
+fingerprint-guarded.
+Verdict: IMPLEMENTED. Risks: RETRY dead by default; SELF_HEAL dead;
+uncertain outcomes leak lease until expiry (by design).
+
+================================================================================
+11. MEGA-DAG / CHUNKED PLANNING AUDIT
+================================================================================
+- Threshold: max_single_pass_intents=12 (settings.py:545-550); direct
+  pre-check (semantic_parser_node.py:1931-1954) and post-repair fallback
+  (:2024-2052).
+- Partitioning: _chunk_intent_units sequential, chunk_size=6, boundary
+  shift for dependency pairs (:709-762); P3 knobs chunk_rotation (start
+  order only, merge order fixed), chunk_concurrency (0=unlimited),
+  chunk_partition (sequential default; interleaved = unit i -> chunk i mod
+  k). All defaults = frozen control behavior.
+- Parallel planning: asyncio.gather over gated chunk calls; merge
+  re-sequences by chunk index; ref de-dup; chunk_timing log with
+  chunk_sizes/start_order/per_chunk_llm_ms/max/sum (:929-958).
+- Coverage recovery (P2-A.1): per-unit deterministic engine resolve;
+  hyphen-normalized bridge; top available candidate injected as node when
+  a unit is unplanned (:960-1011). detected subset planned+recovered:
+  enforced per unit. planned subset registered capabilities: enforced by
+  Literal[valid_ops] + sanitize.
+- Collections/maps: _strip_dangling_maps (:2266-2303) + _map_degradations
+  (WRITTEN :2471, READ NOWHERE); _collapse_map_candidates (:2306-2388);
+  collections guard in validator (iterate_over resolvability :459-485).
+- Map -> collection -> fan-out -> artifacts -> evidence: executor map
+  expansion (graph.py:834-902), map-item evidence anchoring
+  (evidence.py:203-232) — chain complete.
+- CHUNK LATENCY (verified from instrumentation + 15 W135 runs on commit
+  1cce159): 4 chunks, chunk_sizes [6,6,6,2], per_chunk_llm_ms e.g.
+  [18725, 21432, 21858, 77394]ms (max 77.4s — the documented 78.4s
+  control) and [53025, 66462, 26766, 48144] in a later control run. The
+  documented baseline "18/23/35/78.4" corresponds to the per_chunk list
+  [18.7,21.4,21.9,77.4] (rounded) from P2-A.5 logs — VERIFIED from the
+  chunk_timing instrumentation. P3-A/B (15 runs): rotation and
+  concurrency do not move max(chunk); interleaved partition no win;
+  chunk_size=4 no win; per-call latency 6-192s for identical content with
+  0 failures/fallbacks — endpoint-variance-bound. Conclusion recorded:
+  P3 closed negative (commit 1cce159).
+- SAFEST OPTIMIZATION POINTS (not implemented): (1) reduce per-call
+  variance by issuing chunk calls through a shared client with connection
+  pooling instead of a fresh AsyncOpenAI per chunk (semantic_parser_node
+  .py:571-573) — likely the highest-impact change (endpoint connection
+  churn); (2) smaller final chunk merging (last chunk 2 units) into chunk
+  2; (3) chunk_size=8 with 3 chunks (fewer calls, same variance exposure).
+  All P3-scope; adoption gated on max(chunk_latency) + frozen gates.
+
+================================================================================
+12. ARTIFACT GRAPH AUDIT
+================================================================================
+- Creation: executor after each successful tool call; artifact_id
+  deterministic; content-hash + deep freeze (artifacts/base.py:96-110);
+  session-scoped ArtifactGraph (graph.py:16-108); executor registration
+  (concurrent_executor.py:795-806).
+- Normalizer: single-stage idempotent; contract validation
+  (normalizer.py:174-235; contract check at concurrent_executor.py:715-
+  738); schema_version tracked.
+- Types/schemas: capability output contracts; registry rows.
+- Map-item identity: execution ids {ref}_map_item_{i}; evidence anchors to
+  collection item (evidence.py:203-232).
+- Persistence: durable ArtifactRegistry — every op best-effort, failures
+  logged+swallowed (registry.py:57-91); DB is a mirror; in-memory graph is
+  truth. WORKING BUT FRAGILE.
+- Retrieval: graph traversal + artifact cache (execution_key + arch_fp +
+  reg_fp + schema_hash fingerprints, session-scoped by default).
+- Duplicates: content-hash dedup for artifact memory; execution-key dedup
+  at ledger.
+- Stale artifacts: reset per invocation unless workflow active
+  (runner.py:444-446).
+- Metadata sufficiency: artifact + capability_id + tool_name + content
+  hash + schema version + producer node ref — enough for provenance,
+  grounding, replay; debugging/recovery partially (no raw request stored
+  in graph; ToolExecution rows carry payloads).
+
+================================================================================
+13. EVIDENCE / GROUNDING AUDIT
+================================================================================
+- EvidenceFact (key/value/source_path/semantic_type/user_relevant;
+  evidence.py:42-50); ResponseEvidence (artifact_id, entity_id/type,
+  capability_id, facts, source_node_id, confidence,
+  required_for_intent — NEVER POPULATED :67); EvidenceEntity
+  (:82-90); GroundingCoverage (required/available/represented facts,
+  coverage_ratio, missing_evidence, hallucinated_evidence,
+  required_entities_missing; complete iff ratio>=0.999 and no missing
+  entities :106-108 — hallucinated_evidence does NOT affect complete).
+- EvidenceCompiler: entity anchoring via query-literal input rule
+  (:111-127), producer-chain inheritance (:234-239), map-item anchoring,
+  fact extraction (top scalars, nested one level, list facts bounded 6,
+  total 12; :268-312); _entity_type hardcoded field names (latitude/
+  coordinates/address -> location; meal_list -> meal; book_list -> book;
+  :255-266) — presentation metadata outside the no-hardcoding rule.
+- RequiredEvidenceCompiler: intent-graph entities + goal-carried entities
+  regex + P0-B traceability filter (entity must appear in query
+  :360-363) + workflow-node values.
+- GroundingValidator: required entity naming in text; per-evidence non-
+  tainted value presence; numeric hallucination detection (recorded only
+  — never acted on, :451-468).
+- Class A/B/C/D: docstring A=compiler failure, B=synthesis omission,
+  C=grounding/eval failure, D=required-evidence derivation (evidence.py
+  :389-398). IMPLEMENTATION GAP: the D10 breakdown (response.py:769-780)
+  sets evidence_required == evidence_available == len(evidence) — the
+  documented "available < required" (evidence compiler loss) distinction
+  is DEAD instrumentation; no path can produce available != required.
+- Required -> available -> rendered chain: entities and values checked;
+  hallucinated numbers logged, never repaired.
+- Failures: _evidence_compile silently returns ([], []) on exception ->
+  grounding gate no-ops -> coverage 1.0 (response.py:896-898) — a silent
+  degradation path.
+
+================================================================================
+14. SYNTHESIS AUDIT
+================================================================================
+- Prompt: finalize v4.1 via ContextIR + prompt pipeline (response.py:1091)
+  with untrusted-data boundary rule 0 (prompts/finalize.py:104-109);
+  evidence packet appended to last message (response.py:519-524).
+- Model: ResponseNode model = synthesis_model if set else default_model
+  (subgraphs/codegen.py:21-30; settings.py:133-135). Verified: .env sets
+  NEXUS_LLM__SYNTHESIS_MODEL + DEFAULT_MODEL (values redacted; subagent
+  evidence confirms nemotron-3-ultra-550b-a55b; section 33).
+- Retries: client tenacity (max_retries+1 = 4); node-level degenerate
+  retries 2 (temperature +0.1); evidence repair 1 (timeout 90s); entailment
+  oracle 1 (flag OFF default).
+- Guards: _synthesis_incorporates_data / _synthesis_covers_each_artifact
+  (query-taint-aware credit; response.py:106-187); degenerate guard
+  (_DEGENERATE_MIN_LENGTH 40); guard re-run on final text (:688-701).
+- Repair: _evidence_repair (structural prompt, no invention, shrink
+  rejected; :924-974).
+- Fallback: _synthesis_fallback_patch -> deterministic _evidence_renderer
+  (entity-anchored numbered lists, item fields title|name|strMeal|query
+  hardcoded :1022-1026); prefix "I retrieved..."; renderer empty ->
+  EXECUTION_FAILED status; else PARTIAL_SUCCESS + _synthesis_failed.
+- Known limitations: renderers keyed by tool-name strings (response.py:70)
+  matching hardcoded registration keys; meals/docker/web-search/geocode/
+  universities/authors/valorant/products -> GenericRenderer; Weather
+  unknown WMO omitted; PromptRenderer sandbox (2s) is DEAD (register_
+  renderer never called — prompt_renderer.py:46-48 vs :105-126, artifacts
+  always raw repr in prompt).
+- Status machine gaps: _response_status NOT stamped on ~6 terminal paths
+  (conversational success/failure, passthrough, structured passthrough,
+  compile failure, LLM-budget-exhausted, error-only paths; response.py
+  :340,352-357,423-430,509-511,549-554,584-588) — default None surfaces as
+  "completed" downstream.
+
+================================================================================
+15. MODEL / LLM INFRASTRUCTURE AUDIT
+================================================================================
+LLM CALL TABLE (34 call sites identified; key entries):
+CALL | PURPOSE | MODEL | RETRIES | FAILURE MODE | CRITICALITY
+router classify (agent/router.py:306) | default | client-level | -> fallback goals | MED
+instructor extract (semantic_parser_node.py:594) | default | instructor 3 | -> json fallback | HIGH
+json extract fallback (:621) | default | client | -> None->repair | HIGH
+empty-plan repair (:1042) | default | client | -> chunked/error | MED
+op-name repair (:1473) | default | client | -> unresolved | LOW
+Tier-2 decomposer (:123 intent_decomposer_llm) | default | client | -> Tier-1 graph | MED
+binder L5 (binder.py:308) | default | client | -> MISSING (never guess) | MED
+synthesis (response.py:569,615) | SYNTHESIS_MODEL | client+asyncio | -> renderer fallback | HIGH
+degenerate retry (:654) | SYNTHESIS_MODEL | client | -> renderer | HIGH
+evidence repair (:952) | SYNTHESIS_MODEL | client+90s | -> renderer | MED
+entailment oracle (:231) | SYNTHESIS_MODEL | client+45s | allow (never blocks) | LOW (flag off)
+conversational chat (:405,415) | SYNTHESIS_MODEL | client+empty retry | generic text | MED
+workflow slots/classification (:579,661,726) | default | client | structural fallback | MED
+approval intent (:262,315,353) | default | client | clarify/canned | MED
+validator tier-4 (:233) | unreachable attr | client | swallow-pass | LOW (dead branch)
+memory extract/summarize/consolidate (:121,56,193,248) | default | client | []/""/skip | LOW
+history summarize (context_manager:121) | default | client | heuristic | LOW
+session summarize (:239,225) | default | client | content or "" | LOW (failed not checked)
+error classification (tools/error_recovery.py:143) | default | client | UNKNOWN | LOW
+template generation (:497) | default | client | None | LOW
+litellm probe (client.py:184) | provider | none | fmt=raw | LOW
+FallbackChain (llm/fallback.py:103,141) | primary+fallbacks | per-model | AllProvidersFailedError | UNWIRED (never instantiated)
+
+FINDINGS: dag_planner.py:208 and sessions/context_window.py:239 do not
+check response.failed; FallbackChain UNWIRED; _llm temperature/max_tokens
+settings DEAD (client uses provider fields / hardcoded 0.7);
+supports_streaming/default_headers DEAD; LLM latency available on
+response/span but not persisted in outcome rows; every node creates its
+own AsyncOpenAI client for instructor (per-chunk x4 in mega-DAGs).
+
+================================================================================
+16. CACHE AUDIT
+================================================================================
+- ParseCache: key nexus:cache:+sha256(query_fp, model, context, arch_fp,
+  planner_prompt_fp) (cache.py:228-248); TTL 3600; writes gated by
+  _plan_unsafe_to_cache; reads revalidated by validator; removal on
+  validator verdict / compile fail (plan_validator_node.py:1440,
+  compiler_node.py:162,187).
+- PlanCache: key sha256(canonical workflow + collections shape + arch_fp +
+  registry fp + planner prompt fp) (cache.py:348-398); TTL 300; NO explicit
+  invalidation (versioning + overwrite only).
+- Artifact cache (executor): MemoryStore.find_by_metadata(execution_key,
+  tool, arch_fp, reg_fp, schema_hash); session-scoped default, public
+  scope opt-in (concurrent_executor.py:1217-1251); normalizer-version
+  check (:1324-1327); write-back on success.
+- Prompt cache: PromptCache 50MB local (response.py:36).
+- Embedding cache: per-query sha256 in retriever (retrieval.py:194-196,
+  cap 512) + MemoryStore vectors.
+- Response cache: NONE (no response-level caching).
+- DEAD cache infra: invalidate_all_caches() (cache.py:445-454) — ZERO
+  callers (docstring claims called on recompilation; reality: key
+  versioning + retriever reset); ParseCache.invalidate (:298-306) dead;
+  compiled_graph.invalidate_cache (compiled_graph.py:145-149) dead;
+  RegistryClient.clear_cache (registry/client.py:86-88) dead.
+- Redis keys: nexus:cache:* (clear_all scans, never flushdb), lock:
+  agent_run:{sid}, rate limiters, streams; pubsub channels agent_channel/
+  tool_channel (publish-only).
+
+================================================================================
+17. BACKGROUND EXECUTION AUDIT
+================================================================================
+- Models: ExecutionRequest/ExecutionResult (execution/lifecycle.py:43-79);
+  Task ORM with lease columns (migration e1f2a3b4c5d6 consumed by
+  tasks/registry.py claim/heartbeat — NOT migration-only).
+- Worker: tasks/worker.py (claim_lease atomic, RUNNING, execute,
+  register_attempt retry, mark_completed; lease heartbeat every lease/3;
+  cancel-flag guard). Entry: python -m nexus.tasks — no console script.
+- Queue: Redis Streams (XADD/XREADGROUP/XCLAIM min_idle 30s, pending-
+  first claim, nack re-add).
+- Scheduler: tasks/scheduler.py tick (due tasks enqueued, cron advanced
+  BEFORE enqueue, one-shot next_run_at cleared — duplicate-run fix);
+  scheduler_cli standalone.
+- API: /tasks CRUD + pause/resume/cancel (NO ownership checks — tasks are
+  tenant-open).
+- In-graph handoff: estimator background decision (>=15s) ->
+  executor_node enqueues + replies (graph.py:750-816); _background_task_id
+  surfaces run status "queued" (runner.py:737-738).
+- Version capture: task payload carries ExecutionRequest (session_id,
+  workflow graph ref, arch fingerprint in outcome); ExecutionResult
+  written back. Replay: worker restarts reclaim stale leases (WHERE lease
+  expired).
+- GAP: API process does NOT start the worker; without operator-start,
+  background tasks never execute. Deploy manifests do not include a worker
+  Deployment (k8s has only the API deployment + migration job).
+
+================================================================================
+18. ERROR / RECOVERY AUDIT
+================================================================================
+FAILURE MATRIX (class -> detection -> classification -> action -> user):
+- LLM timeout -> MODEL_TIMEOUT -> repair/chunked -> PLANNING_FAILED explicit.
+- Invalid JSON -> json parse -> None -> retry(3) -> repair -> explicit.
+- Empty plan -> EMPTY_PLAN -> one repair -> chunked -> explicit
+  PLANNING_FAILED (never silent; I3).
+- Invalid op -> Literal + sanitize -> DROP_OP/replace -> replan.
+- Missing param -> MISSING -> DROP_AND_PROCEED (multi-node) or REFINE ->
+  clarify or explicit.
+- Ambiguous -> AMBIGUOUS -> clarification_required -> ask.
+- Invalid param -> INVALID -> REFINE/DROP_OP.
+- Capability mismatch -> alignment misaligned (strong evidence) ->
+  REFINE; ambiguous/no_signal never block.
+- Execution failure -> typed status -> RETRY (disabled by default) /
+  REPLAN (bounded) / FAIL -> honest error, partial success disclosure.
+- API timeout -> timeout status -> idempotent-only retry -> fail.
+- Rate limit (429) -> retryable (idempotent only) -> backoff -> fail.
+- Worker crash -> lease expiry -> reclaim -> re-execute (idempotency
+  ledger + execution keys guard duplicates).
+- Queue failure -> degrade-open (worker catches, logs) — tasks stay
+  queued/claimed per lease.
+- Synthesis omission -> coverage guards -> retry -> repair -> renderer.
+- Grounding failure -> repair -> entity-anchored renderer -> PARTIAL.
+- Endpoint failure -> endpoint-existence availability fact ->
+  replan/fallback per idempotency.
+- "I processed your request" false-success: guarded by I3 + response
+  status machine; the P1-B finding (runner terminal marker) does NOT
+  produce a false success to the user (SSE error fires), but the
+  checkpoint records COMPLETED — status-lie at the persistence layer.
+- Unknown errors -> runner except -> error event + outcome failure ->
+  CANCELLED/FAILED marker persisted (terminal-abnormal, I6).
+- RETRY disabled + SELF_HEAL unreachable: two documented recovery
+  strategies are inert under production defaults (design choice: keep
+  blast radius small, but docs overstate recovery).
+
+================================================================================
+19. OBSERVABILITY AUDIT
+================================================================================
+Can the system answer the 10 questions?
+1. Why this tool? — YES: per-unit coverage_evidence + alignment_evidence
+   trail (plan_validator_node.py:822-914) + router tool_selected events.
+2. Why another rejected? — PARTIAL: alignment log + resolver reasons;
+   suppression reasons recorded (suppress_reason) but not surfaced in SSE.
+3. Why did a param bind? — YES: BindingReport carried in state + metrics.
+4. Why did a branch disappear? — PARTIAL: _map_degradations WRITTEN NEVER
+   READ (the P2-A.2 ledger); validator drop errors ride the patch.
+5. Why a replan? — YES: _plan_validator_errors + replan events + budget.
+6. Why execution stop? — YES: typed statuses + recovery decision +
+   _execution_events.
+7. Why was a response accepted? — YES: _response_coverage + breakdown
+   (+ grounding coverage).
+8. Why fallback used? — YES: _synthesis_failed + renderer_fallback in
+   breakdown; response_status.
+9. Which model call consumed time? — PARTIAL: OTEL span llm.complete +
+   LLMResponse.latency_ms, NOT persisted to outcome; node SSE durations
+   ephemeral; planner latency param accepted but never written
+   (semantic_parser_node.py:2427 vs 2450-2488).
+10. Which stage caused latency? — PARTIAL: WaveCompleted.duration_ms
+    persisted; per-chunk logged; per-stage _stage_metrics TRANSIENT (never
+    persisted); invocation latency_ms only total.
+- Persisted: invocation_outcomes (OUTCOME_VERSION=3, arch/reg fingerprints,
+  prompt fingerprints, refs, attempts), execution_events append-only,
+  ToolExecution rows (payloads!), EWMA reliability.
+- Logs: structlog JSON + redaction (sensitive fields); request IDs.
+- Gap: no durable per-stage latency; benchmark reads events for wave
+  timing (run_benchmark.py:499-508).
+
+================================================================================
+20. SECURITY / SAFETY / ROBUSTNESS AUDIT
+================================================================================
+- Auth: AuthMiddleware 3 modes — none (DEFAULT; anonymous), api_key
+  (static, simple equality — no constant-time compare), jwt (HS/RS/ES,
+  verify_aud=False, roles from claims). Production boot gate refuses
+  auth=none when NEXUS_ENV=production (api/main.py:353-358). API-key
+  equality via == (providers.py:32-36) — timing side channel (low impact).
+- Authorization: ToolExecutor allowed_roles intersect; ownership helpers
+  (sessions/memory/long-running/learning/instances/workflow instances);
+  NOT applied: projects* (all CRUD), tasks* (all CRUD), workflows*
+  definitions CRUD, tools*, notifications, learning providers. Legacy
+  NULL-owner rows open by design (ownership.py:38-41).
+- SSRF: sandbox.py check_allowed_host (scheme http(s) when enforce,
+  host glob whitelist — empty blocks all, "*" allows all), private/loop
+  back/link-local/reserved block incl. 169.254.169.254 + IPv4-mapped;
+  enforced at registered endpoint, MCP URL (strict), FINAL URL after
+  template substitution, and each manual redirect hop (follow_redirects
+  =False). GOOD.
+- Sandbox: python-code-keyword rejection, request-body size cap (1MB),
+  no shell/code execution anywhere (verified), runAsNonRoot in k8s.
+- Secrets: EnvSecretResolver; VaultSecretResolver STUB (NotImplemented
+  Error); auth_ref allowlist against env exfiltration (executor.py:749-
+  759); structlog redaction + mask_sensitive_fields; SSE payload masking
+  (runner.py:1124-1131); no hardcoded secrets found in src; .env
+  gitignored.
+- Prompt injection: finalize v4.1 untrusted-data boundary; scout XML
+  untrusted warning; adversarial tests exist.
+- PII: ToolExecution persists raw request_payload/response_payload;
+  messages persisted; error_message persisted — retention/redaction policy
+  not evident in code.
+- Tenant isolation: PARTIAL (section above); rate limits hardcoded
+  (IP 100/60, chat 30/60, tools 60/60) degrade-open on Redis failure.
+- Verdict: IMPLEMENTED core gates (SSRF/sandbox/idempotency/approval
+  hash); gaps: auth default none, projects/tasks open, API-key timing,
+  JWT verify_aud off, Vault stub, k8s ConfigMap sandbox=false (deploy
+  mismatch with SECURITY.md).
+
+================================================================================
+21. CONCURRENCY / DISTRIBUTED SYSTEM AUDIT
+================================================================================
+- Session lock: Redis Lua lock + heartbeat renew + release; concurrent
+  invoke rejected with error event; resume separate lock. Good.
+- Duplicate execution: durable ledger claim exactly-one-winner across
+  retries/resumes; uncertain never releases (lease expiry window); replay
+  arch-fp-guarded. Good.
+- Budget merge one-event lag (runner.py:614 vs 682) — enforcement
+  unaffected, consumption accounting lags one node event.
+- Transaction boundaries: ledger ops commit separately; _persist_execution
+  own commit with FK-repair; index refresh post-commit. Acceptable.
+- Fire-and-forget: _persist_messages + _json_response ensure_future NOT
+  tracked in _pending_bg_tasks (small teardown race; chat.py:239,290).
+- Circuit breaker in-memory per-process — multi-worker inconsistency.
+- GlobalContext per-process; tool mutations refresh indexes in-process
+  only — multi-worker drift until restart.
+- Redis pub/sub publish-only; SSE delivered directly.
+- Outbox: producers + relay; consumers external.
+- Event ordering: execution_events append-only; SSE stream ordered by
+  graph updates.
+- Artifact registry best-effort mirror can diverge from in-memory truth.
+- worker/API double-processing prevented by task lease.
+
+================================================================================
+22. PERFORMANCE AUDIT
+================================================================================
+Latency contributors (by stage, with evidence):
+- Router: 1 LLM call only when heuristic ambiguous — LOW.
+- Retrieval: BM25 corpus rebuild on reset; per-unit engine resolve N+1
+  per planning turn (semantic_parser_node.py:342-344) — MED for mega-DAGs.
+- Planning: LLM extraction dominates (mega-DAG: max(chunk) 34-155s,
+  endpoint-bound, P3 closed negative); instructor fresh AsyncOpenAI client
+  per call (no pooling) — candidate optimization (section 11).
+- Binding: deterministic + one L5 LLM call when missing params — LOW.
+- Validation: deterministic, GC-only — LOW.
+- Compilation: deterministic; optimizer bypass <=3 nodes — LOW.
+- Execution: waves parallel, per-domain caps; global asyncio.timeout;
+  serialization limited to wave order — GOOD; artifact cache saves
+  re-execution.
+- Evidence/synthesis: 1 LLM + up to 2 degenerate retries + 1 repair —
+  MED; timeout max(90, tokens/30).
+- Caches: ParseCache/PlanCache reduce planner LLM calls; planner prompt
+  fingerprint in keys.
+- Serial bottlenecks found: per-wave sequential execution (by design);
+  per-domain semaphores; executor_node pre-wave rebuilds; per-unit engine
+  resolves serialized in planner loop (could parallelize);
+  _fetch_contract_meta coroutine never awaited in benchmark (RuntimeWarning
+  observed: run_benchmark.py:266 — benchmark-side only).
+- No premature optimization applied; ranked by measured impact: (1)
+  endpoint per-call variance (dominant, provider-side), (2) instructor
+  client churn, (3) planner N+1 resolves, (4) chunk imbalance (P3 closed).
+
+================================================================================
+23. TEST QUALITY AUDIT
+================================================================================
+- 64 test files ~630 functions; deterministic unit suite (fake sessions,
+  monkeypatched GC, MockTransport; NO fakeredis/testcontainers).
+- Deterministic suites covering P0-P2 surface: test_plan_validator (25),
+  test_parameter_binder (20), test_evidence_layer (17),
+  test_intent_decomposition (15), test_resolver_p0a (15), test_p1_
+  efficiency (22), test_b3_alignment (16), test_cache_semantic_p2f (12),
+  test_budget_p1a (11), test_invariants (24, I1-I11; I12-I19 live in
+  other files), security suites (adversarial/ssrf/secrets/tenant/
+  approval), reproducibility p2b (19), worker/idempotency/observability
+  chain, renderers, golden (shallow: first node only).
+- LIVE tests (marked `live`, collected by default pytest — CI DANGER):
+  test_scenario_matrix (12, 700s timeouts, sleep(2)),
+  test_tools_suite (17, real upstream APIs, sleep pacing),
+  human_behavior_test (24-turn, retries on "NIM slumps").
+- Scenario runner gaps: confidence_gt never asserted; parallel_waves never
+  asserted; response.type non-clarification collapses to "has text";
+  test_03 avoid_tools web_search vs search_web_search vacuous guard.
+- CI: root ci.yml runs `pytest -q --no-cov` — collects LIVE tests ->
+  fails on runners; frontend steps broken (no typecheck script; vitest/
+  jsdom/@playwright/test NOT in package.json/lockfile — test files exist
+  but are uninstallable); no timeout-minutes; benchmark never runs in CI.
+- Nested nexus-agent/.github/workflows/ci.yml: DEAD (not at repo root);
+  would collect zero tests for its marker jobs anyway.
+- Tests asserting implementation details: test_p1_efficiency uses
+  inspect.getsource (brittle); test_architecture_versions source-scan.
+- Coverage gaps: no LLM-mocked full-graph E2E; no benchmark regression
+  test in CI; frontend untested; k8s/configmap drift untested; no test
+  for the P1-B runner terminal-marker persistence bug (section 4).
+- Flake candidates: test_budget_p1a wall-clock 10ms assertion.
+
+================================================================================
+24. BENCHMARK AUDIT
+================================================================================
+- 135 scenarios (50+38+47) groups A-W; weights intent 10/resolution 15/
+  binding 10/topology 15/parallelism 10/artifacts 10/recovery 10/
+  validation 5/grounding 10/efficiency 5; PASS >= 90.
+- BENCHMARK_CONTRACT: fires only when a required input is producible by
+  ANOTHER registered tool and absent from the expected set
+  (run_benchmark.py:297-327); resolution forced 1.0 with reason.
+  Correct-by-design for weather/lat-lon class; `benchmark_contract_
+  scenarios` report field NEVER populated (dead slot :569).
+- Stochastic handling: NONE in runner (single attempt per scenario); the
+  "x3 reproducible" baseline comes from manual repeated runs, NOT the
+  script (docs vs script mismatch — see 32/33).
+- Endpoint failures: chat() catches, error events; runner crash -> total
+  0.0 with RUNNER: failure.
+- failing_probe tool referenced by H63-H67/V134 scenarios but NOT
+  registered anywhere — refusal scoring vacuous.
+- failure classes split on ":" prefix (602-605): EXECUTOR/VALIDATOR,
+  ARTIFACT_GRAPH, RESOLVER, EXECUTOR, TOPOLOGY, PLANNER, SYNTHESIS,
+  RECOVERY.
+- Benchmark artifact evidence: benchmark_report.json (checked in) 2026-08
+  -12: 83/135 avg 85.7 (intent .97, resolution .748, binding 1.0, topology
+  .919, parallelism .993, artifacts .689, recovery .993, validation .615,
+  grounding .681, efficiency .871) — CONTRADICTS docs' 98/135 x3 (91.1);
+  the 98/135 runs live in /tmp only, NOT in the repo (NOT VERIFIED FROM
+  REPOSITORY). Classification A/B/C/D/E: from evidence — resolution/
+  topology/validation misses = mix of model quality + contract; artifacts/
+  grounding = synthesis quality (Class B); EXECUTOR/VALIDATOR 52 in the
+  checked-in report includes endpoint failures (Class C) — cannot be
+  fully separated from the checked-in artifact alone.
+
+================================================================================
+25. DEAD CODE / TECHNICAL DEBT AUDIT
+================================================================================
+KEEP/REMOVE/REVISIT classification (evidence in earlier sections):
+- REMOVE: route_after_estimator (graph.py:108-112, never wired);
+  approval_gate_node (graph.py:579-671, never registered; carries the only
+  approval-expiry reader); cron_node/clarification_node/finalize node
+  (never registered); sync pass_manager.optimize; CapabilityResolver
+  (compiler/resolver.py class unused — only CapabilityError imported);
+  template_engine._fuzzy_match (:241-271); invalidate_all_caches() +
+  ParseCache.invalidate + compiled_graph.invalidate_cache +
+  RegistryClient.clear_cache; duplicated registry_version()
+  (resolution_engine.py:63-93); dead state channels (_map_degradations
+  reader absent — KEEP the writer? no: either wire or remove),
+  _extraction_result, _memory_persisted, _recovery_action,
+  _recovery_available/failed_tasks, _pending_tasks, _execution_plan,
+  _needs_replan, _stage_metrics (or persist it); Tiered TypedDicts in
+  state_schema (:55-316); runner KnowledgeAssistantNode translate branch
+  (runner.py:1009-1015); dead settings (section 28); dead docs
+  (README performance table files, router v6/recharts claims);
+  nexus-agent/.github/workflows/ci.yml (dead location);
+  root tests/architecture orphan; failing_probe scenarios or register the
+  tool; benchmark_contract_scenarios slot.
+- KEEP (frozen surface): chunk knobs (P3 instrumentation, defaults =
+  control); interleaved partition; prompt versions; evidence/grounding;
+  binder; validator; ledger; budget.
+- REVISIT: RETRY/SELF_HEAL inert strategies (decide: enable with config
+  or delete docs); approval expiry (wire into live gate or remove field);
+  _approval_checkpoint read vs _approval_pending write mismatch;
+  _completed_tools replan preservation (implement or drop doc claim);
+  VaultSecretResolver stub; notifications stub; send_notification;
+  FallbackChain (wire or remove); ToolPerformanceTracker (wire or remove);
+  queue.provider knob; server.* knobs; PromptRenderer registration;
+  ArtifactRegistry best-effort swallow.
+
+================================================================================
+26. ARCHITECTURAL INVARIANTS (extracted from code)
+================================================================================
+INVARIANT | IMPLEMENTATION | ENFORCEMENT | TEST | STATUS
+I1 RESOLVE never crosses boundary | codegen raises CompilerError | compiler_node | test_codegen_resolve | GREEN
+I2 no ${ref.result} reaches tool raw | PlaceholderResolutionError | executor | test_compiler_e2e | GREEN
+I3 no knowledge answer for executable | response.py:371-397 | response | test_invariants | GREEN
+I4 per-intent coverage evidence | validator evidence trail | plan_validator | test_plan_validator | GREEN
+I5 durable op identity | ledger claim/lease/replay | executor | test_idempotency_p0d | GREEN
+I6 terminal checkpoint no silent resume | runner.py:144-147,767 | runner | test_terminal_checkpoint_p0d | GREEN
+I7 cache_scope != public => session-scoped | executor find_by_metadata | executor | test_cache_scope_p1a | GREEN
+I8 approval bound to op hash | multi-gate hash both grant paths | gate | test_approval_p0c | GREEN
+I9 no silent prompt fallback | PromptVersionError | prompt manager | test_invariants:314 | GREEN
+I10 reproducible identity persisted | outcomes v3 fingerprints | runner | test_reproducibility_p2b | GREEN
+I11 invalid plans never cached/executed | _plan_unsafe_to_cache + gatekeeper | planner/validator | test_cache_semantic_p2f | GREEN
+I12 no auto-retry non-idempotent | retry bound by idempotency | executor | test_retry_semantics_p1a | GREEN
+I13 cache eligibility semantic | validator removal | validator/compiler | test_cache_semantic_p2f | GREEN
+I14 branch-safe coverage | branch_safe_select + distinctness | planner | test_resolver_p0a | GREEN
+I15 alignment semantics of resolver | _semantic_filter_engine + floor | validator | test_b3_alignment | GREEN
+I16 no silent success | _response_status machine | response | test_p1_efficiency | GREEN (persistence caveat: runner marker, section 4)
+I17 DROP_AND_PROCEED multi-node | validator :263-289 | validator | test_plan_validator | GREEN
+I18 map degradation visible | _strip_dangling_maps + _map_degradations | planner | test_p1_efficiency | PARTIAL — ledger written, NEVER READ (violates "never invisible")
+I19 chunk coverage merge | coverage recovery resolve | planner | test_p1_efficiency | GREEN
+ADDITIONAL (not in docs): no invented param values (binder literal rule) GREEN; failed responses never stored (memory_helper) GREEN; unsupported map -> single body (P2-A.2) GREEN.
+
+================================================================================
+27. SINGLE SOURCE OF TRUTH AUDIT
+================================================================================
+- Duplicated: registry_version() (x2, identical); _EPHEMERAL_FIELDS
+  duplicate entry "_executor_failed"; node count 19 (docs root AGENTS.md
+  says "18 nodes" prose vs 19-node mermaid — doc drift); route_after_*
+  edge END branch registered but never returned (harmless);
+  plan_validator_node preferred_tools dead param; prompt versions split
+  (finalize 3.1 legacy vs 4.1 modern, both live); compile_registry vs live
+  DB registry (sync via checksum); compiled_registry.json "10 keys"
+  structure vs 21 seeded capabilities — shape mismatch, NOT VERIFIED.
+- Conflicting definitions: docs benchmark 98/135 vs checked-in report
+  83/135; README router v6 vs v7; README recharts vs absent;
+  k8s ConfigMap sandbox=false vs SECURITY.md "always" + .env true;
+  k8s ConfigMap gpt-4o vs .env nemotron-ultra; AGENTS "18 nodes" prose.
+- Model config: default_model/synthesis_model live in .env (gitignored)
+  AND k8s ConfigMap (gpt-4o) — two sources of truth for production config.
+
+================================================================================
+28. CONFIGURATION AUDIT (key entries; full table in evidence)
+================================================================================
+CONFIG | DEFAULT | ENV | CONSUMERS | EFFECT | SAFE
+llm.default_model | gpt-4o | NEXUS_LLM__DEFAULT_MODEL | graph.py:1179 + 20 sites | REAL | YES (prod .env overrides)
+llm.synthesis_model | "" | NEXUS_LLM__SYNTHESIS_MODEL | codegen.py:25 (ResponseNode only) | REAL | YES
+llm.temperature | 0.7 | NEXUS_LLM__TEMPERATURE | NONE | DEAD | -
+llm.max_tokens | 4096 | NEXUS_LLM__MAX_TOKENS | NONE | DEAD | -
+resolver.enable_embedding_retrieval | false | NEXUS_RESOLVER__ENABLE_EMBEDDING_RETRIEVAL | resolution_engine.py:148 | REAL (OFF) | YES
+compiler.max_single_pass_intents | 12 | NEXUS_COMPILER__MAX_SINGLE_PASS_INTENTS | planner :1928,2025 | REAL | YES
+compiler.chunk_size | 6 | NEXUS_COMPILER__CHUNK_SIZE | :843-846 | REAL | YES
+compiler.chunk_rotation/concurrency/partition | 0/0/sequential | NEXUS_COMPILER__CHUNK_* | :854-937 | REAL (P3, control defaults) | YES
+compiler.background_threshold_ms | 15000 | ... | estimator:73 | REAL | YES
+compiler.max_plan_validator_rounds | 2 | ... | validator :298 | REAL | YES
+agent.max_invocation_wall_time_ms | 180000 | ... | budget/runner | REAL | YES
+agent.max_recovery_attempts | 3 | ... | budget declared; consume() NEVER called | DEAD | -
+budget cost_usd dimension | 1.0 | ... | settle_cost NEVER called | DEAD | -
+agent.max_reflection_retries | 0 | ... | recovery/reflection | REAL (disables retry) | YES (design)
+agent.adaptive_reflection 13/14 | ... | ... | NONE | DEAD | -
+tools.allowed_hosts | [] | NEXUS_TOOLS__ALLOWED_HOSTS | sandbox | REAL (prod .env ["*"]) | RISK: wildcard opens SSRF allowlist
+tools.sandbox_enabled | true | ... | sandbox | REAL | k8s sets FALSE
+tools.performance_* | 0.4/60/... | ... | UNWIRED class | NO | -
+queue.provider | redis_streams | ... | NONE | DEAD | -
+server.host/port/workers | 0.0.0.0/8000/1 | ... | NONE | DEAD | -
+observability.langsmith_* | - | NEXUS_OBSERVABILITY__LANGSMITH_* | NONE | DEAD | -
+auth.mode | none | NEXUS_AUTH__MODE | middleware | REAL | RISK (default open; prod gate exists)
+cache.parse_ttl/plan_ttl | 3600/300 | NEXUS_CACHE__* | cache.py | REAL | YES
+extra="ignore": NEXUS_AUTH__JWT_SECRET etc. dropped from model but read via os.environ by auth providers (fragile split) | | | | |
+
+================================================================================
+29. PRODUCTION READINESS AUDIT
+================================================================================
+Correctness: 4/5 — strong deterministic guards (validator/compiler/
+binder/evidence), but planner output quality remains LLM-bound (Class B
+omissions); P1-B persistence marker bug.
+Reliability: 3/5 — endpoint-bound planning latency (mega-DAG wall ~1-2min,
+budget 44% planning), RETRY/SELF_HEAL inert, ledger degrade-open.
+Availability: 3/5 — auth default none (gate for prod), worker not
+deployed in manifests, no worker replicas/HPA for tasks.
+Observability: 3/5 — rich events/outcomes, but per-stage latency
+transient, planner latency lost, no durable chunk timing.
+Performance: 3/5 — waves parallel, caches, optimizer bypass; planning +
+synthesis LLM-bound; P3 closed (endpoint-bound).
+Security: 3/5 — SSRF/sandbox/idempotency/approval-hash strong; but
+sandbox=false in k8s ConfigMap, allowed_hosts=["*"] in prod .env,
+projects/tasks open, auth default none.
+Maintainability: 3/5 — large dead surface (dead config, dead nodes, dead
+state channels, dead docs); 2466-line planner file.
+Scalability: 3/5 — per-process caches/GC/circuit breaker, no worker
+deployment, HPA custom metric unbacked.
+Recoverability: 4/5 — terminal checkpoint contract, ledger replay, task
+leases, compensation on quorum; uncertain-lease window by design.
+Testability: 4/5 — strong unit suite; live tests mis-wired into CI;
+frontend uninstallable tests.
+
+================================================================================
+30. FINDINGS — PRIORITIZED
+================================================================================
+ID | SEV | CATEGORY | FINDING | ROOT CAUSE | EVIDENCE | IMPACT | CONF | RECOMMENDATION | EFFORT | REGRESSION RISK
+F1 | P0 | Deploy/Security | k8s ConfigMap sets NEXUS_TOOLS__SANDBOX_ENABLED=false and no ALLOWED_HOSTS; prod .env sets ALLOWED_HOSTS=["*"] | manifest drift vs SECURITY.md/.env | configmap.yaml:31; .env | SSRF surface open in the documented production stack | HIGH | align manifests with hardened config; remove wildcard | S | LOW
+F2 | P1 | Correctness/state | Budget-exceeded checkpoint records COMPLETED | TIMED_OUT/INTERRUPTED written to initial_state, overwritten by COMPLETED persist | runner.py:625-627 vs 740-747 (verified) | persisted run status lies; downstream/reporting wrong | HIGH | persist terminal marker before break / write to _last_state | S | MED
+F3 | P1 | Reliability | RETRY + SELF_HEAL recovery paths inert by default (max_reflection_retries=0; has_fallback_candidates hardcoded False) | conservative default + dead wiring | recovery.py:126-137; graph.py:201-202; settings.py:451-452 | documented recovery not functional; failures finalize instead of retrying | HIGH | decide: enable with config or fix docs | S | MED
+F4 | P1 | Observability | _map_degradations written, never read — P2-A.2 "never invisible" violated | ledger added without consumer | semantic_parser_node.py:2471 | lost fan-out invisible in state/events | MED-HIGH | wire into SSE/metrics or remove | S | LOW
+F5 | P1 | Benchmark evidence | Docs claim 98/135 x3 (91.1); checked-in benchmark_report.json = 83/135 avg 85.7 (2026-08-12); x3 runs not in repo | results live in /tmp; repo artifact stale | benchmark_report.json:3-27 vs docs | baseline not reproducible from repo | HIGH | check in current report + runs; make baseline script-generated | M | LOW
+F6 | P1 | CI | Root CI runs LIVE tests (no skip) + broken frontend steps (missing typecheck script; vitest/playwright undeclared) | no -m "not live"; test deps missing | .github/workflows/ci.yml:30,47-51; package.json | CI red on every push | HIGH | add pytest -m exclusion; declare deps or remove steps | S | LOW
+F7 | P1 | Approvals | Approval expiry + blocking-denial replan dead: _approval_requested_at only read by dead node; _approval_checkpoint never written | legacy gate superseded, fields not rewired | graph.py:644-647; approval_checkpoint_resume_node.py:175; multi_approval_gate_node.py:413-417 | pending approvals never expire; denied-blocking never replans | MED-HIGH | wire expiry into live gate; fix field | M | MED
+F8 | P2 | State | DROP_AND_PROCEED mutates state-carried workflow in place outside @context_node | validator registered as plain class | plan_validator_node.py:279; graph.py:1205 | immutability contract bypassed; aliasing risk | MED | copy before pruning | S | LOW
+F9 | P2 | Background | Worker not deployed; no console script; API does not start it; k8s has no worker Deployment | deployment gap | tasks/__main__.py; pyproject.toml:128; deploy/k8s | background tasks never run in the shipped stack | MED-HIGH | add worker deployment + console script | M | LOW
+F10 | P2 | Config | ~40 dead settings (temperature/max_tokens/adaptive_reflection 13/langsmith/max_iterations/server.*/queue.provider/synthesis_budget_ms...) + extra="ignore" drops documented envs | accumulated legacy | section 28 | misleading config; operators set no-op knobs (e.g. NEXUS_SERVER__WORKERS=4) | MED | prune or wire; document | M | LOW
+F11 | P2 | Evidence | available==required always; hallucinated_evidence never acted on; _evidence_compile swallows exceptions -> coverage 1.0 | instrumentation never differentiated; fail-open compile | response.py:769-780, 896-898; evidence.py:67 | grounding can silently no-op | MED | wire differentiation or remove; fail-log loudly | M | MED
+F12 | P2 | Renderer | PromptRenderer sandbox (2s) dead — register_renderer never called; raw repr in prompts | response path uses its own render | prompt_renderer.py:46-48,105-126 | doc-claimed sandboxing absent | LOW-MED | register renderers or delete the class | S | LOW
+F13 | P2 | Security | Auth default none; API-key equality non-constant-time; JWT verify_aud=False; Vault resolver stub | defaults + stubs | middleware/auth.py; providers.py:32-36,84; config/secrets.py:47-78 | open by default; weak jwt checks | MED | prod gate exists — enforce; harden | M | LOW
+F14 | P2 | Tenant | projects/tasks/workflow-definition CRUD have no ownership checks | not covered by ownership helpers | api/projects.py:36-217; api/tasks.py:45-147 | cross-tenant access when auth on | MED | add ownership | M | MED
+F15 | P2 | Benchmark | failing_probe scenarios reference an unregistered tool; benchmark_contract_scenarios slot never filled | registry/scenario drift | run_benchmark.py:420,569 | refusal scoring vacuous; contract reporting dead | LOW-MED | register tool or reclassify | S | LOW
+F16 | P3 | Tests | Scenario runner ignores confidence_gt/parallel_waves; vacuous avoid guard (web_search vs search_web_search) | runner checks subset | run_scenarios.py:174-202; test_03_pikachu.yaml:21 | false-green scenarios | MED | fix assertions | S | LOW
+F17 | P3 | Latency | instructor creates fresh AsyncOpenAI client per call/chunk; planner N+1 engine resolves | no pooling/batching | semantic_parser_node.py:571-573,342-344 | connection churn; serial resolve loop | MED | shared client; parallelize resolves | S-M | MED
+F18 | P3 | Docs | README stale (router v6->v7, recharts absent, performance table files don't exist, "18 nodes"); docs baseline mismatch | doc drift | README.md:127-190 | misleading | LOW | refresh | S | LOW
+F19 | P3 | Persistence | ArtifactRegistry best-effort swallow; planner latency lost; _stage_metrics transient | no durable design | artifacts/registry.py:57-91; semantic_parser_node.py:2427 | debugging/replay gaps | LOW | durable best-effort + persist planner ms | M | LOW
+F20 | P4 | Hygiene | dead nodes (cron/clarification/finalize/approval_gate), dead routing fn, dead caches invalidation fns, duplicated registry_version, _EPHEMERAL_FIELDS dup entry | legacy removal incomplete | section 25 | noise | LOW | remove | M | LOW
+
+================================================================================
+31. TOP 10 RISKS
+================================================================================
+1. k8s production manifest disables the sandbox + prod .env allows any host
+   (F1) — evidence: configmap.yaml:31, .env ALLOWED_HOSTS=["*"]; likelihood
+   HIGH if the stack is deployed as shipped; impact SSRF/exfiltration;
+   mitigation: hardened ConfigMap + host allowlist.
+2. Checkpoint status lies after budget timeout (F2) — runner.py:625/740;
+   likelihood: every budget-exceeded run; impact: wrong statuses in
+   sessions UI/state API; mitigation: persist the terminal marker.
+3. Recovery strategies (retry/self-heal) documented but inert (F3) —
+   every transient failure finalizes; impact: availability; mitigation:
+   config decision.
+4. Benchmark baseline not reproducible from repo (F5) — evidence gap;
+   mitigation: check in artifacts; affects confidence in P2 closure.
+5. CI red by construction (F6) — live tests + broken frontend steps;
+   mitigation: marker exclusions + fix scripts.
+6. Background execution not deployable in the shipped stack (F9) —
+   worker absent from manifests; mitigation: worker Deployment.
+7. Auth/tenant defaults (F13/F14) — open by default; projects/tasks open;
+   mitigation: enforce ownership, harden providers.
+8. Approval lifecycle incomplete (F7) — no expiry; denied-blocking replan
+   dead; mitigation: rewire.
+9. Planning latency endpoint-bound (P3 closed negative) — mega-DAGs take
+   34-155s planning; impact: user-perceived latency, budget pressure;
+   mitigation: provider-side.
+10. Evidence/grounding silent no-op paths (F11) — coverage can silently
+    degrade to 1.0 on compile exception; mitigation: fail-log loudly.
+
+================================================================================
+32. WHAT IS ACTUALLY SOLVED (independently verified from source)
+================================================================================
+AREA | CLAIMED | ACTUAL CODE STATUS | EVIDENCE | CONF
+P0-A Resolver semantics | frozen | IMPLEMENTED: branch_safe_select/distinctness/closure/suppression wired (planner+validator) | capability_semantics.py:95-373; semantic_parser_node.py:349-357 | HIGH
+P0-B Binding/provenance | frozen | IMPLEMENTED: L1-L5, AMBIGUOUS, literal-only L5, default guard, cache-hit binding | binder.py:269-552 | HIGH
+P0-C Intent decomposition | frozen | IMPLEMENTED: Tier-1 + rare Tier-2, IntentGraph, coverage | intent_detector.py, decomposer_llm.py, semantic_parser_node.py:1641-1681 | HIGH
+P0-D Evidence/grounding | frozen | IMPLEMENTED with gaps: required==available always; hallucination not acted on; compile fail-open | evidence.py:93-481; response.py:708-780,896 | MED
+P1-A Large-DAG efficiency | frozen | IMPLEMENTED: DROP_AND_PROCEED, alignment floor, wave timing | plan_validator_node.py:529-543,1234-1253; events.py:204 | HIGH
+P1-B Empty-plan safety | frozen | IMPLEMENTED in response; PERSISTENCE caveat (checkpoint COMPLETED on budget-exceeded) | response.py:371-397; runner.py:625/740 | MED
+P1-C Extraction recovery | frozen | IMPLEMENTED: diagnosis + one repair + chunked fallback | semantic_parser_node.py:683-706,1015-1079 | HIGH
+P1-D Map collapse | frozen | IMPLEMENTED: 1 MAP node + collections + map-item evidence | semantic_parser_node.py:2306; evidence.py:203-232 | HIGH
+P2-A Mega-DAG chunking | frozen | IMPLEMENTED: threshold/chunks/parallel/merge; coverage recovery; dangling-map guard | semantic_parser_node.py:1931-2052,709-762,960-1011 | HIGH
+P2-A.1 Coverage recovery | frozen | IMPLEMENTED (engine-resolve injection) | semantic_parser_node.py:960-1011 | HIGH
+P2-A.2 Collection persistence | frozen | IMPLEMENTED (strip + degrade) BUT _map_degradations never read | :2266-2303 vs :2471 | MED
+P2-A.3 Execution/replan | frozen | IMPLEMENTED (DROP_AND_PROCEED wins; budget) | plan_validator_node.py:263-289 | HIGH
+P2-A.4 W135 generalization | frozen | PARTIAL: W135 plans/executes; contract fixed; endpoint-timeout variability remains | /tmp runs (NOT IN REPO) | MED
+P2-A.5 Latency measurement | frozen | IMPLEMENTED (chunk_timing log) — baseline 78.4s verified from logs | semantic_parser_node.py:929-958 | HIGH
+P2-A.6 Final gate | frozen | gate runs 7/7 avg 100 on 8656ead+knobs; evidence in /tmp only | (bench_p2a6_gates.json) | MED (not in repo)
+
+================================================================================
+33. MODEL CONFIGURATION VERIFICATION
+================================================================================
+Verified from the actual environment files (values redacted; presence
+verified):
+- nexus-agent/.env: NEXUS_LLM__DEFAULT_MODEL set; NEXUS_LLM__SYNTHESIS_MODEL
+  set; NEXUS_RESOLVER__ENABLE_EMBEDDING_RETRIEVAL=false;
+  NEXUS_TOOLS__SANDBOX_ENABLED=true; NEXUS_TOOLS__ALLOWED_HOSTS set.
+- Root .env: DEFAULT_MODEL + EMBEDDING_MODEL set; ALLOWED_HOSTS=["*"];
+  JWT_SECRET present; LangSmith project set (key commented out).
+- Code path: graph.py:1177-1179 (default_model) -> codegen.py:21-30
+  (synthesis_model override for ResponseNode; MemoryHelper uses default).
+- Expected production values (nemotron-3-ultra-550b-a55b planner+synthesis)
+  match the .env values per value-inspection evidence from sub-audits;
+  NOT VERIFIED FROM REPOSITORY at value level for the audit itself (keys
+  redacted here) — the wiring (which setting feeds which call) IS verified.
+- OTHER model configs present: EMBEDDING_MODEL (nv-embed-v1 in .env;
+  used by tool/memory/workflow embedding — live outside resolution),
+  embedding_dimensions 4096, default fallback gpt-4o in settings, k8s
+  ConfigMap openai/gpt-4o (mismatch), .env.example gpt-4o.
+- Dead model config: llm.temperature, llm.max_tokens (never consumed).
+
+================================================================================
+34. FINAL ARCHITECTURAL VERDICT
+================================================================================
+1. Is the architecture actually frozen safely? MOSTLY — the 19-node graph,
+   resolver/binder/validator/evidence/compiler are genuinely wired,
+   deterministic, gated, and heavily unit-tested (I1-I19 GREEN with two
+   PARTIAL caveats: I18 ledger unconsumed; I16 persistence marker). The
+   freeze is code-real for the orchestration surface. What is NOT frozen:
+   deployment/config surface (k8s sandbox off, gpt-4o), benchmark evidence
+   (docs vs artifact), CI (broken), P3 knobs (inert by default).
+2. What should NOT be changed: the frozen orchestration (graph topology,
+   resolver semantics, binder, validator checks, evidence/grounding,
+   map semantics, chunk merge/coverage, budget), production model config
+   (Ultra+Ultra, embeddings OFF) — except via measured experiments.
+3. What should still be changed: F1-F4, F5 (check in benchmark evidence),
+   F6 (CI), F9 (worker deployment), F13/F14 (auth/tenant), F11 (evidence
+   no-op paths), F17 (client pooling) — none reopen the frozen surface.
+4. Remaining architectural risks: checkpoint status lie (F2); recovery
+   inert (F3); approval lifecycle (F7); evidence fail-open (F11);
+   per-process caches/GC/circuit breaker under multi-worker.
+5. Model/provider risks: NIM endpoint per-call variance (6-192s) drives
+   mega-DAG planning wall; instructor silent retries inflate latency;
+   provider degradation -> availability; no FallbackChain wiring.
+6. Benchmark risks: single-shot stochasticity; stale checked-in artifact;
+   vacuous failing_probe; contract slot dead; x3 reproducibility not in
+   repo.
+7. Production risks: sandbox off in k8s + wildcard hosts; auth default
+   none; worker absent; tasks/projects open; raw payload persistence.
+8. Merely optimization: client pooling, N+1 resolve parallelization,
+   chunk knobs (closed), dead-config pruning.
+9. Dead code: section 25 list (nodes, routing, caches invalidation,
+   state channels, settings, docs claims, nested CI, frontend test files
+   without deps).
+10. SINGLE MOST IMPORTANT NEXT ACTION: check in the current benchmark
+    artifacts and make the baseline reproducible (F5), then fix the k8s
+    sandbox/allowed-hosts config (F1) — in that order, because a
+    reproducible baseline is what makes every subsequent change (incl.
+    F1) measurable. (Alternatively F1 first if the stack is going to be
+    deployed immediately — deployment config is the only P0.)
+
+================================================================================
+35. P3 ANALYSIS (from actual implementation)
+================================================================================
+- How chunks are formed: _chunk_intent_units sequential dependency-
+  ordered groups of chunk_size=6 with boundary shift (semantic_parser_node
+  .py:709-762); interleaved partition optional (P3 knob, default off);
+  rotation/concurrency knobs exist (defaults = control).
+- Partitioning deterministic? YES — pure functions of (units, relationships
+  , settings); same input -> same chunks every run.
+- Chunk sizes predictable? YES (ceil(n/6) with boundary shifts; W135
+  -> [6,6,6,2]).
+- Latency correlates with unit count? NO — evidence: chunk [6,6,6,2]
+  slowest was chunk 1 (6 units) in 7/7 rotation runs AND the 2-unit chunk
+  4 was sometimes slowest; per-call variance 6-192s for identical content
+  (15 runs, 0 failures/fallbacks). Content composition matters more than
+  count, and endpoint variance dominates both.
+- Can chunks be safely rebalanced? Yes mechanically (merge + coverage
+  invariant are partition-agnostic; verified in code), but measurement
+  shows no max(chunk_latency) benefit (interleaved median ~86s vs control
+  ~87.7s; chunk_size=4 worse).
+- Would adaptive balancing violate intent coverage? NO by construction —
+  coverage recovery at merge is partition-agnostic (semantic_parser_node
+  .py:960-1011); refs/deps reassigned at merge.
+- Would it increase endpoint contention? Yes — more chunks = more
+  concurrent calls to the same NIM endpoint (measured: 5 concurrent
+  chunks no better).
+- Do smaller chunks increase total LLM overhead? Yes (more calls, more
+  prompt tokens, more merge work; measured chunk_size=4 worse).
+- Is P3 worth implementing? NO as designed — FALSIFIED by 15 runs
+  (closed negative, commit 1cce159). The real lever is endpoint-side
+  (per-call variance / connection pooling), which is provider-scope.
+P3 BENEFIT: none measured; theoretical only if endpoint variance shrinks.
+P3 RISK: churn on frozen-adjacent planning code; coverage risk none.
+P3 COMPLEXITY: low (knobs exist).
+P3 EXPECTED IMPACT: nil on max(chunk_latency) (measured).
+P3 RECOMMENDATION: do not implement; keep knobs as diagnostics; if the
+NIM endpoint stabilizes, re-run the A/B before touching anything.
+
+================================================================================
+36. AUDIT SUMMARY
+================================================================================
+# EXECUTIVE SUMMARY
+Architecture health: STRONG orchestration core — 19-node deterministic
+compiler verified end-to-end (router->planner->validator->compiler->
+executor->recovery->response->memory), heavy deterministic validation
+layer, durable idempotency ledger, bounded budgets, typed status machines.
+Frozen phases P0-P2 are code-real (I1-I19; 2 partial caveats). Weak spots:
+deployment/config surface, evidence no-op paths, dead code surface.
+Reliability health: GOOD for execution correctness (idempotency, replay,
+leases); WEAK for recovery depth (retry/self-heal inert by default) and
+persisted status truth (F2).
+Model health: GOOD fit for planning/synthesis (Ultra+Ultra verified in
+.env + code path); PRIMARY bottleneck: NIM per-call variance (mega-DAG
+planning wall 34-155s); residual Class-B synthesis omissions.
+Performance health: GOOD within execution (parallel waves, caches,
+optimizer bypass); planning LLM-bound; P3 closed (endpoint-bound).
+Security health: STRONG execution gates (SSRF incl. redirect hops,
+sandbox, idempotency, approval hash, prompt boundary, redaction);
+WEAK deployment (k8s sandbox off, wildcard hosts, auth default none,
+projects/tasks open).
+Test health: STRONG deterministic unit suite (~600 tests, low flake);
+BROKEN CI wiring (live tests unexcluded, frontend deps undeclared);
+stale benchmark artifact; scenario runner assertion gaps.
+
+# CRITICAL FINDINGS
+- k8s ConfigMap disables the sandbox; prod .env allows any host (F1, P0).
+- Checkpoint records COMPLETED for budget-exceeded runs (F2, P1).
+- RETRY/SELF_HEAL recovery inert by default (F3, P1).
+- Benchmark baseline in docs (98/135 x3) not reproducible from repo;
+  checked-in artifact says 83/135 (F5, P1).
+- CI red by construction (F6, P1).
+
+# HIGH PRIORITY FINDINGS
+- _map_degradations never read (I18 partial) (F4).
+- Approval expiry + denied-blocking replan dead (F7).
+- Worker not deployable in shipped stack (F9).
+- Evidence: available==required always; compile fail-open; hallucinated
+  numbers not acted on (F11).
+- Auth/tenant gaps (F13, F14).
+
+# MEDIUM PRIORITY FINDINGS
+- DROP_AND_PROCEED in-place mutation outside context-node (F8).
+- ~40 dead settings + extra="ignore" drop (F10).
+- PromptRenderer sandbox dead (F12).
+- failing_probe vacuous + dead contract slot (F15).
+- Scenario runner assertion gaps (F16).
+- instructor client churn + N+1 resolves (F17).
+
+# LOW PRIORITY FINDINGS
+- Doc drift (README, node count, configmap vs env) (F18).
+- Artifact registry best-effort swallow; planner latency lost (F19).
+- Dead nodes/routing/caches/duplicates (F20).
+
+# VERIFIED WORKING
+19-node graph routing; planner single/chunked/repair paths; resolver
+semantics + branch-safe + distinctness; binder L1-L5 (literal-only L5);
+validator 12 check classes + DROP_AND_PROCEED + alignment; codegen
+RESOLVE synthesis + waves; wave executor + idempotency ledger + artifact
+cache; approval operation-hash binding; response guards + grounding +
+renderer fallback; memory gating (never stores failures); prompt registry
+fail-closed; benchmark scoring/contract logic; 27-migration chain head
+consistent.
+
+# NOT VERIFIED (from repository)
+- Values of .env model keys at value level (redacted here; wiring
+  verified) — sub-audit value inspection confirms nemotron-ultra.
+- The 98/135 x3 mean-91.1 baseline runs (artifacts live in /tmp, not the
+  repo); stability_history covers only 25 fast scenarios.
+- compiled_registry.json content vs live DB registry sync freshness.
+- Actual runtime behavior of worker/scheduler in a deployed stack.
+
+# DEAD / UNUSED
+Section 25 full list: dead nodes (cron/clarification/finalize/
+approval_gate), route_after_estimator, sync pass manager, CapabilityResolver
+class, template _fuzzy_match, invalidate_all_caches + ParseCache.invalidate
++ compiled_graph.invalidate_cache + RegistryClient.clear_cache, duplicated
+registry_version, 8 dead state channels, 4 dead TypedDict tiers, dead
+settings (~40), FallbackChain, ToolPerformanceTracker, queue.provider,
+server.*, langsmith keys, notifications stub, Vault stub, nested CI
+workflow, frontend test files without deps, root tests/architecture,
+README performance-table files, failing_probe scenarios.
+
+# RECOMMENDED NEXT STEPS
+1. Reproduce + check in the 135-scenario baseline (and the 7-gate runs);
+   make run_benchmark the single source of truth for the baseline claim.
+2. Fix k8s ConfigMap (sandbox=true, real host allowlist, nemotron model)
+   or explicitly mark the stack non-production.
+3. Fix runner budget-marker persistence (F2) + add a regression test.
+4. Make CI green: exclude live markers, repair frontend scripts/deps.
+5. Wire or remove _map_degradations; wire approval expiry; register
+   failing_probe or drop its scenarios.
+6. Deploy worker as a first-class component if background tasks are
+   product requirements.
+7. Harden auth/tenant (ownership on projects/tasks, constant-time API-key
+   compare, JWT aud, real secret resolver or document the stub).
+8. Prune dead config/code in a single docs+codedeath pass.
+
+# FINAL VERDICT
+The orchestration architecture is real, deterministic at every gate,
+extensively tested, and correctly frozen as of 1cce159 — with two
+PARTIAL invariants and one persistence-level status bug. The system is
+NOT production-ready as deployed-by-manifest: the k8s configuration
+contradicts the security model, the CI is broken, the benchmark evidence
+is not reproducible from the repo, background execution is undeployable,
+and recovery depth is deliberately shallow. With the P0/P1 items above
+addressed, the runtime itself is a credible production-grade agent
+orchestrator; the gaps are concentrated in deployment, evidence, and
+plumbing rather than in the core execution semantics.
+
+================================================================================
+37. OUTPUT REQUIREMENT — CLOSING BLOCK
+================================================================================
+AUDIT COMPLETENESS: COMPLETE (all 36 sections; deep source inspection of
+orchestration, compiler, capabilities, binder, validator, executor,
+evidence/synthesis, API/persistence/security, config/LLM/benchmark, tests/
+frontend/deploy; 3 targeted read-back verifications of key claims:
+runner budget marker, .env keys, benchmark_report.json).
+FILES INSPECTED: ~180 (src/nexus tree: ~90 modules; tests: 64 files +
+29 YAMLs + golden; scripts: run_benchmark, benchmark_scenarios x3,
+stability_score, seeds, mocks; deploy: docker + k8s manifests + CI x2;
+frontend: package.json, vite configs, src structure; root: README,
+SECURITY.md, Makefile, .env files).
+DIRECTORIES INSPECTED: nexus-agent/src/nexus/* (all), nexus-agent/tests,
+nexus-agent/scripts, nexus-agent/docs (spot), nexus-agent/docker,
+nexus-agent/deploy/k8s, nexus-agent/alembic/versions, frontend,
+.github/workflows, root.
+TESTS INSPECTED: 64 files + scenario runner + stability history +
+golden snapshots (coverage/type/flake classification).
+BENCHMARKS INSPECTED: run_benchmark.py (scoring/contract/classes),
+135 scenarios corpus, benchmark_report.json artifact.
+CONFIGURATION FILES INSPECTED: settings.py (all groups), .env (root +
+nexus-agent, keys redacted), .env.example, k8s configmap/secret,
+docker-compose, pyproject.
+UNVERIFIED AREAS: exact .env values at read level (redacted by policy);
+98/135 x3 run artifacts (not in repo); live runtime of worker/scheduler;
+compiled_registry.json vs live-DB sync freshness; frontend runtime
+behavior (no runnable tests).
+
+FINAL CONFIDENCE: HIGH
+  (core orchestration claims verified directly with file:line evidence
+   by four independent deep inspections + three targeted re-reads;
+   residual uncertainty confined to the listed UNVERIFIED areas)
+================================================================================
+END OF AUDIT
+================================================================================

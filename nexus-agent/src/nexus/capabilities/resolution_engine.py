@@ -76,21 +76,6 @@ def registry_version() -> int:
     return 0
 
 
-def registry_version() -> int:
-    """Current registry version (incrementing, from the persisted marker).
-
-    Distinct from the content-hash fingerprint. Synchronous best-effort;
-    0 when unavailable.
-    """
-    try:
-        from nexus.tools.registry import get_tool_registry_marker
-
-        marker = get_tool_registry_marker()
-        if marker.startswith("tools:"):
-            return int(marker.split(":", 1)[1]) % 1_000_000_000
-    except Exception:
-        pass
-    return 0
 
 
 class ResolutionEngine:

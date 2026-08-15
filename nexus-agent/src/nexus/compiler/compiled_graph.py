@@ -142,11 +142,6 @@ def get_compiled_graph() -> CompiledCapabilityGraph | None:
     return _compiled_graph
 
 
-def invalidate_cache() -> None:
-    """Clear the cached compiled graph so the next access reloads it."""
-    global _compiled_graph
-    _compiled_graph = None
-    logger.info("compiled_graph.cache_invalidated")
 
 
 def find_capability(

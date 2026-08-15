@@ -105,12 +105,6 @@ def node(fn: Any, *args: Any, **kwargs: Any) -> Callable[[AgentState], Any]:
 # ============================================================================
 
 
-def route_after_estimator(state: AgentState) -> str:
-    """Route after estimation — always ValidationNode (DecompositionNode
-    removed; ``_sub_workflows`` was never produced by any node, so the
-    decomposition branch was unreachable)."""
-    return "ValidationNode"
-
 
 def route_after_plan_validator(state: AgentState) -> str:
     """Route based on the deterministic PlanValidatorReport.
@@ -570,108 +564,6 @@ async def router_node(
 
     return await node_classify_query(state, llm, model)
 
-
-# ============================================================================
-# Node: Approval Gate
-# ============================================================================
-
-
-async def approval_gate_node(state: AgentState) -> dict[str, Any]:
-    """Check if any planned tool requires human approval."""
-    graph_data = state.get("_execution_graph")
-
-    if not graph_data:
-        return {"_approval_granted": True}
-
-    # Extract tool names from the compiled graph
-    nodes = graph_data.get("nodes", {}) if isinstance(graph_data, dict) else {}
-    tool_names = list({
-        nd.get("tool_name", "") for nd in nodes.values()
-        if isinstance(nd, dict) and nd.get("tool_name")
-    })
-
-    if not tool_names:
-        return {"_approval_granted": True}
-
-    from nexus.tools.approval_gate import check_plan_approval, format_approval_message
-
-    task_inputs: dict[str, list[dict[str, Any]]] = {}
-    for nd in nodes.values():
-        if isinstance(nd, dict):
-            tool = nd.get("tool_name", "")
-            if tool:
-                task_inputs.setdefault(tool, []).append(nd.get("inputs", {}))
-
-    # Query DB for risk_level/requires_approval only for tools in the plan
-    from nexus.db.base import async_session as _approval_db
-    from nexus.db.models.tool import Tool
-    from sqlalchemy import select
-
-    approval_tool_list: list[dict[str, Any]] = []
-    async with _approval_db() as session:
-        result = await session.execute(
-            select(Tool).where(Tool.name.in_(tool_names))
-        )
-        tools_db = result.scalars().all()
-        for t in tools_db:
-            approval_tool_list.append({
-                "name": t.name,
-                "risk_level": t.risk_level,
-                "requires_approval": t.requires_approval,
-            })
-
-    pending = check_plan_approval(tool_names, approval_tool_list)
-    if not pending:
-        return {"_approval_granted": True}
-
-    decision = state.get("_approval_decision")
-    if decision == "approved":
-        return {
-            "_approval_granted": True,
-            "_approval_decision": None,
-            "_needs_approval": False,
-        }
-    if decision == "rejected":
-        return {
-            "_approval_granted": False,
-            "_approval_decision": None,
-            "_needs_approval": False,
-            "errors": ["Tool execution rejected by user"],
-        }
-
-    import time as _time
-
-    requested_at = state.get("_approval_requested_at")
-    if requested_at is not None:
-        expiry = get_settings().agent.run_lock_ttl_s
-        if _time.time() - requested_at > expiry:
-            return {
-                "_approval_granted": False,
-                "_approval_decision": None,
-                "_needs_approval": False,
-                "errors": ["Approval request has expired — please try again"],
-            }
-
-    pending_with_inputs: list[dict[str, Any]] = []
-    for t in pending:
-        entry: dict[str, Any] = {"name": t["name"]}
-        t_inputs = task_inputs.get(t["name"], [])
-        if t_inputs:
-            entry["inputs"] = t_inputs[0]
-        pending_with_inputs.append(entry)
-
-    msg = format_approval_message(pending_with_inputs)
-
-    return {
-        "final_response": msg,
-        "_needs_approval": True,
-        "_pending_approval_tools": pending_with_inputs,
-        "_approval_requested_at": _time.time(),
-        "_routing_decision": "finalize",
-    }
-
-
-# ============================================================================
 # Node: Executor
 # ============================================================================
 

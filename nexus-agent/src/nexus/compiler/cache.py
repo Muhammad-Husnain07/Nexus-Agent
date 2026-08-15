@@ -295,15 +295,6 @@ class ParseCache(_BaseCache):
         self._store_in_memory(key, value)
         logger.debug("cache.parse_stored_memory", key=key[:12])
 
-    async def invalidate(self, query: str, tools: list[dict[str, Any]], model: str) -> None:
-        key = self._build_key(query, tools, model)
-        redis = await self._get_redis()
-        if redis is not None:
-            try:
-                await redis.delete(key)
-            except Exception:
-                pass
-        self._memory.pop(key, None)
 
     async def remove(
         self,
@@ -451,4 +442,3 @@ async def invalidate_all_caches() -> None:
         await _plan_cache.clear_all()
     _parse_cache = None
     _plan_cache = None
-    logger.info("cache.all_invalidated")

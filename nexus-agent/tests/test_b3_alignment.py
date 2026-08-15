@@ -66,11 +66,16 @@ def test_case5_multiple_valid_capabilities_no_false_block():
 
 def test_case6_absent_pick_blocks_only_when_strong():
     """A pick absent from the engine's candidate set blocks ONLY when the
-    engine evidence is STRONG (dominant/unique top)."""
+    engine evidence is STRONG (dominant/unique top). P1-A: the ratio path
+    carries the absolute floor (top < 10.0 is keyword-noise — never
+    blocking), so 7.0 vs 3.0 is ambiguous, 12.0 vs 3.0 is misaligned."""
     # strong: unique top
     assert _alignment_verdict("get_ghibli_films", [("get_valorant_agents", 100.0)]) == "misaligned"
-    # strong: dominant (7.0 >= 2 * 3.0)
-    assert _alignment_verdict("other_tool", [("get_exchange_rates", 7.0), ("noise", 3.0)]) == "misaligned"
+    # strong: dominant AND above the absolute floor (12.0 >= 2 * 3.0, >= 10.0)
+    assert _alignment_verdict("other_tool", [("get_exchange_rates", 12.0), ("noise", 3.0)]) == "misaligned"
+    # ratio-dominant but BELOW the floor (7.0 >= 2 * 3.0 yet < 10.0):
+    # keyword-noise scale — ambiguous, never blocking (P1-A floor)
+    assert _alignment_verdict("other_tool", [("get_exchange_rates", 7.0), ("noise", 3.0)]) == "ambiguous"
     # weak/close: absent pick must NOT block (Bitcoin/todo classes)
     assert _alignment_verdict("get_bitcoin_price", [("astronomy_pic", 3.0), ("other", 2.5)]) == "ambiguous"
 

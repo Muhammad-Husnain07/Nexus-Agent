@@ -83,6 +83,3 @@ class RegistryClient:
         cap = await self.get_capability(logical_op_name)
         return (cap.output_contract or {}) if cap else {}
 
-    def clear_cache(self) -> None:
-        """Reset the cache (e.g., after a registry update)."""
-        self._cache.clear()
