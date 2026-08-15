@@ -1097,12 +1097,25 @@ class AgentRunner:
                 })))
 
         # --- SemanticPlannerNode → map degradation (PH-5: a stripped
-        # fan-out is never invisible — expected vs actual cardinality) ---
+        # fan-out is never invisible) + planning telemetry (PH-6A:
+        # latency / chunk timing / resolution suppressions) ---
         elif inner == "SemanticPlannerNode":
             deg = state_update.get("_map_degradations")
             if deg:
                 events.append(AgentEvent("map_degraded", {
                     "degradations": deg,
+                }))
+            supp = state_update.get("_resolution_suppressions")
+            if supp:
+                events.append(AgentEvent("resolution_suppressed", {
+                    "suppressions": supp,
+                }))
+            chunk = state_update.get("_planner_chunk_timing")
+            latency = state_update.get("_planner_latency_ms")
+            if chunk or latency:
+                events.append(AgentEvent("planner_timing", {
+                    "latency_ms": latency or 0,
+                    "chunk_timing": chunk or {},
                 }))
 
         # --- CompilerNode → execution graph compiled + composition progress ---

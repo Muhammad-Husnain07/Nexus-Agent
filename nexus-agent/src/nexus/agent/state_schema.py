@@ -369,6 +369,10 @@ _EPHEMERAL_FIELDS: list[str] = [
     "_detected_intents",
     "_response_status",
     "_map_degradations",
+    # PH-6A observability channels (per-turn planning telemetry)
+    "_planner_latency_ms",
+    "_planner_chunk_timing",
+    "_resolution_suppressions",
     "_ready_to_plan",
     "_needs_clarification",
     "_clarification_asked",
@@ -542,6 +546,13 @@ class AgentState(TypedDict, total=False):
     # P2-A.2: map-degradation ledger (dangling iterate_over stripped to a
     # single body — a lost fan-out is never invisible).
     _map_degradations: list[dict[str, Any]]
+
+    # PH-6A: planning telemetry — latency, chunk timing (mega-DAG), and
+    # branch-safe resolution suppressions (capability -> reason). Pure
+    # observability; consumed by SSE events + future outcome rows.
+    _planner_latency_ms: int
+    _planner_chunk_timing: dict[str, Any]
+    _resolution_suppressions: list[dict[str, str]]
 
     # P1-B: explicit terminal response status (SUCCESS / PARTIAL_SUCCESS /
     # CLARIFICATION_REQUIRED / EXECUTION_FAILED / PLANNING_FAILED /

@@ -203,7 +203,7 @@ async def _fetch_capabilities(
     domain_hint: str | None = None,
     snapshot: dict[str, Any] | None = None,
     intent_graph: Any = None,
-) -> tuple[list[str], str]:
+) -> tuple[list[str], str, dict[str, Any]]:
     """Fetch the capabilities the planner should consider.
 
     RETRIEVAL-FIRST via the ResolutionEngine: instead of loading the entire
@@ -289,6 +289,9 @@ async def _fetch_capabilities(
         # workflow facts + typed metadata/explanation (single source of truth).
         candidates: list[Any] = []
         template_hint = ""
+        # PH-6A: branch-safe resolution removals (capability -> reason) —
+        # initialized so every return path carries it.
+        suppressions: dict[str, Any] = {}
         if query and query.strip():
             try:
                 resolution = await get_resolution_engine().resolve(
@@ -376,6 +379,12 @@ async def _fetch_capabilities(
                         closed=[n for n, _s in closed],
                         diagnostics={k: v for k, v in list(diagnostics.items())[:8]},
                     )
+                    # PH-6A: surface the suppression reasons (WHY a
+                    # capability was removed for an intent) as a state
+                    # channel + SSE event — observability, never logic.
+                    suppressions = {
+                        k: v for k, v in list(diagnostics.items())[:20]
+                    }
                 except Exception as _rank_exc:
                     logger.warning(
                         "semantic_planner.resolver_rank_failed",
@@ -433,7 +442,7 @@ async def _fetch_capabilities(
                         "semantic_planner.empty_catalog",
                         query=str(query or "")[:60],
                     )
-                    return valid_ops, "".join(catalog_parts)
+                    return valid_ops, "".join(catalog_parts), {}
                 logger.info(
                     "semantic_planner.full_domain_fallback",
                     query=str(query or "")[:60],
@@ -527,7 +536,7 @@ async def _fetch_capabilities(
     except Exception as exc:
         logger.warning("semantic_planner.catalog_db_failed", error=str(exc))
 
-    return valid_ops, catalog
+    return valid_ops, catalog, suppressions
 
 
 # ============================================================================
@@ -1009,7 +1018,25 @@ async def _chunked_plan_extract(
                     )
     except Exception as _cov_exc:
         logger.warning("semantic_planner.chunk_coverage_failed", error=str(_cov_exc)[:150])
-    return {"version": "1.0", "nodes": merged_nodes, "collections": {}}
+    # PH-6A: persist the chunk-timing instrumentation on the merged plan —
+    # the planner patch builder pops it into _planner_chunk_timing (never
+    # into the workflow itself, which is strict-schema'd).
+    return {
+        "version": "1.0",
+        "nodes": merged_nodes,
+        "collections": {},
+        "chunk_timing_meta": {
+            "chunk_count": len(chunks),
+            "chunk_sizes": [len(c) for c in chunks],
+            "start_order": [ci for ci, _c in _scheduled],
+            "partition": partition,
+            "rotation": rotation,
+            "concurrency": concurrency if concurrency else len(chunks),
+            "per_chunk_ms": [chunk_llm_ms.get(ci, 0.0) for ci in range(len(chunks))],
+            "max_chunk_ms": round(max(chunk_llm_ms.values(), default=0.0), 1),
+            "sum_chunk_ms": round(sum(chunk_llm_ms.values()), 1),
+        },
+    }
 
 
 async def _repair_empty_plan(
@@ -1684,7 +1711,7 @@ async def semantic_parser_node(
     # effective planning message (dynamic step intent / approval modification
     # when scoped) narrows the catalog to ranked, available top-K candidates
     # before the LLM ever sees it. Engine facts + scored catalog text.
-    valid_ops, capabilities = await _fetch_capabilities(
+    valid_ops, capabilities, _suppressions = await _fetch_capabilities(
         last_message, domain_hint=domain_hint, snapshot=snapshot,
         intent_graph=intent_graph,
     )
@@ -2260,6 +2287,7 @@ async def semantic_parser_node(
         binding_report=binding_report,
         intent_graph=intent_graph,
         map_degradations=_planner_map_degradations or None,
+        suppressions=_suppressions or None,
     )
 
 
@@ -2432,6 +2460,7 @@ def _build_patch(
     binding_report: dict[str, Any] | None = None,
     intent_graph: Any = None,
     map_degradations: list[dict[str, Any]] | None = None,
+    suppressions: dict[str, Any] | None = None,
 ) -> StatePatch:
     """Build a StatePatch with the LogicalWorkflow and metadata.
 
@@ -2440,13 +2469,23 @@ def _build_patch(
         cached: Whether this came from the plan cache.
         total_tokens: LLM token usage.
         cost_usd: LLM cost.
-        latency_ms: Planning latency.
+        latency_ms: Planning latency (PH-6A: persisted — observability).
         version: Target context version.
         errors: Optional planner errors surfaced on the state patch.
         invocation_budget: The ReasoningBudget ledger (consumed LLM calls).
         binding_report: P0-B provenance ledger (parameter bindings + missing
             inputs classified explicitly).
+        map_degradations: P2-A.2 map-degradation ledger (a lost fan-out is
+            never invisible).
+        suppressions: P0-A.3 branch-safe resolution removals (capability →
+            reason) — WHY a capability was suppressed (PH-6A: surfaced as
+            an SSE event).
     """
+    # PH-6A: chunk-timing rides the merged plan dict (strict-schema'd
+    # workflow) and is POPPED into the state — never stored in the plan.
+    _chunk_timing: dict[str, Any] = {}
+    if isinstance(workflow, dict):
+        _chunk_timing = dict(workflow.pop("chunk_timing_meta", {}) or {})
     updates: dict[str, Any] = {
         "_logical_workflow": workflow,
         "_extraction_result": {
@@ -2454,6 +2493,13 @@ def _build_patch(
             "cached": cached,
         },
     }
+
+    # PH-6A: planner latency + chunk timing persisted on the state (the
+    # per-stage attribution the outcome row was missing).
+    if latency_ms:
+        updates["_planner_latency_ms"] = int(latency_ms)
+    if _chunk_timing:
+        updates["_planner_chunk_timing"] = _chunk_timing
 
     if budget_exceeded:
         updates["_budget_exceeded"] = budget_exceeded
@@ -2469,6 +2515,12 @@ def _build_patch(
 
     if map_degradations:
         updates["_map_degradations"] = map_degradations
+
+    if suppressions:
+        _flat: list[dict[str, str]] = []
+        for _cap, _reason in list(suppressions.items())[:20]:
+            _flat.append({"capability": str(_cap), "reason": str(_reason)[:160]})
+        updates["_resolution_suppressions"] = _flat
 
     if intent_graph is not None:
         try:

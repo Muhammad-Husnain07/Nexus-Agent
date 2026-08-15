@@ -158,6 +158,60 @@ def test_map_degradations_surface_as_sse_event():
     ) if ev.type == "map_degraded"]
 
 
+def test_planner_telemetry_surfaces_as_sse_events():
+    """PH-6A: planner latency + chunk timing + resolution suppressions are
+    observable (planner_timing / resolution_suppressed events)."""
+    from nexus.agent.runner import AgentRunner
+
+    runner = AgentRunner()
+    events = runner._translate("SemanticPlannerNode", {
+        "_planner_latency_ms": 1234,
+        "_planner_chunk_timing": {
+            "chunk_count": 2,
+            "max_chunk_ms": 500.0,
+            "per_chunk_ms": [100.0, 500.0],
+        },
+        "_resolution_suppressions": [
+            {"capability": "get_currency_conversion", "reason": "generic suppressed"},
+        ],
+    })
+    timing = [ev for ev in events if ev.type == "planner_timing"]
+    assert timing
+    assert timing[0].payload["latency_ms"] == 1234
+    assert timing[0].payload["chunk_timing"]["max_chunk_ms"] == 500.0
+    suppressed = [ev for ev in events if ev.type == "resolution_suppressed"]
+    assert suppressed
+    assert suppressed[0].payload["suppressions"][0]["capability"] == "get_currency_conversion"
+    # No telemetry -> no events.
+    assert not [ev for ev in runner._translate(
+        "SemanticPlannerNode", {"_logical_workflow": {"nodes": []}}
+    ) if ev.type in ("planner_timing", "resolution_suppressed")]
+
+
+def test_build_patch_persists_telemetry_and_pops_chunk_timing():
+    """PH-6A: _build_patch writes latency/chunk-timing/suppressions to the
+    state patch and POPS _chunk_timing out of the strict-schema workflow."""
+    from nexus.agent.nodes.semantic_parser_node import _build_patch
+
+    patch = _build_patch(
+        {
+            "version": "1.0",
+            "nodes": [{"op": "search_books", "ref": "b", "inputs": {}}],
+            "chunk_timing_meta": {"chunk_count": 2, "max_chunk_ms": 10.0},
+        },
+        latency_ms=2500,
+        suppressions={"get_currency_conversion": "generic suppressed"},
+    )
+    updates = patch.updates
+    assert updates["_planner_latency_ms"] == 2500
+    assert updates["_planner_chunk_timing"]["chunk_count"] == 2
+    assert updates["_resolution_suppressions"] == [
+        {"capability": "get_currency_conversion", "reason": "generic suppressed"},
+    ]
+    # The workflow itself is clean (strict schema — no timing key).
+    assert "chunk_timing_meta" not in updates["_logical_workflow"]
+
+
 def test_response_evidence_compile_failure_fails_closed():
     """PH-2 (Class A): when evidence compilation fails, the response must
     NEVER claim SUCCESS/coverage-1.0 — coverage 0.0, PARTIAL_SUCCESS, and a
