@@ -534,6 +534,26 @@ class CompilerSettings(BaseModel):
     max_workflow_nodes: int = Field(
         default=50, ge=1, le=200, description="Max nodes per compiled workflow"
     )
+    # P2-A HIERARCHICAL MEGA-DAG PLANNING: when a single request's intent
+    # graph exceeds this many executable units, the planner splits planning
+    # into per-chunk extraction passes instead of one giant 20-30 node
+    # structured output (the T132/U133/W135/S126 empty-plan class — Ultra
+    # fails to emit very large workflows in one pass). Chunks are built
+    # from the intent graph's dependency-ordered units, each planned
+    # separately, then merged deterministically. <= threshold = the
+    # existing single-shot path (no behavior change for normal queries).
+    max_single_pass_intents: int = Field(
+        default=12,
+        ge=1,
+        le=100,
+        description="Intent units above this trigger hierarchical (chunked) planning",
+    )
+    chunk_size: int = Field(
+        default=6,
+        ge=1,
+        le=20,
+        description="Intent units per planning chunk in hierarchical mode",
+    )
     optimizer_min_nodes: int = Field(
         default=3,
         ge=1,

@@ -75,16 +75,33 @@ class PlanValidatorReport(BaseModel):
     def action(self) -> ViolationAction:
         """Dominant action: worst severity wins.
 
-        P1-A: DROP_AND_PROCEED wins ONLY when every ERROR-level violation
-        is itself drop-and-proceed class — any repair-worthy error
-        (alignment/coverage/missing-input-without-binder) REFINEs the
-        whole plan instead.
+        P1-A: DROP_AND_PROCEED wins when unresolvable-input drops are
+        present — even alongside alignment/coverage (the reviewer's L5:
+        weak alignment is evidence-only on a plan that also carries
+        unresolvable inputs; REFINE would replan the whole DAG for a
+        docker ``repository`` that does not exist — the mega-DAG wall-time
+        class). A plan whose ONLY errors are alignment/coverage still
+        REFINEs.
         """
         for v in self.violations:
             if v.severity == ViolationSeverity.CRITICAL:
                 return v.action
         errors = [v for v in self.violations if v.severity == ViolationSeverity.ERROR]
         if errors:
+            has_unresolvable = any(
+                v.action == ViolationAction.DROP_AND_PROCEED for v in errors
+            )
+            if all(
+                v.action in (
+                    ViolationAction.DROP_AND_PROCEED,
+                    ViolationAction.REFINE,
+                ) for v in errors
+            ) and has_unresolvable:
+                # Mixed unresolvable-drop + refinement (alignment/coverage):
+                # drop the unresolvable nodes and proceed — the refinement
+                # classes are evidence-only on mega-DAGs where a single
+                # missing input must not void 8 valid branches.
+                return ViolationAction.DROP_AND_PROCEED
             if all(
                 v.action == ViolationAction.DROP_AND_PROCEED for v in errors
             ):

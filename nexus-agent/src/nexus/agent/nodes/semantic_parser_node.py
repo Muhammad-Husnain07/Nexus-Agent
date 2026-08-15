@@ -17,6 +17,7 @@ returns an error patch.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -703,6 +704,145 @@ def _diagnose_plan_failure(
     if not isinstance(nodes, list) or not nodes:
         return _PLAN_FAILURE_EMPTY
     return _PLAN_FAILURE_SCHEMA
+
+
+def _chunk_intent_units(
+    units: list[str],
+    chunk_size: int,
+    relationships: list[Any] | None = None,
+) -> list[list[str]]:
+    """P2-A: split intent units into dependency-respecting chunks.
+
+    The intent graph's units are already in request order (sequence). The
+    chunker keeps units in order and groups them into ``chunk_size``-sized
+    chunks — dependency relationships (a later unit consuming an earlier
+    one's output) are preserved by ordering (the producer precedes its
+    consumer in the chunk sequence, and producer+consumer are never split
+    across a chunk boundary when the consumer falls in the next chunk —
+    the chunk boundary shifts so the pair stays together).
+
+    Returns a list of unit-list chunks (deterministic, order-preserving).
+    """
+    if not units:
+        return []
+    if len(units) <= chunk_size:
+        return [units]
+    # Dependency pairs: (producer_idx, consumer_idx) from relationships.
+    rel_pairs: set[tuple[int, int]] = set()
+    try:
+        for rel in relationships or []:
+            src = str(getattr(rel, "source_intent", "") or "")
+            tgt = str(getattr(rel, "target_intent", "") or "")
+            if not src or not tgt:
+                continue
+            # Map intent_id -> unit index (goals carry the entity; the
+            # relationship ids map to unit order by position).
+            src_idx = int(src.rsplit("_", 1)[-1]) - 1 if "_" in src else -1
+            tgt_idx = int(tgt.rsplit("_", 1)[-1]) - 1 if "_" in tgt else -1
+            if 0 <= src_idx < len(units) and 0 <= tgt_idx < len(units):
+                rel_pairs.add((min(src_idx, tgt_idx), max(src_idx, tgt_idx)))
+    except Exception:
+        rel_pairs = set()
+
+    chunks: list[list[str]] = []
+    i = 0
+    n = len(units)
+    while i < n:
+        end = min(i + chunk_size, n)
+        # Shift the boundary left so a dependency pair straddling the cut
+        # stays together (the consumer moves into the previous chunk).
+        for (a, b) in rel_pairs:
+            if i < b < end and a < i:
+                end = b  # keep consumer b with producer a in the prior chunk
+                break
+        if end <= i:
+            end = i + chunk_size
+        chunks.append(units[i:end])
+        i = end
+    return chunks
+
+
+async def _chunked_plan_extract(
+    llm: LLMClient,
+    model: str,
+    user_message: str,
+    units: list[str],
+    capabilities: str,
+    valid_ops: list[str],
+    settings: Any,
+    budget: Any,
+    relationships: list[Any] | None = None,
+) -> dict[str, Any] | None:
+    """P2-A hierarchical planning: extract ONE plan per chunk, merge.
+
+    For mega-intent requests (20+ units) the single structured extraction
+    over the whole request fails (``got []`` — the T132/U133/W135/S126
+    class). Chunked planning asks the model for a small plan per
+    dependency-ordered chunk, then merges the node lists. Each chunk's
+    prompt names ONLY that chunk's units + the capability catalog — the
+    model never reasons over the entire 25-node workflow at once.
+
+    Returns the merged workflow dict, or None on failure.
+    """
+    from nexus.agent.prompts.manager import prompt_manager as _ch_pm
+
+    chunk_size = 6
+    try:
+        chunk_size = int(get_settings().compiler.chunk_size)
+    except Exception:
+        chunk_size = 6
+    chunks = _chunk_intent_units(units, chunk_size, relationships)
+    if not chunks or len(chunks) < 2:
+        return None
+    merged_nodes: list[dict[str, Any]] = []
+    used_refs: set[str] = set()
+
+    async def _plan_chunk(ci: int, chunk: list[str]) -> list[dict[str, Any]]:
+        """Extract one chunk's plan (independent — parallelizable)."""
+        if not budget.consume("llm_calls"):
+            logger.warning("semantic_planner.chunked_budget_exhausted", chunk=ci)
+            return []
+        chunk_prompt = _ch_pm.render(
+            "logical_planner", "2.4",
+            capabilities=capabilities if capabilities else "(none available)",
+            history="(chunked hierarchical planning — plan ONLY the listed units)",
+        )
+        chunk_user = (
+            f"Plan the following intent units ONLY (chunk {ci + 1}/{len(chunks)}):\n"
+            + "\n".join(f"- {u}" for u in chunk[:8])
+        )
+        parsed = await _instructor_extract(
+            chunk_prompt, chunk_user, llm, model, settings, valid_ops
+        )
+        if parsed is None:
+            parsed = await _json_extract(chunk_prompt, chunk_user, llm, model, settings)
+        nodes = parsed.get("nodes") if isinstance(parsed, dict) else None
+        if not isinstance(nodes, list) or not nodes:
+            logger.warning("semantic_planner.chunked_empty", chunk=ci)
+            return []
+        out: list[dict[str, Any]] = []
+        for node in nodes:
+            if isinstance(node, dict):
+                out.append(dict(node))
+        return out
+
+    # P2-A: chunks are dependency-ORDERED groups — parallel extraction is
+    # safe because each chunk plans ONLY its own units (no cross-chunk
+    # references in the prompts). Merging re-sequences by chunk order.
+    _chunk_results = await asyncio.gather(*[
+        _plan_chunk(ci, chunk) for ci, chunk in enumerate(chunks)
+    ])
+    for ci, chunk_nodes in enumerate(_chunk_results):
+        for node in chunk_nodes:
+            ref = str(node.get("ref") or f"chunk{ci}_{len(used_refs)}")
+            if ref in used_refs:
+                ref = f"{ref}_{ci}"
+            node["ref"] = ref
+            used_refs.add(ref)
+            merged_nodes.append(node)
+    if not merged_nodes:
+        return None
+    return {"version": "1.0", "nodes": merged_nodes, "collections": {}}
 
 
 async def _repair_empty_plan(
@@ -1604,11 +1744,54 @@ async def semantic_parser_node(
 
     _bud = _budget_from_state(snapshot)
 
+    # P2-A PRE-CHECK: MEGA-INTENT REQUESTS go STRAIGHT to hierarchical
+    # (chunked) planning — a single structured extraction over 20+ intent
+    # units is the T132/U133/W135/S126 ``got []`` class (the model cannot
+    # emit a very large workflow in one pass; the doomed single-shot costs
+    # 60-90s+ then still fails). Chunked planning asks for a SMALL plan
+    # per dependency-ordered chunk and merges. Normal requests (<= the
+    # threshold) keep the existing single-shot path unchanged.
+    _mega_units: list[str] = []
+    try:
+        if intent_graph is not None:
+            _mega_units = [i.goal for i in intent_graph.executable]
+    except Exception:
+        _mega_units = []
+    try:
+        _max_single = int(get_settings().compiler.max_single_pass_intents)
+    except Exception:
+        _max_single = 12
+    if len(_mega_units) > _max_single:
+        logger.warning(
+            "semantic_planner.chunked_direct",
+            units=len(_mega_units),
+            threshold=_max_single,
+        )
+        _rel = []
+        try:
+            if intent_graph is not None:
+                _rel = list(intent_graph.relationships)
+        except Exception:
+            _rel = []
+        _chunked = await _chunked_plan_extract(
+            llm, model, last_message, _mega_units,
+            capabilities, valid_ops, settings, _bud,
+            relationships=_rel,
+        )
+        if _chunked is not None:
+            parsed = _chunked
+            logger.info(
+                "semantic_planner.chunked_merged_direct",
+                nodes=len(_chunked.get("nodes") or []),
+            )
+
     # Try instructor first with strict Literal enforcement; on a typed LLM
     # failure (provider timeout/5xx — flaky shared endpoints), retry before
     # surfacing an honest error: transient provider failures are common and a
     # re-attempt materially improves availability.
     for _retry in range(3):
+        if parsed is not None:
+            break  # P2-A: chunked planning already produced a merged plan
         if not _bud.consume("llm_calls"):
             return _build_error_patch(
                 Exception("invocation llm-call budget exhausted during planning"),
@@ -1664,6 +1847,41 @@ async def semantic_parser_node(
             )
             if repaired is not None:
                 parsed = repaired
+            else:
+                # P2-A HIERARCHICAL MEGA-DAG PLANNING: the empty-plan
+                # repair failed — this is the 20+ intent class (T132/U133/
+                # W135/S126) where a SINGLE structured extraction over the
+                # whole request fails. Chunk the intent units and plan per
+                # chunk (each small extraction succeeds), then merge.
+                try:
+                    _max_single = int(get_settings().compiler.max_single_pass_intents)
+                except Exception:
+                    _max_single = 12
+                if len(_executable_units) > _max_single:
+                    logger.warning(
+                        "semantic_planner.chunked_planning",
+                        units=len(_executable_units),
+                    )
+                    _rel = []
+                    try:
+                        if intent_graph is not None:
+                            _rel = list(intent_graph.relationships)
+                    except Exception:
+                        _rel = []
+                    chunked = await _chunked_plan_extract(
+                        llm, model, last_message, _executable_units,
+                        capabilities, valid_ops, settings, _bud,
+                        relationships=_rel,
+                    )
+                    if chunked is not None:
+                        parsed = chunked
+                        logger.info(
+                            "semantic_planner.chunked_merged",
+                            nodes=len(chunked.get("nodes") or []),
+                            chunks=(
+                                len(_executable_units) + 5
+                            ) // max(1, int(get_settings().compiler.chunk_size)),
+                        )
 
     if parsed is None:
         return _build_error_patch(

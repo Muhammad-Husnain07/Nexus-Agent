@@ -443,9 +443,11 @@ def test_missing_input_refines_when_binder_unavailable(monkeypatch):
     assert report.action.value != "drop_and_proceed"
 
 
-def test_drop_and_proceed_requires_all_errors_droppable():
-    """DROP_AND_PROCEED wins ONLY when every ERROR violation is that class
-    — a mixed verdict (alignment + unresolvable input) still REFINEs."""
+def test_drop_and_proceed_wins_with_unresolvable_mixed_verdict():
+    """P2-A (reviewer L5): a plan carrying unresolvable-input drops PLUS
+    alignment/coverage refinements DROP_AND_PROCEEDs — one missing docker
+    repository must not replan (and wall-time-kill) a mega-DAG with 8
+    valid branches. Only pure alignment/coverage (no unresolvable) REFINEs."""
     from nexus.agent.nodes.plan_validator_node import (
         PlanValidatorReport,
         Violation,
@@ -467,7 +469,20 @@ def test_drop_and_proceed_requires_all_errors_droppable():
         ),
         errors=["x"],
     )
-    assert report.action == ViolationAction.REFINE
+    assert report.action == ViolationAction.DROP_AND_PROCEED
+
+    # Pure alignment (no unresolvable) still REFINEs.
+    report2 = PlanValidatorReport(
+        valid=False,
+        violations=(
+            Violation(code="capability_alignment",
+                      severity=ViolationSeverity.ERROR,
+                      action=ViolationAction.REFINE, node="plan",
+                      message="m"),
+        ),
+        errors=["x"],
+    )
+    assert report2.action == ViolationAction.REFINE
 
 
 def test_engine_dominant_requires_absolute_floor():

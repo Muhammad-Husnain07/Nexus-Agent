@@ -331,3 +331,50 @@ def test_map_collapse_skips_duplicate_values():
     collapsed, collections = _collapse_map_candidates(nodes)
     assert len(collapsed) == 2  # same value twice — not distinct entities
     assert collections == {}
+
+
+# ---------------------------------------------------------------------------
+# P2-A: hierarchical mega-DAG planning — chunked intent units
+# ---------------------------------------------------------------------------
+
+def test_chunk_intent_units_basic_split():
+    from nexus.agent.nodes.semantic_parser_node import _chunk_intent_units
+
+    units = [f"intent {i}" for i in range(14)]
+    chunks = _chunk_intent_units(units, 6)
+    assert len(chunks) == 3
+    assert [len(c) for c in chunks] == [6, 6, 2]
+    # Order preserved across chunks (dependency order).
+    assert chunks[0][0] == "intent 0"
+    assert chunks[2][-1] == "intent 13"
+
+
+def test_chunk_intent_units_small_no_chunk():
+    from nexus.agent.nodes.semantic_parser_node import _chunk_intent_units
+
+    units = [f"intent {i}" for i in range(4)]
+    assert _chunk_intent_units(units, 6) == [units]
+
+
+def test_chunk_intent_units_preserves_dependency_pair():
+    from nexus.agent.nodes.semantic_parser_node import _chunk_intent_units
+
+    # intent_1 (idx 0) produces, intent_2 (idx 5) consumes — the pair
+    # straddles a chunk boundary at 6; the boundary must shift so the
+    # consumer stays with its producer's chunk.
+    units = [f"intent {i}" for i in range(10)]
+    rel = type("R", (), {
+        "source_intent": "intent_1", "target_intent": "intent_2",
+        "artifact": "coords",
+    })()
+    chunks = _chunk_intent_units(units, 6, relationships=[rel])
+    # intent 5 (consumer) must be in the same chunk as intent 0 (producer).
+    joined = [c for c in chunks if "intent 0" in c]
+    assert len(joined) == 1
+    assert "intent 5" in joined[0]
+
+
+def test_chunk_intent_units_empty():
+    from nexus.agent.nodes.semantic_parser_node import _chunk_intent_units
+
+    assert _chunk_intent_units([], 6) == []
