@@ -1,0 +1,7053 @@
+{
+ "generated": "2026-08-15T10:31:05",
+ "scenarios_total": 135,
+ "scenarios_passed": 98,
+ "avg_total": 91.5,
+ "dimensions": {
+  "intent": 0.97,
+  "resolution": 0.889,
+  "binding": 1.0,
+  "topology": 0.985,
+  "parallelism": 0.985,
+  "artifacts": 0.785,
+  "recovery": 0.993,
+  "validation": 0.733,
+  "grounding": 0.763,
+  "efficiency": 0.957
+ },
+ "failure_classes": {
+  "ARTIFACT_GRAPH": 29,
+  "EXECUTOR/VALIDATOR": 36,
+  "RESOLVER": 15,
+  "TOPOLOGY": 10,
+  "EXECUTOR": 13,
+  "SYNTHESIS": 3,
+  "RECOVERY": 1,
+  "PLANNER": 4
+ },
+ "benchmark_contract_scenarios": [],
+ "intent_accounting": {
+  "detected_avg": 2.72,
+  "planned_avg": 2.2,
+  "executed_avg": 2.29,
+  "relationships_total": 12
+ },
+ "synthesis_coverage": {
+  "evidence_required_avg": 1.35,
+  "evidence_rendered_avg": 0.97,
+  "entities_required_avg": 1.35,
+  "entities_rendered_avg": 0.97
+ },
+ "results": [
+  {
+   "id": "A01",
+   "group": "A",
+   "prompt": "Define serendipity.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "define_word"
+   ],
+   "tools_used": [
+    "define_word"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nserendipity:\n1. {'word': 'serendipity', 'phonetic': '/ˌsɛ.ɹən.ˈdɪ.pɪ.ti/', 'phonetics': (mappingproxy({'text': '/ˌsɛ.ɹən.ˈdɪ",
+   "clarification": false,
+   "latency_s": 58.8,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 819.0,
+    "max_wave_ms": 819.0,
+    "wall_s": 58.8
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "A02",
+   "group": "A",
+   "prompt": "Tell me about Pakistan.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "get_country_info"
+   ],
+   "tools_used": [
+    "get_country_info"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\npakistan:\ntitle: Pakistan\npageid: 23235\ndescription: Country in South Asia\nextract: Pakistan, officially the Islamic Republi",
+   "clarification": false,
+   "latency_s": 35.5,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 602.0,
+    "max_wave_ms": 602.0,
+    "wall_s": 35.5
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "A03",
+   "group": "A",
+   "prompt": "Get information about the Docker nginx image.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "get_docker_images"
+   ],
+   "tools_used": [
+    "get_docker_images"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nnginx:\nuser: library\nname: nginx\nnamespace: library\ndescription: Official build of Nginx.\nstar_count: 21358\npull_count: 1326",
+   "clarification": false,
+   "latency_s": 103.7,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 610.7,
+    "max_wave_ms": 610.7,
+    "wall_s": 103.7
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "A04",
+   "group": "A",
+   "prompt": "Tell me about Pikachu.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "get_pokemon"
+   ],
+   "tools_used": [
+    "get_pokemon"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\npikachu:\n1. {'ability': mappingproxy({'name': 'static', 'url': 'https://pokeapi.co/api/v2/ability/9/'}), 'is_hidden': False,",
+   "clarification": false,
+   "latency_s": 61.7,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 646.4,
+    "max_wave_ms": 646.4,
+    "wall_s": 61.7
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "A05",
+   "group": "A",
+   "prompt": "List Studio Ghibli films.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "get_ghibli_films"
+   ],
+   "tools_used": [
+    "get_ghibli_films"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nget_ghibli_films:\n1. {'id': '2baf70d1-42bb-4437-b551-e5fed5a87abe', 'title': 'Castle in the Sky', 'original_title': '天空の城ラピュ",
+   "clarification": false,
+   "latency_s": 39.4,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 811.3,
+    "max_wave_ms": 811.3,
+    "wall_s": 39.4
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "A06",
+   "group": "A",
+   "prompt": "List Valorant agents.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "get_valorant_agents"
+   ],
+   "tools_used": [
+    "get_valorant_agents"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nget_valorant_agents:\nstatus: 200\n1. {'uuid': 'e370fa57-4757-3604-3648-499e1f642d3f', 'displayName': 'Gekko', 'description': ",
+   "clarification": false,
+   "latency_s": 64.4,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 507.3,
+    "max_wave_ms": 507.3,
+    "wall_s": 64.4
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "A07",
+   "group": "A",
+   "prompt": "Search for Naruto anime.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_anime"
+   ],
+   "tools_used": [
+    "search_anime"
+   ],
+   "waves": 1,
+   "final_excerpt": "The search returned several Naruto anime entries: the main **NARUTO** TV series (220 episodes, average score 80), **NARUTO×UT** OVA (1 episode, score 69), **ROA",
+   "clarification": false,
+   "latency_s": 31.4,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 597.0,
+    "max_wave_ms": 597.0,
+    "wall_s": 31.4
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "A08",
+   "group": "A",
+   "prompt": "Search for Naruto manga.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 0.0,
+    "efficiency": 1.0
+   },
+   "total": 80.0,
+   "failures": {
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['Naruto']"
+   },
+   "planned": [
+    "search_manga"
+   ],
+   "tools_used": [
+    "search_manga"
+   ],
+   "waves": 1,
+   "final_excerpt": "I'm sorry, I encountered an issue while composing the response. Please try again.",
+   "clarification": false,
+   "latency_s": 66.4,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 610.3,
+    "max_wave_ms": 610.3,
+    "wall_s": 66.4
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 0,
+    "entities_required": 1,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "A09",
+   "group": "A",
+   "prompt": "Find books about Pride and Prejudice.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 95.0,
+   "failures": {
+    "validation": "EXECUTOR/VALIDATOR: SemanticPlanner: LLM call failed — All extraction methods failed"
+   },
+   "planned": [
+    "search_books"
+   ],
+   "tools_used": [
+    "search_books"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\npride and prejudice:\ncount: 6\n1. {'id': 1342, 'title': 'Pride and Prejudice', 'authors': (mappingproxy({'name': 'Austen, Jan",
+   "clarification": false,
+   "latency_s": 175.5,
+   "intent_accounting": {
+    "detected": 2,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 946.0,
+    "max_wave_ms": 946.0,
+    "wall_s": 175.5
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "A10",
+   "group": "A",
+   "prompt": "Find books written by Jane Austen.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_authors"
+   ],
+   "tools_used": [
+    "search_authors"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\njane austen:\ncount: 41\n1. {'id': 1342, 'title': 'Pride and Prejudice', 'authors': (mappingproxy({'name': 'Austen, Jane', 'bi",
+   "clarification": false,
+   "latency_s": 90.3,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 1061.5,
+    "max_wave_ms": 1061.5,
+    "wall_s": 90.3
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "A11",
+   "group": "A",
+   "prompt": "Search for chicken recipes.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_meals"
+   ],
+   "tools_used": [
+    "search_meals"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nchicken:\n1. {'idMeal': '52795', 'strMeal': 'Chicken Handi', 'strMealAlternate': None, 'strCategory': 'Chicken', 'strArea': '",
+   "clarification": false,
+   "latency_s": 53.9,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 1257.7,
+    "max_wave_ms": 1257.7,
+    "wall_s": 53.9
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "A12",
+   "group": "A",
+   "prompt": "Find universities called Waseda.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_universities"
+   ],
+   "tools_used": [
+    "search_universities"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nwaseda:\n1. {'state-province': None, 'name': 'Waseda University', 'domains': ('waseda.ac.jp',), 'alpha_two_code': 'JP', 'web_",
+   "clarification": false,
+   "latency_s": 44.3,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 917.9,
+    "max_wave_ms": 917.9,
+    "wall_s": 44.3
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "A13",
+   "group": "A",
+   "prompt": "Show me products.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 95.0,
+   "failures": {
+    "validation": "EXECUTOR/VALIDATOR: SemanticPlanner: LLM call failed — All extraction methods failed"
+   },
+   "planned": [
+    "search_products"
+   ],
+   "tools_used": [
+    "search_products"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nsearch_products:\n1. {'id': 1, 'title': 'Fjallraven - Foldsack No. 1 Backpack, Fits 15 Laptops', 'price': 109.95, 'descriptio",
+   "clarification": false,
+   "latency_s": 129.3,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 1480.7,
+    "max_wave_ms": 1480.7,
+    "wall_s": 129.3
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "A14",
+   "group": "A",
+   "prompt": "Get the latest USD exchange rates.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "get_exchange_rates"
+   ],
+   "tools_used": [
+    "get_exchange_rates"
+   ],
+   "waves": 1,
+   "final_excerpt": "The latest USD exchange rates (base currency USD) were last updated at Unix timestamp 1786752151. Key rates include: 1 USD = 3.6725 AED, 65.2294 AFN, 80.6087 AL",
+   "clarification": false,
+   "latency_s": 57.5,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 337.9,
+    "max_wave_ms": 337.9,
+    "wall_s": 57.5
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "A15",
+   "group": "A",
+   "prompt": "Find the coordinates of Lahore.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location"
+   ],
+   "tools_used": [
+    "geocode_location"
+   ],
+   "waves": 1,
+   "final_excerpt": "The coordinates of Lahore are latitude 31.5656822° and longitude 74.3141829°.",
+   "clarification": false,
+   "latency_s": 102.6,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 564.0,
+    "max_wave_ms": 564.0,
+    "wall_s": 102.6
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "A16",
+   "group": "A",
+   "prompt": "What address is at 31.55, 74.34?",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 0.0,
+    "efficiency": 1.0
+   },
+   "total": 80.0,
+   "failures": {
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['Lahore']"
+   },
+   "planned": [
+    "reverse_geocode"
+   ],
+   "tools_used": [
+    "reverse_geocode"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nreverse_geocode:\nlat: 31.5503331\nlon: 74.3400198\ntype: residential\ndisplay_name: Chamba Lane, جی او آر, لاہور, تحصیل لاہور ش",
+   "clarification": false,
+   "latency_s": 116.6,
+   "intent_accounting": {
+    "detected": 2,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 1016.4,
+    "max_wave_ms": 1016.4,
+    "wall_s": 116.6
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 0,
+    "entities_required": 1,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "A17",
+   "group": "A",
+   "prompt": "Search the web for LangGraph.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 0.0,
+    "efficiency": 1.0
+   },
+   "total": 75.0,
+   "failures": {
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['LangGraph']",
+    "validation": "EXECUTOR/VALIDATOR: "
+   },
+   "planned": [
+    "search_web_search"
+   ],
+   "tools_used": [],
+   "waves": 1,
+   "final_excerpt": "I couldn't complete that request: the planned operations produced no results.",
+   "clarification": false,
+   "latency_s": 39.7,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 0,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 28879.6,
+    "max_wave_ms": 28879.6,
+    "wall_s": 39.7
+   },
+   "response_status": "EXECUTION_FAILED",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 0,
+    "entities_required": 1,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "B18",
+   "group": "B",
+   "prompt": "Find books by Jane Austen.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_authors"
+   ],
+   "tools_used": [
+    "search_authors"
+   ],
+   "waves": 1,
+   "final_excerpt": "Based on the search results, there are **41 books** by Jane Austen available. Notable titles include:\n\n- **Pride and Prejudice** (1813) — multiple editions (IDs",
+   "clarification": false,
+   "latency_s": 31.3,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 872.3,
+    "max_wave_ms": 872.3,
+    "wall_s": 31.3
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "B19",
+   "group": "B",
+   "prompt": "Search for the book Jane Austen.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 0.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 85.0,
+   "failures": {
+    "resolution": "RESOLVER: expected ['search_books'], got ['search_authors']"
+   },
+   "planned": [
+    "search_authors"
+   ],
+   "tools_used": [
+    "search_authors"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\njane austen:\ncount: 41\n1. {'id': 1342, 'title': 'Pride and Prejudice', 'authors': (mappingproxy({'name': 'Austen, Jane', 'bi",
+   "clarification": false,
+   "latency_s": 42.8,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 772.7,
+    "max_wave_ms": 772.7,
+    "wall_s": 42.8
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "B20",
+   "group": "B",
+   "prompt": "Search for anime Naruto.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 0.0,
+    "efficiency": 1.0
+   },
+   "total": 80.0,
+   "failures": {
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['Naruto']"
+   },
+   "planned": [
+    "search_anime"
+   ],
+   "tools_used": [
+    "search_anime"
+   ],
+   "waves": 1,
+   "final_excerpt": "I'm sorry, I encountered an issue while composing the response. Please try again.",
+   "clarification": false,
+   "latency_s": 50.1,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 870.5,
+    "max_wave_ms": 870.5,
+    "wall_s": 50.1
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 0,
+    "entities_required": 1,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "B21",
+   "group": "B",
+   "prompt": "Search for manga Naruto.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 0.0,
+    "efficiency": 1.0
+   },
+   "total": 80.0,
+   "failures": {
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['Naruto']"
+   },
+   "planned": [
+    "search_manga"
+   ],
+   "tools_used": [
+    "search_manga"
+   ],
+   "waves": 1,
+   "final_excerpt": "I'm sorry, I encountered an issue while composing the response. Please try again.",
+   "clarification": false,
+   "latency_s": 59.1,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 551.5,
+    "max_wave_ms": 551.5,
+    "wall_s": 59.1
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 0,
+    "entities_required": 1,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "B22",
+   "group": "B",
+   "prompt": "Tell me the meaning of agent.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "define_word"
+   ],
+   "tools_used": [
+    "define_word"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nagent:\n1. {'word': 'agent', 'phonetic': '/ˈeɪ.dʒənt/', 'phonetics': (mappingproxy({'text': '/ˈeɪ.dʒənt/', 'audio': 'https://",
+   "clarification": false,
+   "latency_s": 84.8,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 706.7,
+    "max_wave_ms": 706.7,
+    "wall_s": 84.8
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "B23",
+   "group": "B",
+   "prompt": "What does orchestration mean?",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 0.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 0.0,
+    "efficiency": 1.0
+   },
+   "total": 60.0,
+   "failures": {
+    "resolution": "RESOLVER: expected ['define_word'], got []",
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['orchestration']",
+    "validation": "EXECUTOR/VALIDATOR: SemanticPlanner: LLM call failed — All extraction methods failed"
+   },
+   "planned": [],
+   "tools_used": [],
+   "waves": 0,
+   "final_excerpt": "I couldn't complete that request: SemanticPlanner: LLM call failed — All extraction methods failed",
+   "clarification": false,
+   "latency_s": 56.4,
+   "intent_accounting": {
+    "detected": 0,
+    "planned": 0,
+    "executed": 0,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 0,
+    "wave_sum_ms": 0,
+    "max_wave_ms": 0.0,
+    "wall_s": 56.4
+   },
+   "response_status": "EXECUTION_FAILED",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 0,
+    "entities_required": 1,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "B24",
+   "group": "B",
+   "prompt": "Find the location of the Eiffel Tower.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location"
+   ],
+   "tools_used": [
+    "geocode_location"
+   ],
+   "waves": 1,
+   "final_excerpt": "The Eiffel Tower is located at latitude 48.8582599, longitude 2.2945006, at the address Tour Eiffel, 5 Avenue Anatole France, Quartier du Gros-Caillou, Paris 7e",
+   "clarification": false,
+   "latency_s": 75.7,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 675.6,
+    "max_wave_ms": 675.6,
+    "wall_s": 75.7
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "B25",
+   "group": "B",
+   "prompt": "What is located at 48.8584, 2.2945?",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "reverse_geocode"
+   ],
+   "tools_used": [
+    "reverse_geocode"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nreverse_geocode:\nlat: 48.8583982\nlon: 2.2944933\ntype: elevator\ndisplay_name: Avenue Gustave Eiffel, Quartier du Gros-Caillou",
+   "clarification": false,
+   "latency_s": 62.4,
+   "intent_accounting": {
+    "detected": 2,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 620.9,
+    "max_wave_ms": 620.9,
+    "wall_s": 62.4
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "B26",
+   "group": "B",
+   "prompt": "What is the weather there?",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 0.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 0.0,
+    "efficiency": 1.0
+   },
+   "total": 60.0,
+   "failures": {
+    "resolution": "RESOLVER: expected ['get_current_weather'], got []",
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['temperature']",
+    "validation": "EXECUTOR/VALIDATOR: invocation budget exceeded (wall_time)"
+   },
+   "planned": [],
+   "tools_used": [],
+   "waves": 0,
+   "final_excerpt": "",
+   "clarification": false,
+   "latency_s": 225.3,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 0,
+    "executed": 0,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 0,
+    "wave_sum_ms": 0,
+    "max_wave_ms": 0.0,
+    "wall_s": 225.3
+   },
+   "response_status": "",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 0,
+    "entities_required": 1,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "B27",
+   "group": "B",
+   "prompt": "Tell me about Japan.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "get_country_info"
+   ],
+   "tools_used": [
+    "get_country_info"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\njapan:\ntitle: Japan\npageid: 15573\ndescription: Country in East Asia\nextract: Japan is an island country in East Asia. Locate",
+   "clarification": false,
+   "latency_s": 21.8,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 525.0,
+    "max_wave_ms": 525.0,
+    "wall_s": 21.8
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "B28",
+   "group": "B",
+   "prompt": "Find universities named Waseda in Japan.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_universities"
+   ],
+   "tools_used": [
+    "search_universities"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nwaseda:\n1. {'state-province': None, 'name': 'Waseda University', 'domains': ('waseda.ac.jp',), 'alpha_two_code': 'JP', 'web_",
+   "clarification": false,
+   "latency_s": 20.8,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 821.7,
+    "max_wave_ms": 821.7,
+    "wall_s": 20.8
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "B29",
+   "group": "B",
+   "prompt": "Find a Pokemon with the name Pikachu.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "get_pokemon"
+   ],
+   "tools_used": [
+    "get_pokemon"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\npikachu:\n1. {'ability': mappingproxy({'name': 'static', 'url': 'https://pokeapi.co/api/v2/ability/9/'}), 'is_hidden': False,",
+   "clarification": false,
+   "latency_s": 65.8,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 595.6,
+    "max_wave_ms": 595.6,
+    "wall_s": 65.8
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "B30",
+   "group": "B",
+   "prompt": "Search for products in electronics.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "get_products_by_category"
+   ],
+   "tools_used": [
+    "get_products_by_category"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nelectronics:\n1. {'id': 9, 'title': 'WD 2TB Elements Portable External Hard Drive - USB 3.0 ', 'price': 64, 'description': 'U",
+   "clarification": false,
+   "latency_s": 67.4,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 1302.0,
+    "max_wave_ms": 1302.0,
+    "wall_s": 67.4
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "B31",
+   "group": "B",
+   "prompt": "Get information about nginx on Docker Hub.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 95.0,
+   "failures": {
+    "validation": "EXECUTOR/VALIDATOR: SemanticPlanner: LLM call failed — All extraction methods failed"
+   },
+   "planned": [
+    "get_docker_images"
+   ],
+   "tools_used": [],
+   "waves": 0,
+   "final_excerpt": "I want to make sure I understand: can you tell me a bit more about what you need regarding \"Get information about nginx on Docker Hub.\"?",
+   "clarification": true,
+   "latency_s": 162.8,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 0,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 0,
+    "wave_sum_ms": 0,
+    "max_wave_ms": 0.0,
+    "wall_s": 162.8
+   },
+   "response_status": "",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "B32",
+   "group": "B",
+   "prompt": "Search the web for information about Docker.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 0.0,
+    "efficiency": 1.0
+   },
+   "total": 75.0,
+   "failures": {
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['Docker']",
+    "validation": "EXECUTOR/VALIDATOR: "
+   },
+   "planned": [
+    "search_web_search"
+   ],
+   "tools_used": [],
+   "waves": 1,
+   "final_excerpt": "I couldn't complete that request: the planned operations produced no results.",
+   "clarification": false,
+   "latency_s": 70.2,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 0,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 28848.0,
+    "max_wave_ms": 28848.0,
+    "wall_s": 70.2
+   },
+   "response_status": "EXECUTION_FAILED",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 0,
+    "entities_required": 1,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "B33",
+   "group": "B",
+   "prompt": "Find books about cooking.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_books"
+   ],
+   "tools_used": [
+    "search_books"
+   ],
+   "waves": 1,
+   "final_excerpt": "The search found **42 books** about cooking. Notable titles include:\n\n- **\"The Whitehouse Cookbook (1887)\"** by F. L. Gillette and Hugo Ziemann — a comprehensiv",
+   "clarification": false,
+   "latency_s": 47.1,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 22461.8,
+    "max_wave_ms": 22461.8,
+    "wall_s": 47.1
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "B34",
+   "group": "B",
+   "prompt": "Find recipes for chicken.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_meals"
+   ],
+   "tools_used": [
+    "search_meals"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nchicken:\n1. {'idMeal': '52795', 'strMeal': 'Chicken Handi', 'strMealAlternate': None, 'strCategory': 'Chicken', 'strArea': '",
+   "clarification": false,
+   "latency_s": 67.9,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 896.8,
+    "max_wave_ms": 896.8,
+    "wall_s": 67.9
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "C35",
+   "group": "C",
+   "prompt": "Find the coordinates of Lahore and then tell me the current weather there.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "I retrieved the following results:\n\nlahore:\nlatitude: 31.5656822\nlongitude: 74.3141829\nplace_name: لاہور, تحصیل لاہور شہر, ضلع لاہور, لاہور ڈویژن, پنجاب, 54100,",
+   "clarification": false,
+   "latency_s": 87.6,
+   "intent_accounting": {
+    "detected": 2,
+    "planned": 2,
+    "executed": 2,
+    "relationships": 1
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 1653.7,
+    "max_wave_ms": 872.4,
+    "wall_s": 87.6
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "C36",
+   "group": "C",
+   "prompt": "Find the coordinates of the Eiffel Tower and then tell me its current weather.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "The Eiffel Tower is located at latitude 48.8582599 and longitude 2.2945006 in Paris, France. As of 2026-08-15T03:00, the current weather at the Eiffel Tower sho",
+   "clarification": false,
+   "latency_s": 75.2,
+   "intent_accounting": {
+    "detected": 2,
+    "planned": 2,
+    "executed": 2,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 1308.7,
+    "max_wave_ms": 793.8,
+    "wall_s": 75.2
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "C37",
+   "group": "C",
+   "prompt": "Find the coordinates of Tokyo, get its weather, and tell me whether it is currently daytime.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "Tokyo's coordinates are latitude 35.6768601, longitude 139.7638947 (place name: 東京都, 日本). The current weather at a nearby location (latitude 35.7, longitude 139",
+   "clarification": false,
+   "latency_s": 86.8,
+   "intent_accounting": {
+    "detected": 3,
+    "planned": 2,
+    "executed": 2,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 1651.5,
+    "max_wave_ms": 877.5,
+    "wall_s": 86.8
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "C38",
+   "group": "C",
+   "prompt": "Find the coordinates of Muridke, get the current weather, and give me temperature and wind speed.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "I retrieved the following results:\n\nmuridke:\nlatitude: 31.8010863\nlongitude: 74.2540999\nplace_name: مریدکے, تحصیل مریدکے, ضلع شیخوپورہ, لاہور ڈویژن, پنجاب, 3900",
+   "clarification": false,
+   "latency_s": 80.9,
+   "intent_accounting": {
+    "detected": 2,
+    "planned": 2,
+    "executed": 2,
+    "relationships": 1
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 1889.4,
+    "max_wave_ms": 998.2,
+    "wall_s": 80.9
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "C39",
+   "group": "C",
+   "prompt": "Find the coordinates of Times Square and then reverse-geocode those coordinates.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location",
+    "reverse_geocode"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "reverse_geocode"
+   ],
+   "waves": 2,
+   "final_excerpt": "I retrieved the following results:\n\ntimes square:\nlatitude: 40.7570095\nlongitude: -73.9859724\nplace_name: Times Square, Manhattan Community Board 5, Manhattan, ",
+   "clarification": false,
+   "latency_s": 93.7,
+   "intent_accounting": {
+    "detected": 2,
+    "planned": 2,
+    "executed": 2,
+    "relationships": 1
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 1451.2,
+    "max_wave_ms": 886.5,
+    "wall_s": 93.7
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "C40",
+   "group": "C",
+   "prompt": "Find the coordinates of Lahore, reverse-geocode them, and get the current weather.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location",
+    "get_current_weather",
+    "reverse_geocode"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "reverse_geocode",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "Lahore's coordinates are 31.5656822° N, 74.3141829° E. Reverse-geocoding nearby coordinates (31.5659334, 74.3142722) places the location on Mall Road in the Dho",
+   "clarification": false,
+   "latency_s": 60.1,
+   "intent_accounting": {
+    "detected": 3,
+    "planned": 3,
+    "executed": 3,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 1179.3,
+    "max_wave_ms": 697.9,
+    "wall_s": 60.1
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "C41",
+   "group": "C",
+   "prompt": "Find the coordinates of the Eiffel Tower, reverse-geocode them, get weather, and summarize the location.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location",
+    "get_current_weather",
+    "reverse_geocode"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "reverse_geocode",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "The Eiffel Tower is located at coordinates 48.8582599° N, 2.2945006° E (also reverse-geocoded to 48.8582876° N, 2.2944758° E) at 5 Avenue Anatole France in the ",
+   "clarification": false,
+   "latency_s": 77.6,
+   "intent_accounting": {
+    "detected": 4,
+    "planned": 3,
+    "executed": 3,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 1621.3,
+    "max_wave_ms": 1037.3,
+    "wall_s": 77.6
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "D42",
+   "group": "D",
+   "prompt": "Compare Japan, Pakistan, and France. Give me a short country summary for each.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "get_country_info"
+   ],
+   "tools_used": [
+    "get_country_info",
+    "get_country_info",
+    "get_country_info"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nget_country_info:\ntitle: Pakistan\npageid: 23235\ndescription: Country in South Asia\nextract: Pakistan, officially the Islamic",
+   "clarification": false,
+   "latency_s": 28.8,
+   "intent_accounting": {
+    "detected": 3,
+    "planned": 1,
+    "executed": 3,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 632.2,
+    "max_wave_ms": 632.2,
+    "wall_s": 28.8
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 3,
+    "evidence_available": 3,
+    "evidence_rendered": 3,
+    "entities_required": 3,
+    "entities_rendered": 3
+   }
+  },
+  {
+   "id": "D43",
+   "group": "D",
+   "prompt": "Get the coordinates of Lahore, Tokyo, and Paris. Then present them together.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 0.0,
+    "efficiency": 1.0
+   },
+   "total": 80.0,
+   "failures": {
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['Lahore', 'Tokyo']"
+   },
+   "planned": [
+    "geocode_location"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "geocode_location",
+    "geocode_location"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\ngeocode_location:\nlatitude: 35.6768601\nlongitude: 139.7638947\nplace_name: 東京都, 日本\nplace_type: administrative\ngeocode_locatio",
+   "clarification": false,
+   "latency_s": 67.5,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 3,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 1387.4,
+    "max_wave_ms": 1387.4,
+    "wall_s": 67.5
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 3,
+    "evidence_available": 3,
+    "evidence_rendered": 1,
+    "entities_required": 3,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "D44",
+   "group": "D",
+   "prompt": "Get the current weather for Lahore, Tokyo, and Paris.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 0.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 0.75,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 0.0,
+    "efficiency": 0.8
+   },
+   "total": 56.5,
+   "failures": {
+    "resolution": "RESOLVER: expected kinds ['get_current_weather'], got ['geocode_location', 'get_current_weather']",
+    "parallelism": "TOPOLOGY: 2 waves for independent ops",
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['Lahore', 'Tokyo']",
+    "validation": "EXECUTOR/VALIDATOR: ",
+    "efficiency": "EXECUTOR: 4 calls (max 3, min 3)"
+   },
+   "planned": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "I retrieved the following results:\n\ngeocode_location:\nlatitude: 48.8534951\nlongitude: 2.3483915\nplace_name: Paris, Île-de-France, France métropolitaine, France\n",
+   "clarification": false,
+   "latency_s": 64.0,
+   "intent_accounting": {
+    "detected": 3,
+    "planned": 4,
+    "executed": 4,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 1766.3,
+    "max_wave_ms": 1054.7,
+    "wall_s": 64.0
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 3,
+    "evidence_available": 3,
+    "evidence_rendered": 1,
+    "entities_required": 3,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "D45",
+   "group": "D",
+   "prompt": "Search for Naruto anime, One Piece anime, and Attack on Titan anime. Then compare their scores and episode counts.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 0.0,
+    "efficiency": 1.0
+   },
+   "total": 80.0,
+   "failures": {
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['Naruto', 'One Piece', 'Titan']"
+   },
+   "planned": [
+    "search_anime"
+   ],
+   "tools_used": [
+    "search_anime",
+    "search_anime",
+    "search_anime"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:",
+   "clarification": false,
+   "latency_s": 92.4,
+   "intent_accounting": {
+    "detected": 5,
+    "planned": 1,
+    "executed": 3,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 1092.7,
+    "max_wave_ms": 1092.7,
+    "wall_s": 92.4
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 3,
+    "evidence_available": 3,
+    "evidence_rendered": 0,
+    "entities_required": 3,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "D46",
+   "group": "D",
+   "prompt": "Search for Naruto manga, One Piece manga, and Bleach manga. Compare chapters and scores.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 0.0,
+    "efficiency": 1.0
+   },
+   "total": 80.0,
+   "failures": {
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['Naruto', 'One Piece', 'Bleach']"
+   },
+   "planned": [
+    "search_manga"
+   ],
+   "tools_used": [
+    "search_manga",
+    "search_manga",
+    "search_manga"
+   ],
+   "waves": 1,
+   "final_excerpt": "I'm sorry, I encountered an issue while composing the response. Please try again.",
+   "clarification": false,
+   "latency_s": 52.3,
+   "intent_accounting": {
+    "detected": 4,
+    "planned": 1,
+    "executed": 3,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 721.0,
+    "max_wave_ms": 721.0,
+    "wall_s": 52.3
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 3,
+    "evidence_available": 3,
+    "evidence_rendered": 0,
+    "entities_required": 3,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "D47",
+   "group": "D",
+   "prompt": "Get information about nginx, redis, and postgres from Docker Hub and compare them.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 0.0,
+    "efficiency": 0.4
+   },
+   "total": 72.0,
+   "failures": {
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['nginx', 'redis', 'postgres']",
+    "validation": "EXECUTOR/VALIDATOR: BINDING_FAILED: StepC requires repository — no resolvable source after L1-L5; the user request carri",
+    "efficiency": "EXECUTOR: 0 calls (max 3, min 3)"
+   },
+   "planned": [
+    "get_docker_images"
+   ],
+   "tools_used": [],
+   "waves": 0,
+   "final_excerpt": "I couldn't complete that request: get_docker_images dropped (unresolvable inputs: repository); get_docker_images dropped (unresolvable inputs: repository); get_",
+   "clarification": false,
+   "latency_s": 24.8,
+   "intent_accounting": {
+    "detected": 4,
+    "planned": 3,
+    "executed": 0,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 0,
+    "wave_sum_ms": 0,
+    "max_wave_ms": 0.0,
+    "wall_s": 24.8
+   },
+   "response_status": "EXECUTION_FAILED",
+   "coverage_breakdown": {
+    "evidence_required": 3,
+    "evidence_available": 3,
+    "evidence_rendered": 0,
+    "entities_required": 3,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "D48",
+   "group": "D",
+   "prompt": "Search for chicken recipes, pasta recipes, and rice recipes. Then summarize the returned meals.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_meals"
+   ],
+   "tools_used": [
+    "search_meals",
+    "search_meals",
+    "search_meals"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nsearch_meals:\n1. {'idMeal': '53167', 'strMeal': 'Seafood rice', 'strMealAlternate': None, 'strCategory': 'Seafood', 'strArea",
+   "clarification": false,
+   "latency_s": 121.5,
+   "intent_accounting": {
+    "detected": 2,
+    "planned": 1,
+    "executed": 3,
+    "relationships": 1
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 1305.1,
+    "max_wave_ms": 1305.1,
+    "wall_s": 121.5
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 3,
+    "evidence_available": 3,
+    "evidence_rendered": 3,
+    "entities_required": 3,
+    "entities_rendered": 3
+   }
+  },
+  {
+   "id": "D49",
+   "group": "D",
+   "prompt": "Search universities for Waseda, Harvard, and Oxford. Then produce a compact comparison.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_universities"
+   ],
+   "tools_used": [
+    "search_universities",
+    "search_universities",
+    "search_universities"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nsearch_universities:\n1. {'state-province': None, 'name': 'Harvard University', 'domains': ('harvard.edu',), 'alpha_two_code'",
+   "clarification": false,
+   "latency_s": 70.7,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 3,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 1036.5,
+    "max_wave_ms": 1036.5,
+    "wall_s": 70.7
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 3,
+    "evidence_available": 3,
+    "evidence_rendered": 3,
+    "entities_required": 3,
+    "entities_rendered": 3
+   }
+  },
+  {
+   "id": "D50",
+   "group": "D",
+   "prompt": "Get Ghibli films, Valorant agents, and Pikachu. Summarize the results in separate sections.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "get_ghibli_films",
+    "get_pokemon",
+    "get_valorant_agents"
+   ],
+   "tools_used": [
+    "get_ghibli_films",
+    "get_valorant_agents",
+    "get_pokemon"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nget_valorant_agents:\nstatus: 200\n1. {'uuid': 'e370fa57-4757-3604-3648-499e1f642d3f', 'displayName': 'Gekko', 'description': ",
+   "clarification": false,
+   "latency_s": 89.8,
+   "intent_accounting": {
+    "detected": 3,
+    "planned": 3,
+    "executed": 3,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 743.2,
+    "max_wave_ms": 743.2,
+    "wall_s": 89.8
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 3,
+    "evidence_available": 3,
+    "evidence_rendered": 3,
+    "entities_required": 3,
+    "entities_rendered": 3
+   }
+  },
+  {
+   "id": "E51",
+   "group": "E",
+   "prompt": "Get the weather for Lahore, Islamabad, Karachi, Tokyo, London, Paris, New York, Dubai, Singapore, and Sydney. Return city, temperature, wind speed, and daytime.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 0.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 0.75,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 0.0,
+    "efficiency": 0.8
+   },
+   "total": 56.5,
+   "failures": {
+    "resolution": "RESOLVER: expected kinds ['get_current_weather'], got ['geocode_location', 'get_current_weather']",
+    "parallelism": "TOPOLOGY: 2 waves for independent ops",
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['Lahore', 'Tokyo']",
+    "validation": "EXECUTOR/VALIDATOR: ",
+    "efficiency": "EXECUTOR: 11 calls (max 10, min 10)"
+   },
+   "planned": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "I retrieved the following results:\n\ngeocode_location:\nlatitude: 31.5656822\nlongitude: 74.3141829\nplace_name: لاہور, تحصیل لاہور شہر, ضلع لاہور, لاہور ڈویژن, پنج",
+   "clarification": false,
+   "latency_s": 127.9,
+   "intent_accounting": {
+    "detected": 13,
+    "planned": 11,
+    "executed": 11,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 3295.6,
+    "max_wave_ms": 2503.8,
+    "wall_s": 127.9
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 3,
+    "evidence_available": 3,
+    "evidence_rendered": 1,
+    "entities_required": 3,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "E52",
+   "group": "E",
+   "prompt": "Search anime for Naruto, One Piece, Bleach, Death Note, Attack on Titan, Demon Slayer, Jujutsu Kaisen, and Dragon Ball. Return the best matching result for each.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 0.0,
+    "efficiency": 1.0
+   },
+   "total": 80.0,
+   "failures": {
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['Naruto', 'Bleach']"
+   },
+   "planned": [
+    "search_anime"
+   ],
+   "tools_used": [
+    "search_anime",
+    "search_anime",
+    "search_anime",
+    "search_anime",
+    "search_anime",
+    "search_anime",
+    "search_anime",
+    "search_anime"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:",
+   "clarification": false,
+   "latency_s": 75.7,
+   "intent_accounting": {
+    "detected": 7,
+    "planned": 1,
+    "executed": 8,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 1480.6,
+    "max_wave_ms": 1480.6,
+    "wall_s": 75.7
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 2,
+    "evidence_available": 2,
+    "evidence_rendered": 0,
+    "entities_required": 2,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "E53",
+   "group": "E",
+   "prompt": "Search books for Pride and Prejudice, Frankenstein, Dracula, Moby Dick, The Great Gatsby, and Alice in Wonderland. Return title and author information.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_books"
+   ],
+   "tools_used": [
+    "search_books",
+    "search_books",
+    "search_books",
+    "search_books",
+    "search_books",
+    "search_books"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nsearch_books:\ncount: 8\n1. {'id': 84, 'title': 'Frankenstein; or, the modern prometheus', 'authors': (mappingproxy({'name': '",
+   "clarification": false,
+   "latency_s": 82.6,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 6,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 16493.8,
+    "max_wave_ms": 16493.8,
+    "wall_s": 82.6
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 2,
+    "evidence_available": 2,
+    "evidence_rendered": 2,
+    "entities_required": 2,
+    "entities_rendered": 2
+   }
+  },
+  {
+   "id": "E54",
+   "group": "E",
+   "prompt": "Search meals for chicken, beef, pasta, rice, fish, and potato. Return the best matching meal from each.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_meals"
+   ],
+   "tools_used": [
+    "search_meals",
+    "search_meals",
+    "search_meals",
+    "search_meals",
+    "search_meals",
+    "search_meals"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nsearch_meals:\n1. {'idMeal': '52777', 'strMeal': 'Mediterranean Pasta Salad', 'strMealAlternate': None, 'strCategory': 'Seafo",
+   "clarification": false,
+   "latency_s": 100.4,
+   "intent_accounting": {
+    "detected": 6,
+    "planned": 1,
+    "executed": 6,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 1798.4,
+    "max_wave_ms": 1798.4,
+    "wall_s": 100.4
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 2,
+    "evidence_available": 2,
+    "evidence_rendered": 2,
+    "entities_required": 2,
+    "entities_rendered": 2
+   }
+  },
+  {
+   "id": "F55",
+   "group": "F",
+   "prompt": "Get the coordinates and current weather for Lahore, Tokyo, and Paris, then compare temperatures.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 0.75,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 0.0,
+    "efficiency": 0.6
+   },
+   "total": 70.5,
+   "failures": {
+    "parallelism": "TOPOLOGY: 2 waves for independent ops",
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['Lahore', 'Tokyo']",
+    "validation": "EXECUTOR/VALIDATOR: ",
+    "efficiency": "EXECUTOR: 4 calls (max 6, min 6)"
+   },
+   "planned": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "I retrieved the following results:\n\ngeocode_location:\nlatitude: 31.5656822\nlongitude: 74.3141829\nplace_name: لاہور, تحصیل لاہور شہر, ضلع لاہور, لاہور ڈویژن, پنج",
+   "clarification": false,
+   "latency_s": 61.4,
+   "intent_accounting": {
+    "detected": 2,
+    "planned": 4,
+    "executed": 4,
+    "relationships": 1
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 1778.0,
+    "max_wave_ms": 998.8,
+    "wall_s": 61.4
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 3,
+    "evidence_available": 3,
+    "evidence_rendered": 1,
+    "entities_required": 3,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "F56",
+   "group": "F",
+   "prompt": "For Lahore, Tokyo, and Paris: geocode each city, get weather for each city, reverse-geocode each coordinate, and return city, resolved address, temperature, and wind speed.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 0.75,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 0.0,
+    "efficiency": 0.2
+   },
+   "total": 68.5,
+   "failures": {
+    "parallelism": "TOPOLOGY: 2 waves for independent ops",
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['Lahore', 'Tokyo']",
+    "validation": "EXECUTOR/VALIDATOR: ",
+    "efficiency": "EXECUTOR: 5 calls (max 9, min 9)"
+   },
+   "planned": [
+    "geocode_location",
+    "get_current_weather",
+    "reverse_geocode"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "get_current_weather",
+    "reverse_geocode"
+   ],
+   "waves": 2,
+   "final_excerpt": "I retrieved the following results:\n\ngeocode_location:\nlatitude: 48.8534951\nlongitude: 2.3483915\nplace_name: Paris, Île-de-France, France métropolitaine, France\n",
+   "clarification": false,
+   "latency_s": 111.3,
+   "intent_accounting": {
+    "detected": 10,
+    "planned": 7,
+    "executed": 5,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 1389.4,
+    "max_wave_ms": 797.2,
+    "wall_s": 111.3
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 3,
+    "evidence_available": 3,
+    "evidence_rendered": 1,
+    "entities_required": 3,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "F57",
+   "group": "F",
+   "prompt": "Find the coordinates of Lahore and Tokyo. Then independently get weather for Lahore and Tokyo, and reverse-geocode Lahore and Tokyo. Then compare them.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 0.75,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 1.0,
+    "efficiency": 0.6
+   },
+   "total": 90.5,
+   "failures": {
+    "parallelism": "TOPOLOGY: 2 waves for independent ops",
+    "validation": "EXECUTOR/VALIDATOR: ",
+    "efficiency": "EXECUTOR: 4 calls (max 6, min 6)"
+   },
+   "planned": [
+    "geocode_location",
+    "get_current_weather",
+    "reverse_geocode"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "geocode_location",
+    "get_current_weather",
+    "reverse_geocode"
+   ],
+   "waves": 2,
+   "final_excerpt": "**Coordinates:**\n- **Lahore:** 31.5656822° N, 74.3141829° E (city, Punjab, Pakistan)\n- **Tokyo:** 35.6768601° N, 139.7638947° E (administrative, Japan)\n\n**Weath",
+   "clarification": false,
+   "latency_s": 98.9,
+   "intent_accounting": {
+    "detected": 7,
+    "planned": 5,
+    "executed": 4,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 1153.6,
+    "max_wave_ms": 731.5,
+    "wall_s": 98.9
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 2,
+    "evidence_available": 2,
+    "evidence_rendered": 2,
+    "entities_required": 2,
+    "entities_rendered": 2
+   }
+  },
+  {
+   "id": "F58",
+   "group": "F",
+   "prompt": "Find universities named Waseda, Harvard, and Oxford, while simultaneously searching the web for general information about each university.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 0.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 0.8
+   },
+   "total": 84.0,
+   "failures": {
+    "resolution": "RESOLVER: expected kinds ['search_universities', 'search_web_search'], got ['search_universities']",
+    "efficiency": "EXECUTOR: 3 calls (max 6, min 4)"
+   },
+   "planned": [
+    "search_universities"
+   ],
+   "tools_used": [
+    "search_universities",
+    "search_universities",
+    "search_universities"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nsearch_universities:\n1. {'state-province': None, 'name': 'Harvard University', 'domains': ('harvard.edu',), 'alpha_two_code'",
+   "clarification": false,
+   "latency_s": 50.5,
+   "intent_accounting": {
+    "detected": 4,
+    "planned": 1,
+    "executed": 3,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 950.6,
+    "max_wave_ms": 950.6,
+    "wall_s": 50.5
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 3,
+    "evidence_available": 3,
+    "evidence_rendered": 3,
+    "entities_required": 3,
+    "entities_rendered": 3
+   }
+  },
+  {
+   "id": "G59",
+   "group": "G",
+   "prompt": "Find the coordinates of Lahore. If the geocoder returns a result, get the weather. If it returns no result, tell me that weather cannot be determined.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "I retrieved the following results:\n\nlahore:\nlatitude: 31.5656822\nlongitude: 74.3141829\nplace_name: لاہور, تحصیل لاہور شہر, ضلع لاہور, لاہور ڈویژن, پنجاب, 54100,",
+   "clarification": false,
+   "latency_s": 128.1,
+   "intent_accounting": {
+    "detected": 2,
+    "planned": 2,
+    "executed": 2,
+    "relationships": 1
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 1789.9,
+    "max_wave_ms": 1211.5,
+    "wall_s": 128.1
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "G60",
+   "group": "G",
+   "prompt": "Search for Naruto anime. If no result exists, search the web for Naruto instead.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 0.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 0.0,
+    "efficiency": 1.0
+   },
+   "total": 60.0,
+   "failures": {
+    "resolution": "RESOLVER: expected ['search_anime'], got ['search_anime', 'search_web_search']",
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['Naruto']",
+    "validation": "EXECUTOR/VALIDATOR: "
+   },
+   "planned": [
+    "search_anime",
+    "search_web_search"
+   ],
+   "tools_used": [
+    "search_anime"
+   ],
+   "waves": 2,
+   "final_excerpt": "I retrieved the following results:",
+   "clarification": false,
+   "latency_s": 97.6,
+   "intent_accounting": {
+    "detected": 2,
+    "planned": 2,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 29576.7,
+    "max_wave_ms": 28740.7,
+    "wall_s": 97.6
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 0,
+    "entities_required": 1,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "G61",
+   "group": "G",
+   "prompt": "Search for a book titled XYZNONEXISTENTBOOK123. If no book is found, explain that the registered book API returned no matching result.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 0.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 80.0,
+   "failures": {
+    "resolution": "RESOLVER: expected ['search_books'], got ['define_word', 'search_books']",
+    "validation": "EXECUTOR/VALIDATOR: invocation budget exceeded (wall_time)"
+   },
+   "planned": [
+    "define_word",
+    "search_books"
+   ],
+   "tools_used": [],
+   "waves": 0,
+   "final_excerpt": "",
+   "clarification": false,
+   "latency_s": 248.4,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 2,
+    "executed": 0,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 0,
+    "wave_sum_ms": 0,
+    "max_wave_ms": 0.0,
+    "wall_s": 248.4
+   },
+   "response_status": "",
+   "coverage_breakdown": {
+    "evidence_required": 0,
+    "evidence_available": 0,
+    "evidence_rendered": 0,
+    "entities_required": 0,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "G62",
+   "group": "G",
+   "prompt": "Search for a university named XYZNONEXISTENTUNIVERSITY123. If nothing is returned, do not invent a university.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 0.0,
+    "efficiency": 1.0
+   },
+   "total": 90.0,
+   "failures": {
+    "grounding": "SYNTHESIS: fabricated facts present"
+   },
+   "planned": [
+    "search_universities"
+   ],
+   "tools_used": [
+    "search_universities"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nxyznonexistentuniversity123: retrieved",
+   "clarification": false,
+   "latency_s": 31.8,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 673.0,
+    "max_wave_ms": 673.0,
+    "wall_s": 31.8
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 0,
+    "evidence_available": 0,
+    "evidence_rendered": 0,
+    "entities_required": 0,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "H63",
+   "group": "H",
+   "prompt": "Run the failing probe.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [],
+   "tools_used": [],
+   "waves": 0,
+   "final_excerpt": "I couldn't complete that request: no executable plan could be produced, so no action was performed.",
+   "clarification": false,
+   "latency_s": 41.3,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 0,
+    "executed": 0,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 0,
+    "wave_sum_ms": 0,
+    "max_wave_ms": 0.0,
+    "wall_s": 41.3
+   },
+   "response_status": "PLANNING_FAILED",
+   "coverage_breakdown": {
+    "evidence_required": 0,
+    "evidence_available": 0,
+    "evidence_rendered": 0,
+    "entities_required": 0,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "H64",
+   "group": "H",
+   "prompt": "Run the failing probe and also define the word recovery.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "define_word"
+   ],
+   "tools_used": [
+    "define_word"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nrecovery:\n1. {'word': 'recovery', 'phonetic': '/ɹəˈkʌvəɹi/', 'phonetics': (mappingproxy({'text': '/ɹəˈkʌvəɹi/', 'audio': 'ht",
+   "clarification": false,
+   "latency_s": 46.6,
+   "intent_accounting": {
+    "detected": 2,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 751.7,
+    "max_wave_ms": 751.7,
+    "wall_s": 46.6
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "H65",
+   "group": "H",
+   "prompt": "Execute two independent operations: run the failing probe, and get information about Pikachu. Return whatever can be successfully completed.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "get_pokemon"
+   ],
+   "tools_used": [
+    "get_pokemon"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\npikachu:\n1. {'ability': mappingproxy({'name': 'static', 'url': 'https://pokeapi.co/api/v2/ability/9/'}), 'is_hidden': False,",
+   "clarification": false,
+   "latency_s": 33.7,
+   "intent_accounting": {
+    "detected": 3,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 639.2,
+    "max_wave_ms": 639.2,
+    "wall_s": 33.7
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "H66",
+   "group": "H",
+   "prompt": "Run the failing probe, then tell me about Pakistan.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "get_country_info"
+   ],
+   "tools_used": [
+    "get_country_info"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\npakistan:\ntitle: Pakistan\npageid: 23235\ndescription: Country in South Asia\nextract: Pakistan, officially the Islamic Republi",
+   "clarification": false,
+   "latency_s": 43.5,
+   "intent_accounting": {
+    "detected": 2,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 630.3,
+    "max_wave_ms": 630.3,
+    "wall_s": 43.5
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "H67",
+   "group": "H",
+   "prompt": "Run the failing probe three times.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [],
+   "tools_used": [],
+   "waves": 0,
+   "final_excerpt": "I couldn't complete that request: no executable plan could be produced, so no action was performed.",
+   "clarification": false,
+   "latency_s": 34.5,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 0,
+    "executed": 0,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 0,
+    "wave_sum_ms": 0,
+    "max_wave_ms": 0.0,
+    "wall_s": 34.5
+   },
+   "response_status": "PLANNING_FAILED",
+   "coverage_breakdown": {
+    "evidence_required": 0,
+    "evidence_available": 0,
+    "evidence_rendered": 0,
+    "entities_required": 0,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "I68",
+   "group": "I",
+   "prompt": "Get weather for Lahore, Tokyo, and an intentionally invalid location ZZZINVALIDCITY.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 0.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 0.0,
+    "recovery": 0.0,
+    "validation": 0.0,
+    "grounding": 0.0,
+    "efficiency": 0.8
+   },
+   "total": 49.0,
+   "failures": {
+    "resolution": "RESOLVER: expected kinds ['get_current_weather'], got ['geocode_location', 'get_current_weather']",
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['Lahore', 'Tokyo']",
+    "recovery": "RECOVERY: partial success not preserved/handled",
+    "validation": "EXECUTOR/VALIDATOR: ",
+    "efficiency": "EXECUTOR: 4 calls (max 3, min 2)"
+   },
+   "planned": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "I retrieved the following results:\n\ngeocode_location:\nlatitude: 31.5656822\nlongitude: 74.3141829\nplace_name: لاہور, تحصیل لاہور شہر, ضلع لاہور, لاہور ڈویژن, پنج",
+   "clarification": false,
+   "latency_s": 68.7,
+   "intent_accounting": {
+    "detected": 3,
+    "planned": 4,
+    "executed": 4,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 2043.3,
+    "max_wave_ms": 1126.6,
+    "wall_s": 68.7
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 2,
+    "evidence_available": 2,
+    "evidence_rendered": 0,
+    "entities_required": 2,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "I69",
+   "group": "I",
+   "prompt": "Search for these books: Pride and Prejudice, Frankenstein, and XYZNONEXISTENTBOOK123.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_books"
+   ],
+   "tools_used": [
+    "search_books",
+    "search_books",
+    "search_books"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nsearch_books:\ncount: 6\n1. {'id': 1342, 'title': 'Pride and Prejudice', 'authors': (mappingproxy({'name': 'Austen, Jane', 'bi",
+   "clarification": false,
+   "latency_s": 79.3,
+   "intent_accounting": {
+    "detected": 5,
+    "planned": 1,
+    "executed": 3,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 3868.8,
+    "max_wave_ms": 3868.8,
+    "wall_s": 79.3
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 2,
+    "evidence_available": 2,
+    "evidence_rendered": 2,
+    "entities_required": 2,
+    "entities_rendered": 2
+   }
+  },
+  {
+   "id": "I70",
+   "group": "I",
+   "prompt": "Search anime: Naruto, One Piece, and XYZNONEXISTENTANIME123.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_anime"
+   ],
+   "tools_used": [
+    "search_anime",
+    "search_anime",
+    "search_anime"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nsearch_anime:\n\"{'data': mappingproxy({'Page': mappingproxy({'media': (mappingproxy({'id': 20, 'title': mappingproxy({'romaji",
+   "clarification": false,
+   "latency_s": 31.5,
+   "intent_accounting": {
+    "detected": 4,
+    "planned": 1,
+    "executed": 3,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 1009.4,
+    "max_wave_ms": 1009.4,
+    "wall_s": 31.5
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 2,
+    "evidence_available": 2,
+    "evidence_rendered": 2,
+    "entities_required": 2,
+    "entities_rendered": 2
+   }
+  },
+  {
+   "id": "I71",
+   "group": "I",
+   "prompt": "Find universities: Harvard, Oxford, and XYZNONEXISTENTUNIVERSITY123.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_universities"
+   ],
+   "tools_used": [
+    "search_universities",
+    "search_universities",
+    "search_universities"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nsearch_universities:\n1. {'state-province': None, 'name': 'University of Oxford', 'domains': ('oxford.ac.uk', 'ox.ac.uk'), 'a",
+   "clarification": false,
+   "latency_s": 39.1,
+   "intent_accounting": {
+    "detected": 4,
+    "planned": 1,
+    "executed": 3,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 1095.2,
+    "max_wave_ms": 1095.2,
+    "wall_s": 39.1
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 2,
+    "evidence_available": 2,
+    "evidence_rendered": 2,
+    "entities_required": 2,
+    "entities_rendered": 2
+   }
+  },
+  {
+   "id": "J72",
+   "group": "J",
+   "prompt": "Find Lahore's coordinates, current weather, and then define the word humidity. Give me one concise report.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "define_word",
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "define_word",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "I retrieved the following results:\n\nlahore:\nlatitude: 31.5656822\nlongitude: 74.3141829\nplace_name: لاہور, تحصیل لاہور شہر, ضلع لاہور, لاہور ڈویژن, پنجاب, 54100,",
+   "clarification": false,
+   "latency_s": 57.4,
+   "intent_accounting": {
+    "detected": 3,
+    "planned": 3,
+    "executed": 3,
+    "relationships": 1
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 1531.4,
+    "max_wave_ms": 796.7,
+    "wall_s": 57.4
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 2,
+    "evidence_available": 2,
+    "evidence_rendered": 2,
+    "entities_required": 2,
+    "entities_rendered": 2
+   }
+  },
+  {
+   "id": "J73",
+   "group": "J",
+   "prompt": "Search Naruto anime, search Naruto manga, and define the word anime. Compare the results.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "define_word",
+    "search_anime",
+    "search_manga"
+   ],
+   "tools_used": [
+    "search_anime",
+    "search_manga",
+    "define_word"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nnaruto: retrieved\nnaruto: retrieved\nanime:\n1. {'word': 'anime', 'phonetic': '/ˈæn.ɪ.meɪ/', 'phonetics': (mappingproxy({'text",
+   "clarification": false,
+   "latency_s": 60.8,
+   "intent_accounting": {
+    "detected": 3,
+    "planned": 3,
+    "executed": 3,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 739.1,
+    "max_wave_ms": 739.1,
+    "wall_s": 60.8
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 2,
+    "evidence_available": 2,
+    "evidence_rendered": 2,
+    "entities_required": 2,
+    "entities_rendered": 2
+   }
+  },
+  {
+   "id": "J74",
+   "group": "J",
+   "prompt": "Find information about Japan, search universities named Waseda, and search the web for Waseda. Clearly separate the three sources.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 95.0,
+   "failures": {
+    "validation": "EXECUTOR/VALIDATOR: "
+   },
+   "planned": [
+    "get_country_info",
+    "search_universities",
+    "search_web_search"
+   ],
+   "tools_used": [
+    "get_country_info",
+    "search_universities"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\njapan:\ntitle: Japan\npageid: 15573\ndescription: Country in East Asia\nextract: Japan is an island country in East Asia. Locate",
+   "clarification": false,
+   "latency_s": 82.2,
+   "intent_accounting": {
+    "detected": 3,
+    "planned": 3,
+    "executed": 2,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 27428.6,
+    "max_wave_ms": 27428.6,
+    "wall_s": 82.2
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 2,
+    "evidence_available": 2,
+    "evidence_rendered": 2,
+    "entities_required": 2,
+    "entities_rendered": 2
+   }
+  },
+  {
+   "id": "J75",
+   "group": "J",
+   "prompt": "Search for chicken recipes, define protein, and search books about cooking. Combine the results without mixing source semantics.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "define_word",
+    "search_books",
+    "search_meals"
+   ],
+   "tools_used": [
+    "search_meals",
+    "define_word",
+    "search_books"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nprotein:\n1. {'word': 'protein', 'phonetic': '/ˈpɹəʊti.ɪn/', 'phonetics': (mappingproxy({'text': '/ˈpɹəʊti.ɪn/', 'audio': ''}",
+   "clarification": false,
+   "latency_s": 162.3,
+   "intent_accounting": {
+    "detected": 4,
+    "planned": 3,
+    "executed": 3,
+    "relationships": 3
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 1281.1,
+    "max_wave_ms": 1281.1,
+    "wall_s": 162.3
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 2,
+    "evidence_available": 2,
+    "evidence_rendered": 2,
+    "entities_required": 2,
+    "entities_rendered": 2
+   }
+  },
+  {
+   "id": "J76",
+   "group": "J",
+   "prompt": "Get Docker nginx information, define container, and search the web for Docker containers.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 0.0,
+    "efficiency": 1.0
+   },
+   "total": 75.0,
+   "failures": {
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['nginx']",
+    "validation": "EXECUTOR/VALIDATOR: BINDING_FAILED: StepA requires repository — no resolvable source after L1-L5; the user request carri"
+   },
+   "planned": [
+    "define_word",
+    "get_docker_images",
+    "search_web_search"
+   ],
+   "tools_used": [
+    "define_word"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\ncontainer:\n1. {'word': 'container', 'phonetic': '/kənˈteɪnə/', 'phonetics': (mappingproxy({'text': '/kənˈteɪnə/', 'audio': '",
+   "clarification": false,
+   "latency_s": 93.9,
+   "intent_accounting": {
+    "detected": 3,
+    "planned": 3,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 29839.6,
+    "max_wave_ms": 29839.6,
+    "wall_s": 93.9
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 2,
+    "evidence_available": 2,
+    "evidence_rendered": 1,
+    "entities_required": 2,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "J77",
+   "group": "J",
+   "prompt": "Find Lahore coordinates, weather, define temperature, and search the web for Lahore weather.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 95.0,
+   "failures": {
+    "validation": "EXECUTOR/VALIDATOR: "
+   },
+   "planned": [
+    "define_word",
+    "geocode_location",
+    "get_current_weather",
+    "search_web_search"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "define_word",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "I retrieved the following results:\n\nlahore:\nlatitude: 31.5656822\nlongitude: 74.3141829\nplace_name: لاہور, تحصیل لاہور شہر, ضلع لاہور, لاہور ڈویژن, پنجاب, 54100,",
+   "clarification": false,
+   "latency_s": 95.7,
+   "intent_accounting": {
+    "detected": 4,
+    "planned": 4,
+    "executed": 3,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 31033.7,
+    "max_wave_ms": 30119.6,
+    "wall_s": 95.7
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 2,
+    "evidence_available": 2,
+    "evidence_rendered": 2,
+    "entities_required": 2,
+    "entities_rendered": 2
+   }
+  },
+  {
+   "id": "K78",
+   "group": "K",
+   "prompt": "What's the weather in the city where the Eiffel Tower is?",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "I retrieved the following results:\n\neiffel tower:\nlatitude: 48.8582599\nlongitude: 2.2945006\nplace_name: Tour Eiffel, 5, Avenue Anatole France, Quartier du Gros-",
+   "clarification": false,
+   "latency_s": 51.8,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 2,
+    "executed": 2,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 2043.7,
+    "max_wave_ms": 1311.2,
+    "wall_s": 51.8
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "K79",
+   "group": "K",
+   "prompt": "What's the weather at the location of the Eiffel Tower?",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "The weather at the location of the Eiffel Tower (Tour Eiffel, 5 Avenue Anatole France, Paris 7e Arrondissement) is currently 23.9°C with winds of 7.9 km/h from ",
+   "clarification": false,
+   "latency_s": 79.3,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 2,
+    "executed": 2,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 1277.7,
+    "max_wave_ms": 782.5,
+    "wall_s": 79.3
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "K80",
+   "group": "K",
+   "prompt": "Tell me the address represented by the coordinates of Lahore.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 0.0,
+    "binding": 1.0,
+    "topology": 0.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 70.0,
+   "failures": {
+    "resolution": "RESOLVER: expected ['geocode_location', 'reverse_geocode'], got ['geocode_location']",
+    "topology": "TOPOLOGY: missing deps; planned={'StepA': 'geocode_location'}"
+   },
+   "planned": [
+    "geocode_location"
+   ],
+   "tools_used": [
+    "geocode_location"
+   ],
+   "waves": 1,
+   "final_excerpt": "The coordinates 31.5656822° N, 74.3141829° E correspond to **Lahore**, with the full address: Lahore, Tehsil Lahore City, District Lahore, Lahore Division, Punj",
+   "clarification": false,
+   "latency_s": 71.9,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 490.1,
+    "max_wave_ms": 490.1,
+    "wall_s": 71.9
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "K81",
+   "group": "K",
+   "prompt": "Find Lahore, then use the coordinates to tell me what is there.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location",
+    "reverse_geocode"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "reverse_geocode"
+   ],
+   "waves": 2,
+   "final_excerpt": "Lahore (لاہور) is a city in Punjab, Pakistan, located at latitude 31.5656822, longitude 74.3141829. At the nearby coordinates (31.5659334, 74.3142722) there is ",
+   "clarification": false,
+   "latency_s": 169.0,
+   "intent_accounting": {
+    "detected": 2,
+    "planned": 2,
+    "executed": 2,
+    "relationships": 1
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 776.2,
+    "max_wave_ms": 710.6,
+    "wall_s": 169.0
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "K82",
+   "group": "K",
+   "prompt": "Find the location of Lahore and tell me whether it is currently day or night.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "Lahore is located at latitude 31.5656822, longitude 74.3141829 (approximately 31.53°N, 74.28°E) in Punjab, Pakistan. According to the latest weather data record",
+   "clarification": false,
+   "latency_s": 168.3,
+   "intent_accounting": {
+    "detected": 3,
+    "planned": 2,
+    "executed": 2,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 1282.2,
+    "max_wave_ms": 781.8,
+    "wall_s": 168.3
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "K83",
+   "group": "K",
+   "prompt": "Find the address at the coordinates returned for the Eiffel Tower.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 95.0,
+   "failures": {
+    "validation": "EXECUTOR/VALIDATOR: invocation budget exceeded (wall_time)"
+   },
+   "planned": [
+    "geocode_location",
+    "reverse_geocode"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "reverse_geocode"
+   ],
+   "waves": 2,
+   "final_excerpt": "The Eiffel Tower is located at **5, Avenue Anatole France, Quartier du Gros-Caillou, Paris 7e Arrondissement, Paris, Île-de-France, 75007, France**. This addres",
+   "clarification": false,
+   "latency_s": 188.3,
+   "intent_accounting": {
+    "detected": 2,
+    "planned": 2,
+    "executed": 2,
+    "relationships": 1
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 1663.7,
+    "max_wave_ms": 1147.0,
+    "wall_s": 188.3
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "L84",
+   "group": "L",
+   "prompt": "Compare the current weather in Lahore, Karachi, Islamabad, Delhi, Mumbai, Dubai, London, Paris, Tokyo, and New York.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 0.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 0.75,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 0.0,
+    "efficiency": 0.8
+   },
+   "total": 56.5,
+   "failures": {
+    "resolution": "RESOLVER: expected kinds ['get_current_weather'], got ['geocode_location', 'get_current_weather']",
+    "parallelism": "TOPOLOGY: 2 waves for independent ops",
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['Lahore', 'Tokyo']",
+    "validation": "EXECUTOR/VALIDATOR: ",
+    "efficiency": "EXECUTOR: 11 calls (max 10, min 8)"
+   },
+   "planned": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "I retrieved the following results:\n\ngeocode_location:\nlatitude: 25.0742823\nlongitude: 55.1885624\nplace_name: دبي, الإمارات العربية المتحدة\nplace_type: administr",
+   "clarification": false,
+   "latency_s": 160.9,
+   "intent_accounting": {
+    "detected": 10,
+    "planned": 11,
+    "executed": 11,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 2739.0,
+    "max_wave_ms": 1927.7,
+    "wall_s": 160.9
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 3,
+    "evidence_available": 3,
+    "evidence_rendered": 1,
+    "entities_required": 3,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "L85",
+   "group": "L",
+   "prompt": "Compare Naruto, One Piece, Bleach, Death Note, and Attack on Titan. For each, retrieve anime data and report title, score, episodes, and format.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 0.0,
+    "efficiency": 1.0
+   },
+   "total": 80.0,
+   "failures": {
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['Naruto', 'Bleach']"
+   },
+   "planned": [
+    "search_anime"
+   ],
+   "tools_used": [
+    "search_anime",
+    "search_anime",
+    "search_anime",
+    "search_anime",
+    "search_anime"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:",
+   "clarification": false,
+   "latency_s": 111.3,
+   "intent_accounting": {
+    "detected": 9,
+    "planned": 1,
+    "executed": 5,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 1173.8,
+    "max_wave_ms": 1173.8,
+    "wall_s": 111.3
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 2,
+    "evidence_available": 2,
+    "evidence_rendered": 0,
+    "entities_required": 2,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "L86",
+   "group": "L",
+   "prompt": "Compare Naruto, One Piece, Bleach, and Dragon Ball. Retrieve manga data and report title, score, chapters, and format.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_manga"
+   ],
+   "tools_used": [
+    "search_manga",
+    "search_manga",
+    "search_manga",
+    "search_manga"
+   ],
+   "waves": 1,
+   "final_excerpt": "Based on the main manga entries for each series:\n\n- **Naruto** (NARUTO): Score 79, 700 chapters, MANGA format\n- **One Piece** (ONE PIECE): Score 91, chapters on",
+   "clarification": false,
+   "latency_s": 103.1,
+   "intent_accounting": {
+    "detected": 8,
+    "planned": 1,
+    "executed": 4,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 1058.3,
+    "max_wave_ms": 1058.3,
+    "wall_s": 103.1
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 2,
+    "evidence_available": 2,
+    "evidence_rendered": 2,
+    "entities_required": 2,
+    "entities_rendered": 2
+   }
+  },
+  {
+   "id": "L87",
+   "group": "L",
+   "prompt": "Find books by Jane Austen, Mark Twain, Charles Dickens, and Oscar Wilde. Use author-specific search.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 1.0,
+    "efficiency": 0.8
+   },
+   "total": 94.0,
+   "failures": {
+    "validation": "EXECUTOR/VALIDATOR: ",
+    "efficiency": "EXECUTOR: 3 calls (max 4, min 4)"
+   },
+   "planned": [
+    "search_authors"
+   ],
+   "tools_used": [
+    "search_authors",
+    "search_authors",
+    "search_authors"
+   ],
+   "waves": 1,
+   "final_excerpt": "Based on the author-specific searches in the provided artifacts, here are books found for each author:\n\n**Jane Austen** (41 results): *Pride and Prejudice* (181",
+   "clarification": false,
+   "latency_s": 158.4,
+   "intent_accounting": {
+    "detected": 4,
+    "planned": 1,
+    "executed": 3,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 60000.8,
+    "max_wave_ms": 60000.8,
+    "wall_s": 158.4
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 2,
+    "evidence_available": 2,
+    "evidence_rendered": 2,
+    "entities_required": 2,
+    "entities_rendered": 2
+   }
+  },
+  {
+   "id": "L88",
+   "group": "L",
+   "prompt": "Search recipes for chicken, beef, fish, rice, and pasta. Compare the first returned meal from each.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_meals"
+   ],
+   "tools_used": [
+    "search_meals",
+    "search_meals",
+    "search_meals",
+    "search_meals",
+    "search_meals"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nsearch_meals:\n1. {'idMeal': '52802', 'strMeal': 'Fish pie', 'strMealAlternate': None, 'strCategory': 'Seafood', 'strArea': '",
+   "clarification": false,
+   "latency_s": 51.2,
+   "intent_accounting": {
+    "detected": 5,
+    "planned": 1,
+    "executed": 5,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 1711.5,
+    "max_wave_ms": 1711.5,
+    "wall_s": 51.2
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 2,
+    "evidence_available": 2,
+    "evidence_rendered": 2,
+    "entities_required": 2,
+    "entities_rendered": 2
+   }
+  },
+  {
+   "id": "M89",
+   "group": "M",
+   "prompt": "Where is the Eiffel Tower?",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location"
+   ],
+   "tools_used": [
+    "geocode_location"
+   ],
+   "waves": 1,
+   "final_excerpt": "The Eiffel Tower is located at 5 Avenue Anatole France in the 7th arrondissement of Paris, France (postal code 75007), at coordinates 48.8582599° N, 2.2945006° ",
+   "clarification": false,
+   "latency_s": 40.5,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 561.7,
+    "max_wave_ms": 561.7,
+    "wall_s": 40.5
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "M90",
+   "group": "M",
+   "prompt": "What is at 48.8584, 2.2945?",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "reverse_geocode"
+   ],
+   "tools_used": [
+    "reverse_geocode"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nreverse_geocode:\nlat: 48.8583982\nlon: 2.2944933\ntype: elevator\ndisplay_name: Avenue Gustave Eiffel, Quartier du Gros-Caillou",
+   "clarification": false,
+   "latency_s": 57.4,
+   "intent_accounting": {
+    "detected": 2,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 1491.7,
+    "max_wave_ms": 1491.7,
+    "wall_s": 57.4
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "M91",
+   "group": "M",
+   "prompt": "Find books written by Jane Austen.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_authors"
+   ],
+   "tools_used": [
+    "search_authors"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\njane austen:\ncount: 41\n1. {'id': 1342, 'title': 'Pride and Prejudice', 'authors': (mappingproxy({'name': 'Austen, Jane', 'bi",
+   "clarification": false,
+   "latency_s": 74.5,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 665.7,
+    "max_wave_ms": 665.7,
+    "wall_s": 74.5
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "M92",
+   "group": "M",
+   "prompt": "Search for Naruto manga.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 0.0,
+    "efficiency": 1.0
+   },
+   "total": 80.0,
+   "failures": {
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['Naruto']"
+   },
+   "planned": [
+    "search_manga"
+   ],
+   "tools_used": [
+    "search_manga"
+   ],
+   "waves": 1,
+   "final_excerpt": "I'm sorry, I encountered an issue while composing the response. Please try again.",
+   "clarification": false,
+   "latency_s": 72.5,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 882.7,
+    "max_wave_ms": 882.7,
+    "wall_s": 72.5
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 0,
+    "entities_required": 1,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "M93",
+   "group": "M",
+   "prompt": "What's the meaning of the word cache?",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "define_word"
+   ],
+   "tools_used": [
+    "define_word"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\ncache:\n1. {'word': 'cache', 'phonetic': '/kæɪʃ/', 'phonetics': (mappingproxy({'text': '/kæɪʃ/', 'audio': 'https://api.dictio",
+   "clarification": false,
+   "latency_s": 94.5,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 811.7,
+    "max_wave_ms": 811.7,
+    "wall_s": 94.5
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "M94",
+   "group": "M",
+   "prompt": "Find recipes for biryani.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_meals"
+   ],
+   "tools_used": [
+    "search_meals"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nbiryani:\n1. {'idMeal': '52805', 'strMeal': 'Lamb Biryani', 'strMealAlternate': None, 'strCategory': 'Lamb', 'strArea': 'Indi",
+   "clarification": false,
+   "latency_s": 80.1,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 775.0,
+    "max_wave_ms": 775.0,
+    "wall_s": 80.1
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "M95",
+   "group": "M",
+   "prompt": "Find the nginx Docker image.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 95.0,
+   "failures": {
+    "validation": "EXECUTOR/VALIDATOR: BINDING_FAILED: StepA requires repository — no resolvable source after L1-L5; the user request carri"
+   },
+   "planned": [
+    "get_docker_images"
+   ],
+   "tools_used": [],
+   "waves": 0,
+   "final_excerpt": "I want to make sure I understand: can you tell me a bit more about what you need regarding \"Find the nginx Docker image.\"?",
+   "clarification": true,
+   "latency_s": 140.0,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 0,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 0,
+    "wave_sum_ms": 0,
+    "max_wave_ms": 0.0,
+    "wall_s": 140.0
+   },
+   "response_status": "",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "M96",
+   "group": "M",
+   "prompt": "Find a university called Waseda.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_universities"
+   ],
+   "tools_used": [
+    "search_universities"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nwaseda:\n1. {'state-province': None, 'name': 'Waseda University', 'domains': ('waseda.ac.jp',), 'alpha_two_code': 'JP', 'web_",
+   "clarification": false,
+   "latency_s": 79.5,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 828.1,
+    "max_wave_ms": 828.1,
+    "wall_s": 79.5
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "N97",
+   "group": "N",
+   "prompt": "Find Apple.",
+   "scores": {
+    "intent": 0.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 85.0,
+   "failures": {
+    "intent": "PLANNER: expected clarification, none asked",
+    "validation": "EXECUTOR/VALIDATOR: SemanticPlanner: LLM call failed — All extraction methods failed"
+   },
+   "planned": [],
+   "tools_used": [],
+   "waves": 0,
+   "final_excerpt": "I couldn't complete that request: SemanticPlanner: LLM call failed — All extraction methods failed",
+   "clarification": false,
+   "latency_s": 54.8,
+   "intent_accounting": {
+    "detected": 0,
+    "planned": 0,
+    "executed": 0,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 0,
+    "wave_sum_ms": 0,
+    "max_wave_ms": 0.0,
+    "wall_s": 54.8
+   },
+   "response_status": "EXECUTION_FAILED",
+   "coverage_breakdown": {
+    "evidence_required": 0,
+    "evidence_available": 0,
+    "evidence_rendered": 0,
+    "entities_required": 0,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "N98",
+   "group": "N",
+   "prompt": "Tell me about Naruto.",
+   "scores": {
+    "intent": 0.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 85.0,
+   "failures": {
+    "intent": "PLANNER: expected clarification, none asked",
+    "validation": "EXECUTOR/VALIDATOR: SemanticPlanner: LLM call failed — All extraction methods failed"
+   },
+   "planned": [],
+   "tools_used": [],
+   "waves": 0,
+   "final_excerpt": "I couldn't complete that request: SemanticPlanner: LLM call failed — All extraction methods failed",
+   "clarification": false,
+   "latency_s": 56.2,
+   "intent_accounting": {
+    "detected": 0,
+    "planned": 0,
+    "executed": 0,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 0,
+    "wave_sum_ms": 0,
+    "max_wave_ms": 0.0,
+    "wall_s": 56.2
+   },
+   "response_status": "EXECUTION_FAILED",
+   "coverage_breakdown": {
+    "evidence_required": 0,
+    "evidence_available": 0,
+    "evidence_rendered": 0,
+    "entities_required": 0,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "N99",
+   "group": "N",
+   "prompt": "Find Python.",
+   "scores": {
+    "intent": 0.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 90.0,
+   "failures": {
+    "intent": "PLANNER: expected clarification, none asked"
+   },
+   "planned": [
+    "geocode_location"
+   ],
+   "tools_used": [
+    "geocode_location"
+   ],
+   "waves": 1,
+   "final_excerpt": "Python is an attraction located at Ruigrijkplein in Kaatsheuvel, Loon op Zand, Noord-Brabant, Netherlands (postal code 5171 KW), at coordinates latitude 51.6468",
+   "clarification": false,
+   "latency_s": 86.0,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 1026.1,
+    "max_wave_ms": 1026.1,
+    "wall_s": 86.0
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 0,
+    "evidence_available": 0,
+    "evidence_rendered": 0,
+    "entities_required": 0,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "N100",
+   "group": "N",
+   "prompt": "Tell me about Japan.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "get_country_info"
+   ],
+   "tools_used": [
+    "get_country_info"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\njapan:\ntitle: Japan\npageid: 15573\ndescription: Country in East Asia\nextract: Japan is an island country in East Asia. Locate",
+   "clarification": false,
+   "latency_s": 68.8,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 456.5,
+    "max_wave_ms": 456.5,
+    "wall_s": 68.8
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "O101",
+   "group": "O",
+   "prompt": "What's the weather in Lahore?",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "I retrieved the following results:\n\nlahore:\nlatitude: 31.5656822\nlongitude: 74.3141829\nplace_name: لاہور, تحصیل لاہور شہر, ضلع لاہور, لاہور ڈویژن, پنجاب, 54100,",
+   "clarification": false,
+   "latency_s": 75.3,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 2,
+    "executed": 2,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 1487.8,
+    "max_wave_ms": 904.9,
+    "wall_s": 75.3
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "O102",
+   "group": "O",
+   "prompt": "Define orchestration.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "define_word"
+   ],
+   "tools_used": [
+    "define_word"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\norchestration:\n1. {'word': 'orchestration', 'phonetics': (), 'meanings': (mappingproxy({'partOfSpeech': 'noun', 'definitions",
+   "clarification": false,
+   "latency_s": 49.9,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 626.0,
+    "max_wave_ms": 626.0,
+    "wall_s": 49.9
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "O103",
+   "group": "O",
+   "prompt": "Tell me about Pikachu.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "get_pokemon"
+   ],
+   "tools_used": [
+    "get_pokemon"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\npikachu:\n1. {'ability': mappingproxy({'name': 'static', 'url': 'https://pokeapi.co/api/v2/ability/9/'}), 'is_hidden': False,",
+   "clarification": false,
+   "latency_s": 69.0,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 634.5,
+    "max_wave_ms": 634.5,
+    "wall_s": 69.0
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "O104",
+   "group": "O",
+   "prompt": "List Studio Ghibli films.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "get_ghibli_films"
+   ],
+   "tools_used": [
+    "get_ghibli_films"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nget_ghibli_films:\n1. {'id': '2baf70d1-42bb-4437-b551-e5fed5a87abe', 'title': 'Castle in the Sky', 'original_title': '天空の城ラピュ",
+   "clarification": false,
+   "latency_s": 68.9,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 796.4,
+    "max_wave_ms": 796.4,
+    "wall_s": 68.9
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "O105",
+   "group": "O",
+   "prompt": "Find books by Jane Austen.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_authors"
+   ],
+   "tools_used": [
+    "search_authors"
+   ],
+   "waves": 1,
+   "final_excerpt": "Based on the search results, there are **41 books** by **Jane Austen** (1775–1817) available. Notable works include:\n\n- **Pride and Prejudice** (1813) — multipl",
+   "clarification": false,
+   "latency_s": 71.8,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 8685.8,
+    "max_wave_ms": 8685.8,
+    "wall_s": 71.8
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "P106",
+   "group": "P",
+   "prompt": "Find the coordinates of Lahore.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location"
+   ],
+   "tools_used": [
+    "geocode_location"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nlahore:\nlatitude: 31.5656822\nlongitude: 74.3141829\nplace_name: لاہور, تحصیل لاہور شہر, ضلع لاہور, لاہور ڈویژن, پنجاب, 54100,",
+   "clarification": false,
+   "latency_s": 62.0,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 566.6,
+    "max_wave_ms": 566.6,
+    "wall_s": 62.0
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "P107",
+   "group": "P",
+   "prompt": "Find the coordinates of Lahore.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location"
+   ],
+   "tools_used": [
+    "geocode_location"
+   ],
+   "waves": 1,
+   "final_excerpt": "The coordinates of Lahore are latitude 31.5656822 and longitude 74.3141829.",
+   "clarification": false,
+   "latency_s": 51.7,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 400.7,
+    "max_wave_ms": 400.7,
+    "wall_s": 51.7
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "P108",
+   "group": "P",
+   "prompt": "Get the current weather for Lahore twice.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 95.0,
+   "failures": {
+    "validation": "EXECUTOR/VALIDATOR: "
+   },
+   "planned": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "I retrieved the following results:\n\nlahore:\nlatitude: 31.5656822\nlongitude: 74.3141829\nplace_name: لاہور, تحصیل لاہور شہر, ضلع لاہور, لاہور ڈویژن, پنجاب, 54100,",
+   "clarification": false,
+   "latency_s": 78.1,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 3,
+    "executed": 2,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 1636.6,
+    "max_wave_ms": 1087.8,
+    "wall_s": 78.1
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "P109",
+   "group": "P",
+   "prompt": "Search for Naruto anime.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_anime"
+   ],
+   "tools_used": [
+    "search_anime"
+   ],
+   "waves": 1,
+   "final_excerpt": "The search results show several Naruto anime entries. The main series **Naruto** (TV format) has 220 episodes and an average score of 80. There's also **NARUTO×",
+   "clarification": false,
+   "latency_s": 69.7,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 884.7,
+    "max_wave_ms": 884.7,
+    "wall_s": 69.7
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "P110",
+   "group": "P",
+   "prompt": "Search for Naruto anime.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_anime"
+   ],
+   "tools_used": [
+    "search_anime"
+   ],
+   "waves": 1,
+   "final_excerpt": "The search results show several Naruto anime entries. The main series **Naruto** (ID: 20) is a TV anime with 220 episodes and an average score of 80. There are ",
+   "clarification": false,
+   "latency_s": 40.1,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 870.9,
+    "max_wave_ms": 870.9,
+    "wall_s": 40.1
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "Q111",
+   "group": "Q",
+   "prompt": "Find Lahore's coordinates.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location"
+   ],
+   "tools_used": [
+    "geocode_location"
+   ],
+   "waves": 1,
+   "final_excerpt": "Lahore is located at latitude 31.5656822° and longitude 74.3141829°.",
+   "clarification": false,
+   "latency_s": 82.3,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 1029.2,
+    "max_wave_ms": 1029.2,
+    "wall_s": 82.3
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "Q112",
+   "group": "Q",
+   "prompt": "Find Lahore's coordinates and current weather.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "I retrieved the following results:\n\nlahore:\nlatitude: 31.5656822\nlongitude: 74.3141829\nplace_name: لاہور, تحصیل لاہور شہر, ضلع لاہور, لاہور ڈویژن, پنجاب, 54100,",
+   "clarification": false,
+   "latency_s": 105.1,
+   "intent_accounting": {
+    "detected": 2,
+    "planned": 2,
+    "executed": 2,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 1282.0,
+    "max_wave_ms": 801.2,
+    "wall_s": 105.1
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "Q113",
+   "group": "Q",
+   "prompt": "Search Naruto anime.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_anime"
+   ],
+   "tools_used": [
+    "search_anime"
+   ],
+   "waves": 1,
+   "final_excerpt": "The search returned several Naruto anime entries:\n\n- **Naruto** (TV series) — 220 episodes, average score 80\n- **NARUTO×UT** (OVA) — 1 episode, average score 69",
+   "clarification": false,
+   "latency_s": 68.7,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 859.4,
+    "max_wave_ms": 859.4,
+    "wall_s": 68.7
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "Q114",
+   "group": "Q",
+   "prompt": "Search Naruto manga.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_manga"
+   ],
+   "tools_used": [
+    "search_manga"
+   ],
+   "waves": 1,
+   "final_excerpt": "Based on the search results, there are multiple Naruto manga entries. The main series **\"Naruto\" (NARUTO -ナルト-)** has **700 chapters**, a **MANGA** format, and ",
+   "clarification": false,
+   "latency_s": 112.2,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 915.9,
+    "max_wave_ms": 915.9,
+    "wall_s": 112.2
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "Q115",
+   "group": "Q",
+   "prompt": "Find books by Jane Austen.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_authors"
+   ],
+   "tools_used": [
+    "search_authors"
+   ],
+   "waves": 1,
+   "final_excerpt": "The search returned 41 books by Jane Austen (1775–1817). Notable titles include *Pride and Prejudice* (1813, two editions), *Sense and Sensibility* (1811, two e",
+   "clarification": false,
+   "latency_s": 93.3,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 908.5,
+    "max_wave_ms": 908.5,
+    "wall_s": 93.3
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "Q116",
+   "group": "Q",
+   "prompt": "Search books about Jane Austen.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_books"
+   ],
+   "tools_used": [
+    "search_books"
+   ],
+   "waves": 1,
+   "final_excerpt": "The search returned **41 books by Jane Austen** (1775–1817) on Project Gutenberg. Key titles include:\n\n- **Pride and Prejudice** (1813) — her most downloaded wo",
+   "clarification": false,
+   "latency_s": 73.6,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 738.2,
+    "max_wave_ms": 738.2,
+    "wall_s": 73.6
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "Q117",
+   "group": "Q",
+   "prompt": "Find coordinates for Lahore.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location"
+   ],
+   "tools_used": [
+    "geocode_location"
+   ],
+   "waves": 1,
+   "final_excerpt": "Lahore is located at latitude 31.5656822° and longitude 74.3141829°.",
+   "clarification": false,
+   "latency_s": 53.9,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 553.8,
+    "max_wave_ms": 553.8,
+    "wall_s": 53.9
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "Q118",
+   "group": "Q",
+   "prompt": "Find coordinates for Tokyo.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location"
+   ],
+   "tools_used": [
+    "geocode_location"
+   ],
+   "waves": 1,
+   "final_excerpt": "Tokyo is located at latitude 35.6768601 and longitude 139.7638947.",
+   "clarification": false,
+   "latency_s": 41.7,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 1138.6,
+    "max_wave_ms": 1138.6,
+    "wall_s": 41.7
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "R119",
+   "group": "R",
+   "prompt": "Find Lahore coordinates and weather.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "Lahore is located at latitude 31.5656822° and longitude 74.3141829° (geocode). Current weather at nearby coordinates (31.528997°, 74.282295°) shows a temperatur",
+   "clarification": false,
+   "latency_s": 51.9,
+   "intent_accounting": {
+    "detected": 2,
+    "planned": 2,
+    "executed": 2,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 1844.9,
+    "max_wave_ms": 933.9,
+    "wall_s": 51.9
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "R120",
+   "group": "R",
+   "prompt": "Search Naruto anime.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_anime"
+   ],
+   "tools_used": [
+    "search_anime"
+   ],
+   "waves": 1,
+   "final_excerpt": "The search returned several Naruto-related anime entries: the main **Naruto** TV series (220 episodes, average score 80), **NARUTO×UT** OVA (1 episode, score 69",
+   "clarification": false,
+   "latency_s": 32.4,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 899.1,
+    "max_wave_ms": 899.1,
+    "wall_s": 32.4
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "R121",
+   "group": "R",
+   "prompt": "Get Docker nginx information.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "get_docker_images"
+   ],
+   "tools_used": [
+    "get_docker_images"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nnginx:\nuser: library\nname: nginx\nnamespace: library\ndescription: Official build of Nginx.\nstar_count: 21358\npull_count: 1326",
+   "clarification": false,
+   "latency_s": 89.8,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 590.0,
+    "max_wave_ms": 590.0,
+    "wall_s": 89.8
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "R122",
+   "group": "R",
+   "prompt": "Search for a book titled XYZNONEXISTENTBOOK123.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 0.0,
+    "efficiency": 1.0
+   },
+   "total": 90.0,
+   "failures": {
+    "grounding": "SYNTHESIS: fabricated facts present"
+   },
+   "planned": [
+    "search_books"
+   ],
+   "tools_used": [
+    "search_books"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nxyznonexistentbook123:\ncount: 0\nbook_count: 0",
+   "clarification": false,
+   "latency_s": 124.8,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 1151.6,
+    "max_wave_ms": 1151.6,
+    "wall_s": 124.8
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 0,
+    "evidence_available": 0,
+    "evidence_rendered": 0,
+    "entities_required": 0,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "R123",
+   "group": "R",
+   "prompt": "Search for a university named XYZNONEXISTENTUNIVERSITY123.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 0.0,
+    "efficiency": 1.0
+   },
+   "total": 90.0,
+   "failures": {
+    "grounding": "SYNTHESIS: fabricated facts present"
+   },
+   "planned": [
+    "search_universities"
+   ],
+   "tools_used": [
+    "search_universities"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nxyznonexistentuniversity123: retrieved",
+   "clarification": false,
+   "latency_s": 39.1,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 1,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 1057.7,
+    "max_wave_ms": 1057.7,
+    "wall_s": 39.1
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 0,
+    "evidence_available": 0,
+    "evidence_rendered": 0,
+    "entities_required": 0,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "R124",
+   "group": "R",
+   "prompt": "Search for a Pokemon named XYZNONEXISTENTPOKEMON.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 95.0,
+   "failures": {
+    "validation": "EXECUTOR/VALIDATOR: "
+   },
+   "planned": [
+    "get_pokemon"
+   ],
+   "tools_used": [],
+   "waves": 1,
+   "final_excerpt": "I couldn't complete that request: the planned operations produced no results.",
+   "clarification": false,
+   "latency_s": 7.0,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 1,
+    "executed": 0,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 526.8,
+    "max_wave_ms": 526.8,
+    "wall_s": 7.0
+   },
+   "response_status": "EXECUTION_FAILED",
+   "coverage_breakdown": {
+    "evidence_required": 0,
+    "evidence_available": 0,
+    "evidence_rendered": 0,
+    "entities_required": 0,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "S125",
+   "group": "S",
+   "prompt": "Use whatever tools you need and tell me anything interesting about Lahore.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "Lahore, the historic capital of Punjab, Pakistan, sits at 31.57°N, 74.31°E in the Lahore Division. As of early morning on August 15, 2026, the city was experien",
+   "clarification": false,
+   "latency_s": 85.3,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 2,
+    "executed": 2,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 1901.6,
+    "max_wave_ms": 1023.3,
+    "wall_s": 85.3
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "S126",
+   "group": "S",
+   "prompt": "Search the web, get country info, weather, coordinates, reverse geocode, books, meals, and products for Lahore.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 0.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 0.0,
+    "efficiency": 0.6
+   },
+   "total": 58.0,
+   "failures": {
+    "resolution": "RESOLVER: expected ['geocode_location', 'get_current_weather'], got ['geocode_location', 'get_country_info', 'get_current_weather', 'reverse_geocode', 'search_books', 'search_meals', 'search_products', 'search_web_search']",
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['Lahore']",
+    "validation": "EXECUTOR/VALIDATOR: invocation budget exceeded (wall_time)",
+    "efficiency": "EXECUTOR: 0 calls (max 4, min 2)"
+   },
+   "planned": [
+    "geocode_location",
+    "get_country_info",
+    "get_current_weather",
+    "reverse_geocode",
+    "search_books",
+    "search_meals",
+    "search_products",
+    "search_web_search"
+   ],
+   "tools_used": [],
+   "waves": 3,
+   "final_excerpt": "",
+   "clarification": false,
+   "latency_s": 189.4,
+   "intent_accounting": {
+    "detected": 8,
+    "planned": 8,
+    "executed": 0,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 3,
+    "wave_sum_ms": 29429.7,
+    "max_wave_ms": 27824.8,
+    "wall_s": 189.4
+   },
+   "response_status": "",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 0,
+    "entities_required": 1,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "S127",
+   "group": "S",
+   "prompt": "Call every tool you have and summarize everything.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 95.0,
+   "failures": {
+    "validation": "EXECUTOR/VALIDATOR: BINDING_FAILED: StepB requires repository — no resolvable source after L1-L5; the user request carri"
+   },
+   "planned": [
+    "geocode_location",
+    "get_docker_images"
+   ],
+   "tools_used": [],
+   "waves": 0,
+   "final_excerpt": "I couldn't complete that request: geocode_location dropped (unresolvable inputs: query); get_docker_images dropped (unresolvable inputs: repository); extraneous",
+   "clarification": false,
+   "latency_s": 99.2,
+   "intent_accounting": {
+    "detected": 2,
+    "planned": 2,
+    "executed": 0,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 0,
+    "wave_sum_ms": 0,
+    "max_wave_ms": 0.0,
+    "wall_s": 99.2
+   },
+   "response_status": "EXECUTION_FAILED",
+   "coverage_breakdown": {
+    "evidence_required": 0,
+    "evidence_available": 0,
+    "evidence_rendered": 0,
+    "entities_required": 0,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "S128",
+   "group": "S",
+   "prompt": "Use the fastest approach possible to compare weather for 20 cities.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 0.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 0.75,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 77.5,
+   "failures": {
+    "resolution": "RESOLVER: expected kinds ['get_current_weather'], got ['geocode_location', 'get_current_weather']",
+    "parallelism": "TOPOLOGY: 2 waves for independent ops",
+    "validation": "EXECUTOR/VALIDATOR: "
+   },
+   "planned": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "I retrieved the following results:\n\ngeocode_location:\nlatitude: 47.3807841\nlongitude: 8.5057641\nplace_name: city4, 434, Badenerstrasse, Hard, Kreis 4, Zürich, B",
+   "clarification": false,
+   "latency_s": 98.5,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 17,
+    "executed": 17,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 3157.9,
+    "max_wave_ms": 2359.1,
+    "wall_s": 98.5
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "S129",
+   "group": "S",
+   "prompt": "Do not ask questions. Just figure out what I mean by Apple.",
+   "scores": {
+    "intent": 0.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 85.0,
+   "failures": {
+    "intent": "PLANNER: expected clarification, none asked",
+    "validation": "EXECUTOR/VALIDATOR: invocation budget exceeded (wall_time)"
+   },
+   "planned": [
+    "search_books"
+   ],
+   "tools_used": [],
+   "waves": 1,
+   "final_excerpt": "",
+   "clarification": false,
+   "latency_s": 239.2,
+   "intent_accounting": {
+    "detected": 0,
+    "planned": 1,
+    "executed": 0,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 60000.6,
+    "max_wave_ms": 60000.6,
+    "wall_s": 239.2
+   },
+   "response_status": "",
+   "coverage_breakdown": {
+    "evidence_required": 0,
+    "evidence_available": 0,
+    "evidence_rendered": 0,
+    "entities_required": 0,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "T130",
+   "group": "T",
+   "prompt": "Build a global city weather report for Lahore, Islamabad, Karachi, Dubai, Riyadh, Istanbul, London, Paris, Berlin, Rome, Madrid, New York, Toronto, Chicago, Los Angeles, Tokyo, Seoul, Beijing, Singapore, and Sydney. For each: geocode, weather, return temperature, wind speed, and daytime status.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 0.75,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 0.0,
+    "efficiency": 1.0
+   },
+   "total": 72.5,
+   "failures": {
+    "parallelism": "TOPOLOGY: 2 waves for independent ops",
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['Lahore', 'Tokyo']",
+    "validation": "EXECUTOR/VALIDATOR: "
+   },
+   "planned": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "I retrieved the following results:\n\ngeocode_location:\nlatitude: 41.0063810\nlongitude: 28.9758715\nplace_name: İstanbul, Fatih, İstanbul, Marmara Bölgesi, 34122, ",
+   "clarification": false,
+   "latency_s": 119.6,
+   "intent_accounting": {
+    "detected": 25,
+    "planned": 17,
+    "executed": 17,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 3162.8,
+    "max_wave_ms": 2289.5,
+    "wall_s": 119.6
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 3,
+    "evidence_available": 3,
+    "evidence_rendered": 1,
+    "entities_required": 3,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "T131",
+   "group": "T",
+   "prompt": "Build a media comparison: anime for Naruto, One Piece, Bleach, Death Note, and Attack on Titan; manga for Naruto, One Piece, Bleach, Dragon Ball, and Demon Slayer; books for Pride and Prejudice, Frankenstein, Dracula, and Moby Dick; recipes for chicken, pasta, rice, and fish.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 0.0,
+    "efficiency": 1.0
+   },
+   "total": 80.0,
+   "failures": {
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['Naruto']"
+   },
+   "planned": [
+    "search_anime",
+    "search_books",
+    "search_manga",
+    "search_meals"
+   ],
+   "tools_used": [
+    "search_anime",
+    "search_anime",
+    "search_anime",
+    "search_anime",
+    "search_anime",
+    "search_manga",
+    "search_manga",
+    "search_manga",
+    "search_manga",
+    "search_manga",
+    "search_books",
+    "search_books",
+    "search_books",
+    "search_books",
+    "search_meals",
+    "search_meals",
+    "search_meals",
+    "search_meals"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nsearch_meals:\n1. {'idMeal': '52777', 'strMeal': 'Mediterranean Pasta Salad', 'strMealAlternate': None, 'strCategory': 'Seafo",
+   "clarification": false,
+   "latency_s": 131.9,
+   "intent_accounting": {
+    "detected": 1,
+    "planned": 4,
+    "executed": 18,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 33615.8,
+    "max_wave_ms": 33615.8,
+    "wall_s": 131.9
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 3,
+    "evidence_available": 3,
+    "evidence_rendered": 2,
+    "entities_required": 3,
+    "entities_rendered": 2
+   }
+  },
+  {
+   "id": "T132",
+   "group": "T",
+   "prompt": "Build a multi-domain research report: for Lahore get coordinates, current weather, and reverse-geocoded location; for Japan get country information, Waseda university search, and a web search; for technology get nginx and Redis Docker information and a web search for Docker; for language define orchestration, idempotent, and artifact.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 0.0,
+    "binding": 1.0,
+    "topology": 0.0,
+    "parallelism": 1.0,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 0.0,
+    "efficiency": 0.0
+   },
+   "total": 40.0,
+   "failures": {
+    "resolution": "RESOLVER: expected kinds ['define_word', 'geocode_location', 'get_country_info', 'get_current_weather', 'get_docker_images', 'reverse_geocode', 'search_universities', 'search_web_search'], got ['define_word', 'geocode_location', 'get_country_info', 'get_current_weather', 'get_docker_images', 'search_universities', 'search_web_search']",
+    "topology": "TOPOLOGY: missing deps; planned={'StepA': 'geocode_location', 'StepB': 'get_current_weather', 'StepC': 'get_country_info', 'StepD': 'search_universities', 'StepF': 'get_docker_images', 'StepG': 'get_docker_images', 'StepE': 'search_web_search', 'StepI': 'define_word'}",
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['Lahore', 'Japan', 'nginx']",
+    "validation": "EXECUTOR/VALIDATOR: BINDING_FAILED: StepG requires repository — no resolvable source after L1-L5; the user request carri",
+    "efficiency": "EXECUTOR: 0 calls (max 12, min 8)"
+   },
+   "planned": [
+    "define_word",
+    "geocode_location",
+    "get_country_info",
+    "get_current_weather",
+    "get_docker_images",
+    "search_universities",
+    "search_web_search"
+   ],
+   "tools_used": [],
+   "waves": 0,
+   "final_excerpt": "I couldn't complete that request: get_docker_images dropped (unresolvable inputs: repository); get_docker_images dropped (unresolvable inputs: repository); capa",
+   "clarification": false,
+   "latency_s": 170.5,
+   "intent_accounting": {
+    "detected": 13,
+    "planned": 8,
+    "executed": 0,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 0,
+    "wave_sum_ms": 0,
+    "max_wave_ms": 0.0,
+    "wall_s": 170.5
+   },
+   "response_status": "EXECUTION_FAILED",
+   "coverage_breakdown": {
+    "evidence_required": 3,
+    "evidence_available": 3,
+    "evidence_rendered": 0,
+    "entities_required": 3,
+    "entities_rendered": 0
+   }
+  },
+  {
+   "id": "U133",
+   "group": "U",
+   "prompt": "For each city Lahore, Tokyo, Paris, London, and New York: geocode, then weather and reverse geocode. At the same time: anime for Naruto, One Piece, and Bleach; books for Pride and Prejudice, Frankenstein, and Dracula; meals for chicken, pasta, and rice; Docker for nginx, redis, and postgres; countries for Pakistan, Japan, and France. Produce one consolidated report.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 0.0,
+    "efficiency": 1.0
+   },
+   "total": 75.0,
+   "failures": {
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['Lahore', 'Naruto']",
+    "validation": "EXECUTOR/VALIDATOR: "
+   },
+   "planned": [
+    "geocode_location",
+    "get_country_info",
+    "get_current_weather",
+    "get_docker_images",
+    "reverse_geocode",
+    "search_anime",
+    "search_books",
+    "search_meals"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "geocode_location",
+    "search_anime",
+    "search_anime",
+    "search_anime",
+    "search_books",
+    "search_books",
+    "search_books",
+    "search_meals",
+    "search_meals",
+    "search_meals",
+    "get_docker_images",
+    "get_docker_images",
+    "get_docker_images",
+    "get_country_info",
+    "get_country_info",
+    "get_country_info",
+    "get_current_weather",
+    "reverse_geocode"
+   ],
+   "waves": 2,
+   "final_excerpt": "I retrieved the following results:\n\ngeocode_location:\nlatitude: 51.5074456\nlongitude: -0.1277653\nplace_name: Greater London, England, United Kingdom\nplace_type:",
+   "clarification": false,
+   "latency_s": 165.3,
+   "intent_accounting": {
+    "detected": 24,
+    "planned": 16,
+    "executed": 22,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 11271.7,
+    "max_wave_ms": 10459.4,
+    "wall_s": 165.3
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 3,
+    "evidence_available": 3,
+    "evidence_rendered": 1,
+    "entities_required": 3,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "V134",
+   "group": "V",
+   "prompt": "Run these branches concurrently: the failing probe, define recovery, get Pakistan information, get Pikachu, search Naruto anime, search Pride and Prejudice, get nginx Docker information, and get Lahore coordinates. Produce a report showing successful operations, failed operations, and final usable artifacts.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 95.0,
+   "failures": {
+    "validation": "EXECUTOR/VALIDATOR: BINDING_FAILED: Step6 requires repository — no resolvable source after L1-L5; the user request carri"
+   },
+   "planned": [
+    "define_word",
+    "geocode_location",
+    "get_country_info",
+    "get_docker_images",
+    "get_pokemon",
+    "search_anime",
+    "search_books"
+   ],
+   "tools_used": [
+    "define_word",
+    "get_country_info",
+    "get_pokemon",
+    "search_anime",
+    "search_books",
+    "geocode_location"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nrecovery:\n1. {'word': 'recovery', 'phonetic': '/ɹəˈkʌvəɹi/', 'phonetics': (mappingproxy({'text': '/ɹəˈkʌvəɹi/', 'audio': 'ht",
+   "clarification": false,
+   "latency_s": 169.1,
+   "intent_accounting": {
+    "detected": 8,
+    "planned": 7,
+    "executed": 6,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 5919.6,
+    "max_wave_ms": 5919.6,
+    "wall_s": 169.1
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 3,
+    "evidence_available": 3,
+    "evidence_rendered": 3,
+    "entities_required": 3,
+    "entities_rendered": 3
+   }
+  },
+  {
+   "id": "W135",
+   "group": "W",
+   "prompt": "Give me a compact global intelligence report. For Lahore, Tokyo, Paris, London, and New York find coordinates, get current weather, and reverse geocode the coordinates. For Pakistan, Japan, and France retrieve country summaries. For Naruto, One Piece, and Bleach search anime and manga. For Jane Austen and Charles Dickens find books by author. For chicken, pasta, and rice search recipes. For nginx, redis, and postgres get Docker information. Also define orchestration, idempotent, and artifact. Finally search the web for LangGraph orchestration.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 0.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 0.0,
+    "recovery": 1.0,
+    "validation": 0.0,
+    "grounding": 0.0,
+    "efficiency": 0.0
+   },
+   "total": 55.0,
+   "failures": {
+    "resolution": "RESOLVER: expected kinds ['define_word', 'geocode_location', 'get_country_info', 'get_current_weather', 'get_docker_images', 'reverse_geocode', 'search_anime', 'search_authors', 'search_manga', 'search_meals', 'search_web_search'], got ['geocode_location', 'get_country_info', 'get_current_weather', 'get_docker_images', 'reverse_geocode', 'search_anime', 'search_authors', 'search_manga', 'search_meals']",
+    "artifacts": "ARTIFACT_GRAPH: facts missing from response: ['Lahore', 'Pakistan', 'nginx', 'orchestration']",
+    "validation": "EXECUTOR/VALIDATOR: invocation budget exceeded (wall_time)",
+    "efficiency": "EXECUTOR: 0 calls (max 40, min 15)"
+   },
+   "planned": [
+    "geocode_location",
+    "get_country_info",
+    "get_current_weather",
+    "get_docker_images",
+    "reverse_geocode",
+    "search_anime",
+    "search_authors",
+    "search_manga",
+    "search_meals"
+   ],
+   "tools_used": [],
+   "waves": 0,
+   "final_excerpt": "",
+   "clarification": false,
+   "latency_s": 267.1,
+   "intent_accounting": {
+    "detected": 20,
+    "planned": 19,
+    "executed": 0,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 0,
+    "wave_sum_ms": 0,
+    "max_wave_ms": 0.0,
+    "wall_s": 267.1
+   },
+   "response_status": "",
+   "coverage_breakdown": {
+    "evidence_required": 4,
+    "evidence_available": 4,
+    "evidence_rendered": 0,
+    "entities_required": 4,
+    "entities_rendered": 0
+   }
+  }
+ ]
+}

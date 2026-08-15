@@ -1,0 +1,395 @@
+{
+ "generated": "2026-08-16T00:50:38",
+ "scenarios_total": 7,
+ "scenarios_passed": 7,
+ "avg_total": 100.0,
+ "dimensions": {
+  "intent": 1.0,
+  "resolution": 1.0,
+  "binding": 1.0,
+  "topology": 1.0,
+  "parallelism": 1.0,
+  "artifacts": 1.0,
+  "recovery": 1.0,
+  "validation": 1.0,
+  "grounding": 1.0,
+  "efficiency": 1.0
+ },
+ "failure_classes": {},
+ "benchmark_contract_scenarios": [],
+ "intent_accounting": {
+  "detected_avg": 2.57,
+  "planned_avg": 2.14,
+  "executed_avg": 2.43,
+  "relationships_total": 4
+ },
+ "synthesis_coverage": {
+  "evidence_required_avg": 1.29,
+  "evidence_rendered_avg": 1.29,
+  "entities_required_avg": 1.29,
+  "entities_rendered_avg": 1.29
+ },
+ "results": [
+  {
+   "id": "C36",
+   "group": "C",
+   "prompt": "Find the coordinates of the Eiffel Tower and then tell me its current weather.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "I retrieved the following results:\n\neiffel tower:\nlatitude: 48.8582599\nlongitude: 2.2945006\nplace_name: Tour Eiffel, 5, Avenue Anatole France, Quartier du Gros-",
+   "clarification": false,
+   "latency_s": 100.9,
+   "intent_accounting": {
+    "detected": 2,
+    "planned": 2,
+    "executed": 2,
+    "relationships": 1
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 27162.5,
+    "max_wave_ms": 15813.3,
+    "wall_s": 100.9
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "C38",
+   "group": "C",
+   "prompt": "Find the coordinates of Muridke, get the current weather, and give me temperature and wind speed.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "I retrieved the following results:\n\nmuridke:\nlatitude: 31.8010863\nlongitude: 74.2540999\nplace_name: مریدکے, تحصیل مریدکے, ضلع شیخوپورہ, لاہور ڈویژن, پنجاب, 3900",
+   "clarification": false,
+   "latency_s": 81.4,
+   "intent_accounting": {
+    "detected": 2,
+    "planned": 2,
+    "executed": 2,
+    "relationships": 1
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 2633.7,
+    "max_wave_ms": 1358.3,
+    "wall_s": 81.4
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "C40",
+   "group": "C",
+   "prompt": "Find the coordinates of Lahore, reverse-geocode them, and get the current weather.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location",
+    "get_current_weather",
+    "reverse_geocode"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "reverse_geocode",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "I retrieved the following results:\n\nlahore:\nlatitude: 31.5656822\nlongitude: 74.3141829\nplace_name: لاہور, تحصیل لاہور شہر, ضلع لاہور, لاہور ڈویژن, پنجاب, 54100,",
+   "clarification": false,
+   "latency_s": 82.2,
+   "intent_accounting": {
+    "detected": 3,
+    "planned": 3,
+    "executed": 3,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 1832.8,
+    "max_wave_ms": 1042.6,
+    "wall_s": 82.2
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "C41",
+   "group": "C",
+   "prompt": "Find the coordinates of the Eiffel Tower, reverse-geocode them, get weather, and summarize the location.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location",
+    "get_current_weather",
+    "reverse_geocode"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "reverse_geocode",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "The Eiffel Tower is located at latitude 48.8582599, longitude 2.2945006 in Paris, France, at 5 Avenue Anatole France in the 7th arrondissement (Quartier du Gros",
+   "clarification": false,
+   "latency_s": 68.2,
+   "intent_accounting": {
+    "detected": 4,
+    "planned": 3,
+    "executed": 3,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 1862.5,
+    "max_wave_ms": 1170.7,
+    "wall_s": 68.2
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "D48",
+   "group": "D",
+   "prompt": "Search for chicken recipes, pasta recipes, and rice recipes. Then summarize the returned meals.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "search_meals"
+   ],
+   "tools_used": [
+    "search_meals",
+    "search_meals",
+    "search_meals"
+   ],
+   "waves": 1,
+   "final_excerpt": "I retrieved the following results:\n\nsearch_meals:\n1. {'idMeal': '53167', 'strMeal': 'Seafood rice', 'strMealAlternate': None, 'strCategory': 'Seafood', 'strArea",
+   "clarification": false,
+   "latency_s": 90.3,
+   "intent_accounting": {
+    "detected": 2,
+    "planned": 1,
+    "executed": 3,
+    "relationships": 1
+   },
+   "wave_timing": {
+    "waves": 1,
+    "wave_sum_ms": 5547.8,
+    "max_wave_ms": 5547.8,
+    "wall_s": 90.3
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 3,
+    "evidence_available": 3,
+    "evidence_rendered": 3,
+    "entities_required": 3,
+    "entities_rendered": 3
+   }
+  },
+  {
+   "id": "K82",
+   "group": "K",
+   "prompt": "Find the location of Lahore and tell me whether it is currently day or night.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "get_current_weather"
+   ],
+   "waves": 2,
+   "final_excerpt": "I retrieved the following results:\n\nlahore:\nlatitude: 31.5656822\nlongitude: 74.3141829\nplace_name: لاہور, تحصیل لاہور شہر, ضلع لاہور, لاہور ڈویژن, پنجاب, 54100,",
+   "clarification": false,
+   "latency_s": 46.2,
+   "intent_accounting": {
+    "detected": 3,
+    "planned": 2,
+    "executed": 2,
+    "relationships": 0
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 1680.4,
+    "max_wave_ms": 903.3,
+    "wall_s": 46.2
+   },
+   "response_status": "PARTIAL_SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  },
+  {
+   "id": "K83",
+   "group": "K",
+   "prompt": "Find the address at the coordinates returned for the Eiffel Tower.",
+   "scores": {
+    "intent": 1.0,
+    "resolution": 1.0,
+    "binding": 1.0,
+    "topology": 1.0,
+    "parallelism": 1.0,
+    "artifacts": 1.0,
+    "recovery": 1.0,
+    "validation": 1.0,
+    "grounding": 1.0,
+    "efficiency": 1.0
+   },
+   "total": 100.0,
+   "failures": {},
+   "planned": [
+    "geocode_location",
+    "reverse_geocode"
+   ],
+   "tools_used": [
+    "geocode_location",
+    "reverse_geocode"
+   ],
+   "waves": 2,
+   "final_excerpt": "The Eiffel Tower is located at **5, Avenue Anatole France, 75007 Paris, France** (Quartier du Gros-Caillou, Paris 7e Arrondissement). Both the geocode and rever",
+   "clarification": false,
+   "latency_s": 52.7,
+   "intent_accounting": {
+    "detected": 2,
+    "planned": 2,
+    "executed": 2,
+    "relationships": 1
+   },
+   "wave_timing": {
+    "waves": 2,
+    "wave_sum_ms": 10904.1,
+    "max_wave_ms": 10662.4,
+    "wall_s": 52.7
+   },
+   "response_status": "SUCCESS",
+   "coverage_breakdown": {
+    "evidence_required": 1,
+    "evidence_available": 1,
+    "evidence_rendered": 1,
+    "entities_required": 1,
+    "entities_rendered": 1
+   }
+  }
+ ]
+}

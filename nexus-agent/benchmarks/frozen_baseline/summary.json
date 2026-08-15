@@ -1,0 +1,47 @@
+{
+  "baseline": "frozen architecture (commit 8656ead; orchestration surface identical at 1cce159 and all PH-0..PH-3 hardening commits — none touch resolver/binder/validator/evidence semantics)",
+  "git_commit": "8656ead (P2-A.5, architecture frozen)",
+  "scenario_corpus": "scripts/benchmark_scenarios_part1.py (50) + part2.py (38) + part3.py (47) = 135",
+  "scorer": "scripts/run_benchmark.py (weights: intent 10, resolution 15, binding 10, topology 15, parallelism 10, artifacts 10, recovery 10, validation 5, grounding 10, efficiency 5; PASS >= 90)",
+  "model": {
+    "planner": "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b",
+    "synthesis": "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b",
+    "embedding_retrieval": false
+  },
+  "temperature": 0,
+  "seed": null,
+  "provider": "NVIDIA NIM (integrate.api.nvidia.com/v1)",
+  "runs": [
+    {"file": "benchmark_uu_run1.json", "run_id": "uu_run1", "ts": "2026-08-15T07:16Z"},
+    {"file": "benchmark_uu_run2.json", "run_id": "uu_run2", "ts": "2026-08-15T10:31Z"},
+    {"file": "benchmark_uu_run3.json", "run_id": "uu_run3", "ts": "2026-08-15T14:14Z"}
+  ],
+  "results": {
+    "passed_per_run": [98, 98, 98],
+    "avg_total_per_run": [91.3, 91.5, 90.6],
+    "mean_avg_total": 91.1,
+    "reproducible_3x": true
+  },
+  "dimensions_mean": {
+    "intent": 0.97,
+    "resolution": 0.872,
+    "binding": 1.0,
+    "topology": 0.975,
+    "parallelism": 0.986,
+    "artifacts": 0.788,
+    "recovery": 0.993,
+    "validation": 0.741,
+    "grounding": 0.763,
+    "efficiency": 0.946
+  },
+  "mega_dag_gates": {
+    "p2a6_run": {"file": "gates_7_7_avg100.json", "scenarios": ["C36", "C38", "C40", "C41", "D48", "K82", "K83"], "passed": "7/7", "avg_total": 99.3, "note": "validation 0.857 = C36 95 flake"},
+    "post_p3_instrumentation": {"file": "gates_post_p3_7_7_avg100.json", "passed": "7/7", "avg_total": 100.0, "note": "re-run after P3 knobs landed (defaults = control behavior)"}
+  },
+  "notes": [
+    "Single-shot per scenario (run_benchmark.py has no internal repetition); the x3 reproducibility is these three sequential runs, all 98/135.",
+    "W135-class mega-DAG timing evidence (chunk_timing logs) lives in session /tmp logs, not committed; docs/roadmap.md P2-A section records the 78.4s critical-path baseline.",
+    "The checked-in benchmark_report.json at repo root predates this baseline (2026-08-12, 83/135, avg 85.7) — superseded by this directory.",
+    "Residual failure taxonomy: ~28-33 Class B synthesis omissions (available=required, rendered<required), ~6 BENCHMARK_CONTRACT weather/geocode expectations, ~3 docker BINDING (genuinely missing input), variable NIM endpoint timeouts."
+  ]
+}
