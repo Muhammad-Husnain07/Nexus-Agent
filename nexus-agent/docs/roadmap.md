@@ -146,8 +146,8 @@ stable; planning critical path = max(parallel chunk) = 78.4s (P2-A.5).
 
 ## Remaining tracks (post-freeze)
 
-- **P3-A/B: adaptive chunk balancing** (independent performance experiment —
-  the ONLY permitted orchestration-adjacent change; see contract below).
+- **P3-A/B: adaptive chunk balancing** — CLOSED (negative; see the P3
+  section below — `max(chunk_latency)` is endpoint-latency-bound).
 - Durable background-job model (ExecutionRequest → Durable Job → Queue →
   Worker → Checkpoint → ArtifactStore — not `asyncio.create_task`).
 - Tenant isolation (multi-tenant authorization).
@@ -159,7 +159,7 @@ stable; planning critical path = max(parallel chunk) = 78.4s (P2-A.5).
 
 ---
 
-## P3-A/B contract (adaptive chunk balancing)
+## P3-A/B experiment (adaptive chunk balancing) — CLOSED, negative
 
 **Status:** P3 is performance optimization ONLY. P0/P1/P2 are not reopened
 unless a new regression or concrete production failure provides evidence.
@@ -173,11 +173,42 @@ of the 180s budget (44%); merge ~0.1s. The key metric is **`max(chunk_latency)`*
 lower `max(chunk_latency)` → more execution headroom → lower total wall time.
 
 **P3 MAY change:** chunk size, partition strategy, scheduling.
-
 **P3 MAY NOT change:** intent coverage, resolver semantics, binding, map
 semantics, evidence/grounding, validation contracts, execution correctness.
 
-**Experiment design:** P3-A vs P3-B on W135 (and T132/U133 when cold),
-measured by `max(chunk_latency)` + benchmark deltas against the frozen
-baseline; a change is adopted only if the 135-scenario aggregate and the
-mega-DAG gates stay green (A/B, one variable at a time).
+### Result (W135, 15 runs, Aug 2026; knobs + instrumentation landed)
+
+| Config | max(chunk_latency) samples | median |
+|---|---|---|
+| control (sequential, cs6) | 33.3, 66.5, 69.7, 77.4, 78.4, 87.7, 109.3, 115.4, 138.0 | ~87.7s |
+| rotation (start order rotated; position-vs-content diagnostic) | 45.1, 69.1, 124.6 | ~69s |
+| concurrency=2 (bounded in-flight chunk calls) | 68.4, 137.2 | ~103s |
+| interleaved partition (unit i → chunk i mod k) | 48.4, 86.0, 154.7 | ~86s |
+| chunk_size=4 (sequential) | 66.4, 192.3 | ~129s |
+| chunk_size=4 (interleaved) | 103.7 | ~104s |
+
+**Findings:**
+
+1. **The tail is content-driven, not positional.** The rotation diagnostic
+   is decisive: chunk 1 (W135 units 6–11: the reverse-geocode dependency
+   + country summaries + anime cluster) was the slowest in 7/7 runs
+   regardless of which start slot it occupied; chunk 2 was always fastest.
+2. **No scheduling lever helps.** Rotation and bounded concurrency leave
+   `max(chunk_latency)` inside the control distribution.
+3. **No partition lever helps.** Interleaving spreads the hard region (one
+   nicely-balanced run at 48.4s), but the penalty then migrates to random
+   chunks: per-call endpoint variance (6–192s for identical content, 0
+   instructor failures / 0 JSON fallbacks / 0 empty chunks in all 15 runs)
+   is 3–5x larger than the content-imbalance effect being targeted.
+4. **chunk_size=4 does not help** (more calls, same per-call variance).
+
+**Conclusion: the P3 hypothesis is falsified.** `max(chunk_latency)` is
+endpoint-latency-bound, not partition-bound; the P2-A.5 78.4s was itself the
+median of a wide distribution. The instrumentation (settings knobs
+`chunk_rotation` / `chunk_concurrency` / `chunk_partition`, `chunk_sizes` +
+`start_order` fields on `semantic_planner.chunk_timing`, the interleaved
+partition helper) is retained with defaults equal to the frozen control
+behavior — zero behavior change when unset. Frozen gates verified after the
+instrumentation landed: **7/7, avg 100.0**. Further mega-DAG wall-time work
+would have to address the NIM endpoint itself (provider-side), which is out
+of scope for orchestration code.

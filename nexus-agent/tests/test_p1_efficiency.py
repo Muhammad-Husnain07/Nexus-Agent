@@ -405,3 +405,57 @@ def test_chunk_intent_units_empty():
     from nexus.agent.nodes.semantic_parser_node import _chunk_intent_units
 
     assert _chunk_intent_units([], 6) == []
+
+
+def test_chunk_schedule_pairs_rotation_preserves_merge_order():
+    """P3-A/B: rotating the chunk START order never re-sequences the merged
+    workflow — the pairs carry their index and the merge consumes index
+    order, so a rotated submission is observationally identical (modulo
+    which chunk's LLM call begins first)."""
+    from nexus.agent.nodes.semantic_parser_node import _schedule_chunk_pairs
+
+    chunks = [[f"u{i}" for i in range(6 * k, 6 * k + 6)] for k in range(4)]
+    for r in (0, 1, 2, 3, 7, 11):
+        scheduled = _schedule_chunk_pairs(chunks, r)
+        # Every chunk present exactly once, paired with its original index.
+        assert sorted(scheduled, key=lambda p: p[0]) == list(enumerate(chunks))
+        # Start order is a rotation of 0..n-1 (merge order fixed).
+        start = [ci for ci, _c in scheduled]
+        assert start == list(range(r % 4, 4)) + list(range(r % 4))
+        # A rotation never re-sequences the merged node order.
+        merged = [c for _ci, c in sorted(scheduled, key=lambda p: p[0])]
+        assert merged == chunks
+    # Rotation 0 (default/control) = identity schedule.
+    assert _schedule_chunk_pairs(chunks, 0) == list(enumerate(chunks))
+    # Rotation wraps safely past the chunk count.
+    assert [ci for ci, _c in _schedule_chunk_pairs(chunks, 9)] == [1, 2, 3, 0]
+
+
+def test_partition_units_interleaved_spreads_and_covers():
+    """P3-A: the interleaved partition assigns every unit exactly once,
+    keeps the chunk count identical to sequential, preserves per-chunk
+    request order, and spreads a contiguous hard region across chunks."""
+    from nexus.agent.nodes.semantic_parser_node import _partition_units_interleaved
+
+    units = [f"u{i}" for i in range(20)]
+    chunks = _partition_units_interleaved(units, 6)
+    # Same chunk count as sequential ceil(20/6)=4; balanced sizes.
+    assert len(chunks) == 4
+    assert [len(c) for c in chunks] == [5, 5, 5, 5]
+    # Full coverage, no duplicates, per-chunk request order preserved.
+    assert set(u for c in chunks for u in c) == set(units)
+    for c in chunks:
+        idx = [int(u[1:]) for u in c]
+        assert idx == sorted(idx)
+    # A contiguous hard region (units 6-11) is spread 1-2 per chunk —
+    # no single chunk carries the full region.
+    hard = [u for u in units[6:12]]
+    per_chunk = [sum(1 for u in c if u in hard) for c in chunks]
+    assert max(per_chunk) <= 2
+    # Small requests / empty stay single-chunk.
+    assert _partition_units_interleaved([], 6) == []
+    assert _partition_units_interleaved([f"u{i}" for i in range(4)], 6) == [
+        [f"u{i}" for i in range(4)]
+    ]
+    # Deterministic.
+    assert _partition_units_interleaved(units, 6) == chunks

@@ -554,6 +554,29 @@ class CompilerSettings(BaseModel):
         le=20,
         description="Intent units per planning chunk in hierarchical mode",
     )
+    # P3-A/B (performance-only experiment, architecture untouched): the
+    # chunked planner's parallel fan-out is the mega-DAG planning critical
+    # path; the P2-A.5 control (W135) measured per-chunk latencies
+    # [18.7, 21.4, 21.9, 77.4]s — the last-submitted chunk consistently
+    # pays a 3-5x tail. These knobs are the diagnostic instrumentation:
+    # rotation tests position-vs-content, concurrency bounds in-flight NIM
+    # calls. Both default to the control behavior.
+    chunk_rotation: int = Field(
+        default=0,
+        ge=0,
+        le=19,
+        description="P3 diagnostic: rotate the chunk START (submission) order only — merge order is unchanged, so the merged workflow is identical. If the slowest chunk follows the rotated slot, the tail is positional (gateway queueing); if it stays with the chunk index, it is content-driven.",
+    )
+    chunk_concurrency: int = Field(
+        default=0,
+        ge=0,
+        le=16,
+        description="P3 scheduling: max in-flight chunk LLM calls in hierarchical mode (0 = unlimited — all chunks start at once, the control). Bounds simultaneous NIM requests when the gateway serializes/queues concurrent calls.",
+    )
+    chunk_partition: str = Field(
+        default="sequential",
+        description="P3-A partition strategy for hierarchical mode: 'sequential' = contiguous dependency-ordered groups (the P2-A control); 'interleaved' = unit i -> chunk i mod k (spreads a concentrated hard unit-region across all chunks so no single chunk pays its full generation cost). Merge order is unchanged for both.",
+    )
     optimizer_min_nodes: int = Field(
         default=3,
         ge=1,

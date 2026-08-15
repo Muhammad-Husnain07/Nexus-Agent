@@ -762,6 +762,58 @@ def _chunk_intent_units(
     return chunks
 
 
+def _schedule_chunk_pairs(
+    chunks: list[list[str]], rotation: int = 0
+) -> list[tuple[int, list[str]]]:
+    """P3-A/B: pair each chunk with its index for start-order scheduling.
+
+    ``rotation`` shifts the START order (which chunk's LLM call begins
+    first) while the (index, chunk) pairing is preserved — the merge step
+    consumes the pairs in index order, so a rotation never re-sequences the
+    merged workflow. Deterministic: rotation r yields the same schedule on
+    every run. This is the diagnostic that separates a positional
+    (endpoint gateway queue-tail) latency penalty — which follows the
+    rotated slot — from a content-driven one, which stays with the chunk.
+    """
+    pairs = list(enumerate(chunks))
+    if rotation:
+        rotation = rotation % max(1, len(pairs))
+        pairs = pairs[rotation:] + pairs[:rotation]
+    return pairs
+
+
+def _partition_units_interleaved(
+    units: list[str], chunk_size: int
+) -> list[list[str]]:
+    """P3-A: interleaved unit partition for hierarchical planning.
+
+    Sequential chunking keeps contiguous dependency-ordered groups — when a
+    hard unit-region is concentrated (W135: chunk 1 = units 6-11 consistently
+    ~2-6x slower than every other chunk across 7 runs, independent of start
+    order), ONE chunk pays the entire region's generation cost. Interleaved
+    assignment (unit i -> chunk i mod k, k = ceil(n / chunk_size)) spreads a
+    contiguous hard region across ALL chunks so no single LLM call carries
+    it — the planning critical path max(chunk_latency) drops toward the
+    per-chunk mean.
+
+    Determinism + invariants: pure function of (units, chunk_size); every
+    unit assigned exactly once; chunk count identical to sequential
+    (ceil(n / chunk_size)); each chunk's units keep request order; the
+    merged workflow is re-sequenced by chunk index, so coverage, refs and
+    dependency resolution are unchanged (the coverage invariant at the
+    merge is partition-agnostic).
+    """
+    if not units:
+        return []
+    k = max(1, (len(units) + chunk_size - 1) // chunk_size)
+    if k == 1:
+        return [units]
+    chunks: list[list[str]] = [[] for _ in range(k)]
+    for i, u in enumerate(units):
+        chunks[i % k].append(u)
+    return chunks
+
+
 async def _chunked_plan_extract(
     llm: LLMClient,
     model: str,
@@ -794,17 +846,45 @@ async def _chunked_plan_extract(
     chunks = _chunk_intent_units(units, chunk_size, relationships)
     if not chunks or len(chunks) < 2:
         return None
+    # P3-A: interleaved partition (spreads a concentrated hard unit-region
+    # across chunks so no single chunk pays its full generation cost).
+    # Default = sequential (the P2-A control); merge order is unchanged.
+    partition = "sequential"
+    try:
+        partition = str(get_settings().compiler.chunk_partition or "sequential")
+    except Exception:
+        partition = "sequential"
+    if partition == "interleaved":
+        chunks = _partition_units_interleaved(units, chunk_size)
+    # P3-A/B scheduling knobs (diagnostics first — measurement-first rule):
+    # chunk_rotation rotates the START order only (merge order is fixed, so
+    # a positional gateway queue-tail penalty follows the rotated slot while
+    # a content penalty stays with the chunk); chunk_concurrency bounds
+    # in-flight chunk calls (0 = unlimited, the P2-A.5 control).
+    rotation = 0
+    concurrency = 0
+    try:
+        rotation = int(get_settings().compiler.chunk_rotation)
+        concurrency = int(get_settings().compiler.chunk_concurrency)
+    except Exception:
+        rotation, concurrency = 0, 0
+    _scheduled: list[tuple[int, list[str]]] = _schedule_chunk_pairs(chunks, rotation)
+    _chunk_sem = (
+        asyncio.Semaphore(concurrency)
+        if concurrency and concurrency < len(chunks)
+        else None
+    )
     merged_nodes: list[dict[str, Any]] = []
     used_refs: set[str] = set()
     # P2-A.5 timing instrumentation: per-chunk LLM latency (the planning
-    # critical path for mega-DAGs).
-    chunk_llm_ms: list[float] = []
+    # critical path for mega-DAGs), keyed by chunk index.
+    chunk_llm_ms: dict[int, float] = {}
 
-    async def _plan_chunk(ci: int, chunk: list[str]) -> list[dict[str, Any]]:
+    async def _plan_chunk(ci: int, chunk: list[str]) -> tuple[int, list[dict[str, Any]]]:
         """Extract one chunk's plan (independent — parallelizable)."""
         if not budget.consume("llm_calls"):
             logger.warning("semantic_planner.chunked_budget_exhausted", chunk=ci)
-            return []
+            return ci, []
         _t0 = time.perf_counter()
         chunk_prompt = _ch_pm.render(
             "logical_planner", "2.4",
@@ -820,35 +900,47 @@ async def _chunked_plan_extract(
         )
         if parsed is None:
             parsed = await _json_extract(chunk_prompt, chunk_user, llm, model, settings)
-        chunk_llm_ms.append(round((time.perf_counter() - _t0) * 1000, 1))
+        chunk_llm_ms[ci] = round((time.perf_counter() - _t0) * 1000, 1)
         nodes = parsed.get("nodes") if isinstance(parsed, dict) else None
         if not isinstance(nodes, list) or not nodes:
             logger.warning("semantic_planner.chunked_empty", chunk=ci)
-            return []
+            return ci, []
         out: list[dict[str, Any]] = []
         for node in nodes:
             if isinstance(node, dict):
                 out.append(dict(node))
-        return out
+        return ci, out
 
     # P2-A: chunks are dependency-ORDERED groups — parallel extraction is
     # safe because each chunk plans ONLY its own units (no cross-chunk
     # references in the prompts). Merging re-sequences by chunk order.
+    async def _gated_chunk(ci: int, chunk: list[str]) -> tuple[int, list[dict[str, Any]]]:
+        if _chunk_sem is None:
+            return await _plan_chunk(ci, chunk)
+        async with _chunk_sem:
+            return await _plan_chunk(ci, chunk)
+
     _chunk_results = await asyncio.gather(*[
-        _plan_chunk(ci, chunk) for ci, chunk in enumerate(chunks)
+        _gated_chunk(ci, chunk) for ci, chunk in _scheduled
     ])
     # P2-A.5: the planning critical path — chunk LLM latencies (parallel,
-    # so max ≈ wall), chunk count, merge size.
+    # so max ≈ wall), chunk count, merge size; P3-A/B adds the per-chunk
+    # unit sizes + start order (rotation) so the tail can be attributed.
     logger.info(
         "semantic_planner.chunk_timing",
         chunk_count=len(chunks),
         chunk_parallel=True,
-        per_chunk_llm_ms=chunk_llm_ms,
-        max_chunk_ms=max(chunk_llm_ms, default=0.0),
-        sum_chunk_ms=round(sum(chunk_llm_ms), 1),
-        planned_chunks=sum(1 for r in _chunk_results if r),
+        chunk_sizes=[len(c) for c in chunks],
+        start_order=[ci for ci, _c in _scheduled],
+        chunk_rotation=rotation,
+        chunk_partition=partition,
+        chunk_concurrency=concurrency if concurrency else len(chunks),
+        per_chunk_llm_ms=[chunk_llm_ms.get(ci, 0.0) for ci in range(len(chunks))],
+        max_chunk_ms=round(max(chunk_llm_ms.values(), default=0.0), 1),
+        sum_chunk_ms=round(sum(chunk_llm_ms.values()), 1),
+        planned_chunks=sum(1 for _ci, r in _chunk_results if r),
     )
-    for ci, chunk_nodes in enumerate(_chunk_results):
+    for ci, chunk_nodes in _chunk_results:
         for node in chunk_nodes:
             ref = str(node.get("ref") or f"chunk{ci}_{len(used_refs)}")
             if ref in used_refs:
