@@ -796,12 +796,16 @@ async def _chunked_plan_extract(
         return None
     merged_nodes: list[dict[str, Any]] = []
     used_refs: set[str] = set()
+    # P2-A.5 timing instrumentation: per-chunk LLM latency (the planning
+    # critical path for mega-DAGs).
+    chunk_llm_ms: list[float] = []
 
     async def _plan_chunk(ci: int, chunk: list[str]) -> list[dict[str, Any]]:
         """Extract one chunk's plan (independent — parallelizable)."""
         if not budget.consume("llm_calls"):
             logger.warning("semantic_planner.chunked_budget_exhausted", chunk=ci)
             return []
+        _t0 = time.perf_counter()
         chunk_prompt = _ch_pm.render(
             "logical_planner", "2.4",
             capabilities=capabilities if capabilities else "(none available)",
@@ -816,6 +820,7 @@ async def _chunked_plan_extract(
         )
         if parsed is None:
             parsed = await _json_extract(chunk_prompt, chunk_user, llm, model, settings)
+        chunk_llm_ms.append(round((time.perf_counter() - _t0) * 1000, 1))
         nodes = parsed.get("nodes") if isinstance(parsed, dict) else None
         if not isinstance(nodes, list) or not nodes:
             logger.warning("semantic_planner.chunked_empty", chunk=ci)
@@ -832,6 +837,17 @@ async def _chunked_plan_extract(
     _chunk_results = await asyncio.gather(*[
         _plan_chunk(ci, chunk) for ci, chunk in enumerate(chunks)
     ])
+    # P2-A.5: the planning critical path — chunk LLM latencies (parallel,
+    # so max ≈ wall), chunk count, merge size.
+    logger.info(
+        "semantic_planner.chunk_timing",
+        chunk_count=len(chunks),
+        chunk_parallel=True,
+        per_chunk_llm_ms=chunk_llm_ms,
+        max_chunk_ms=max(chunk_llm_ms, default=0.0),
+        sum_chunk_ms=round(sum(chunk_llm_ms), 1),
+        planned_chunks=sum(1 for r in _chunk_results if r),
+    )
     for ci, chunk_nodes in enumerate(_chunk_results):
         for node in chunk_nodes:
             ref = str(node.get("ref") or f"chunk{ci}_{len(used_refs)}")

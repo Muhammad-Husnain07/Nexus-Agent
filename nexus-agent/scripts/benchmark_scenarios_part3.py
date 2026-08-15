@@ -173,7 +173,7 @@ SCENARIOS_PART3 = [
      "prompt": "Give me a compact global intelligence report. For Lahore, Tokyo, Paris, London, and New York find coordinates, get current weather, and reverse geocode the coordinates. For Pakistan, Japan, and France retrieve country summaries. For Naruto, One Piece, and Bleach search anime and manga. For Jane Austen and Charles Dickens find books by author. For chicken, pasta, and rice search recipes. For nginx, redis, and postgres get Docker information. Also define orchestration, idempotent, and artifact. Finally search the web for LangGraph orchestration.",
      "expected": {"tool_kinds": ["geocode_location", "get_current_weather", "reverse_geocode",
                                  "get_country_info", "search_anime", "search_manga",
-                                 "search_authors", "search_meals", "get_docker_images",
+                                 "search_books", "search_meals", "get_docker_images",
                                  "define_word", "search_web_search"],
                   "min_tools": 15, "max_tools": 40, "parallel": True,
                   "deps": [["geocode_location", "get_current_weather"],
