@@ -131,7 +131,7 @@ frontend/                 # React frontend (runs on Windows)
 
 ## Tech Stack
 
-- **Frontend**: React 19, TypeScript, Tailwind CSS v4, shadcn/ui, TanStack Query, Zustand, React Router v6, recharts, sonner, lucide-react
+- **Frontend**: React 19, TypeScript, Tailwind CSS v4, shadcn/ui, TanStack Query, Zustand, React Router v7, sonner, lucide-react
 - **Backend**: Python 3.12, FastAPI, LangGraph, PostgreSQL (pgvector), Redis, LiteLLM
 - **Orchestration**: LangGraph StateGraph — 19-node deterministic workflow compiler (intent-first)
 - **LLM Providers**: NVIDIA NIM (primary — planner + synthesis), Ollama (local embeddings), OpenRouter (fallback)
@@ -164,7 +164,9 @@ SemanticPlannerNode (intent-unit planning) → PlanValidatorNode (coverage/align
 | Model | Ultra+Ultra (planner+synthesis), embeddings OFF | ✅ frozen |
 
 **Benchmark baseline** (135 scenarios, frozen architecture): **98/135 × 3
-reproducible, mean 91.1**, binding 1.0. See
+reproducible, mean 91.1**, binding 1.0. The run artifacts (3× Ultra+Ultra
+runs + gate runs + verified summary) are committed under
+`nexus-agent/benchmarks/frozen_baseline/`. See
 [`nexus-agent/docs/roadmap.md`](nexus-agent/docs/roadmap.md) for the phase
 details and `nexus-agent/docs/invariants.md` for the invariant ledger (I1–I19).
 
@@ -173,21 +175,21 @@ details and `nexus-agent/docs/invariants.md` for the invariant ledger (I1–I19)
 - **Tools** — Register, manage, search, and test API tools (GET/POST/PUT/PATCH/DELETE)
 - **Chat** — Conversational AI with streaming responses, tool calls, and approval workflows
 - **Sessions** — Conversation history with context management
-- **Approvals** — Human-in-the-loop tool call approval
+- **Approvals** — Human-in-the-loop tool call approval (operation-hash bound, expiring)
 - **Memory** — Long-term episodic, semantic, and procedural memory with pgvector search
 - **Dynamic Prompts** — Query complexity detection switches between short and full thinking protocols
-- **Observability** — LangSmith tracing for every LLM call and node execution
+- **Observability** — structlog + OpenTelemetry spans, per-node SSE timing, durable invocation outcomes, execution events, wave/chunk timing
 
 ## Performance Optimizations
 
-| Optimization | Speed Impact | Location |
-|---|---|---|
-| Greeting template (no LLM) | **~9ms** vs 3s | `respond_without_tool.py` |
-| Single-tool fast path | **~5ms** vs 1-5s | `dag_expander.py` |
-| Tool schema pruning | **60% smaller prompts** | `dag_expander.py` |
-| Memory in background | **Response not blocked** | `finalize.py` |
-| Tool cache (60s TTL) | **No DB per request** | `runner.py` |
-| Embedding cache (1h TTL) | **No re-embed on repeat** | `registry.py` |
+| Optimization | Location |
+|---|---|
+| ParseCache/PlanCache (versioned keys, semantic revalidation) | `nexus-agent/src/nexus/compiler/cache.py` |
+| Optimizer bypass for small graphs (<=3 nodes) | `nexus-agent/src/nexus/agent/graph.py` |
+| Wave-parallel execution + per-domain concurrency caps | `nexus-agent/src/nexus/agent/executors/concurrent_executor.py` |
+| Durable idempotency ledger (replay, never re-execute) | `nexus-agent/src/nexus/execution/ledger.py` |
+| Artifact cache (fingerprinted, session-scoped) | `nexus-agent/src/nexus/agent/executors/concurrent_executor.py` |
+| Deterministic renderer fallback (no-LLM answers under budget pressure) | `nexus-agent/src/nexus/agent/nodes/response.py` |
 
 See [`nexus-agent/AGENTS.md`](nexus-agent/AGENTS.md) for detailed node documentation.
 
