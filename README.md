@@ -133,8 +133,40 @@ frontend/                 # React frontend (runs on Windows)
 
 - **Frontend**: React 19, TypeScript, Tailwind CSS v4, shadcn/ui, TanStack Query, Zustand, React Router v6, recharts, sonner, lucide-react
 - **Backend**: Python 3.12, FastAPI, LangGraph, PostgreSQL (pgvector), Redis, LiteLLM
-- **Orchestration**: LangGraph StateGraph with 6 parent nodes + 3-node tool subgraph
-- **LLM Providers**: NVIDIA NIM (primary), Ollama (local embeddings), OpenRouter (fallback)
+- **Orchestration**: LangGraph StateGraph — 19-node deterministic workflow compiler (intent-first)
+- **LLM Providers**: NVIDIA NIM (primary — planner + synthesis), Ollama (local embeddings), OpenRouter (fallback)
+
+## Orchestration Architecture (frozen)
+
+The agent is a **19-node deterministic workflow compiler** (intent-first):
+
+```
+RouterNode → ResponseNode | InteractiveWorkflowNode | SemanticPlannerNode
+SemanticPlannerNode (intent-unit planning) → PlanValidatorNode (coverage/alignment/
+  provenance/traceability) → CompilerNode (RESOLVE(...) synthesis) → OptimizerNode →
+  EstimatorNode → ValidationNode → ApprovalGateNode → ExecutorNode → AggregatorNode →
+  ValidatorNode → RecoveryManagerNode → ReflectionNode | ReplanNode → ResponseNode →
+  MemoryHelperNode
+```
+
+**Frozen phases (P0 → P2):**
+
+| Phase | What | Status |
+|---|---|---|
+| P0-A | Deterministic resolver (semantics, suppression, closure, branch-safe) | ✅ frozen |
+| P0-B | Parameter/provenance binder (L1–L5, AMBIGUOUS/MISSING) | ✅ frozen |
+| P0-C | Structured intent decomposition (IntentGraph, K83) | ✅ frozen |
+| P0-D | Artifact→evidence→synthesis bridge + grounding gate | ✅ frozen |
+| P1-A/B | Large-DAG efficiency (DROP_AND_PROCEED), empty-plan status machine | ✅ frozen |
+| P1-C | Bounded nano extraction recovery | ✅ frozen |
+| P1-D | Map/fan-out collapse (D48) | ✅ frozen |
+| P2-A | Hierarchical mega-DAG planning (chunked, coverage-invariant merge) | ✅ frozen |
+| Model | Ultra+Ultra (planner+synthesis), embeddings OFF | ✅ frozen |
+
+**Benchmark baseline** (135 scenarios, frozen architecture): **98/135 × 3
+reproducible, mean 91.1**, binding 1.0. See
+[`nexus-agent/docs/roadmap.md`](nexus-agent/docs/roadmap.md) for the phase
+details and `nexus-agent/docs/invariants.md` for the invariant ledger (I1–I19).
 
 ## Features
 

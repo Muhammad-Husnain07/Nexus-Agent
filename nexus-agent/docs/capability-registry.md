@@ -26,9 +26,12 @@ refreshes GlobalContext indexes (aliases/domains/keywords/search docs), and
 bumps the persisted (Redis) cache marker so cached plans invalidate. The
 runtime resolves capabilities via the registry, not the tool table.
 
-> **Roadmap:** Phase 1 consolidates retrieval into a single `ResolutionEngine`
+> **Status:** Resolver consolidated into a single `ResolutionEngine`
 > producing one frozen `ResolutionResult` (ranked candidates + availability
-> facts + match reasons) consumed by router, planner, and telemetry.
+> facts + match reasons) consumed by router, planner, and telemetry. On top
+> of it: deterministic `CapabilitySemantics` ranking with generic-fallback
+> suppression, dependency closure, and P0-A.3 branch-safe (per-intent)
+> selection — all frozen.
 
 ## Resolver
 

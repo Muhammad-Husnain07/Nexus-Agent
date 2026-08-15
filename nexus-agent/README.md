@@ -156,7 +156,38 @@ Example: `NEXUS_DATABASE__URL` → `settings.database.url`.
 | DeepSeek | `deepseek/deepseek-chat` | `DEEPSEEK_API_KEY` |
 | Anthropic | `claude-sonnet-4-20250514` | `ANTHROPIC_API_KEY` |
 | Ollama (local) | `ollama/qwen2.5:7b` | *(none)* |
-| NVIDIA NIM | `nvidia/nemotron-3-ultra-550b-a55b` | `NVIDIA_API_KEY` |
+| NVIDIA NIM (production) | `nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b` (planner + synthesis) | `NVIDIA_NIM_API_KEY` |
+
+> **Production configuration** (frozen): `NEXUS_LLM__DEFAULT_MODEL` and
+> `NEXUS_LLM__SYNTHESIS_MODEL` = `nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b`;
+> embeddings OFF (`NEXUS_RESOLVER__ENABLE_EMBEDDING_RETRIEVAL=false` — no
+> measured benefit at 22 tools). Optional hybrid: keep the planner on a fast
+> model and set `SYNTHESIS_MODEL` to a stronger one.
+
+---
+
+## Phase Status (architecture FROZEN)
+
+| Phase | What | Status |
+|---|---|---|
+| P0-A | Deterministic resolver (semantics, generic suppression, branch-safe selection) | ✅ frozen |
+| P0-B | Parameter/provenance binder (L1–L5, AMBIGUOUS/MISSING) | ✅ frozen |
+| P0-C | Structured intent decomposition (IntentGraph, K83) | ✅ frozen |
+| P0-D | Artifact→evidence→synthesis bridge + grounding gate | ✅ frozen |
+| P1-A/B | Large-DAG efficiency (DROP_AND_PROCEED), empty-plan status machine | ✅ frozen |
+| P1-C | Bounded extraction recovery | ✅ frozen |
+| P1-D | Map/fan-out collapse (D48) | ✅ frozen |
+| P2-A | Hierarchical mega-DAG planning (chunked, coverage-invariant merge) | ✅ frozen |
+| Model | Ultra+Ultra (planner+synthesis), embeddings OFF | ✅ frozen |
+
+**Benchmark baseline** (135 scenarios, frozen architecture): **98/135 × 3
+reproducible, mean 91.1** — binding 1.0, artifacts 0.788, grounding 0.763.
+Mega-DAG validation: T132/U133/W135 all plan completely (0 empty plans on
+clean reps; planning critical path = max parallel chunk ≈ 78s).
+
+See [docs/roadmap.md](docs/roadmap.md) (phase history + remaining tracks),
+[docs/invariants.md](docs/invariants.md) (I1–I19), and
+[docs/performance.md](docs/performance.md) (benchmark + timing baselines).
 
 ---
 

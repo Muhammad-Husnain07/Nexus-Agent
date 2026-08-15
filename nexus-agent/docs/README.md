@@ -2,6 +2,14 @@
 
 Index of all documentation for the **Nexus Agent Orchestration Runtime**.
 
+## Architecture Status (FROZEN)
+
+The orchestration architecture (P0-A resolver → P2-A hierarchical mega-DAG
+planning) is validated and frozen. Production model config: Nemotron-3-Ultra
+for planner + synthesis, embeddings OFF. Benchmark: 98/135 × 3 reproducible
+(mean 91.1), binding 1.0. See [roadmap.md](roadmap.md) for the full phase
+ledger and [invariants.md](invariants.md) for I1–I19.
+
 ## Architecture & Design
 
 | Doc | Purpose |
@@ -9,7 +17,7 @@ Index of all documentation for the **Nexus Agent Orchestration Runtime**.
 | [engineering-principles.md](engineering-principles.md) | **The binding rulebook** — 25 principles + anti-patterns for production LangGraph agents (read before ANY code) |
 | [architecture.md](architecture.md) | Current runtime architecture: intent → plan → validator → compiler → executor, typed contracts, infra |
 | [runtime-contract.md](runtime-contract.md) | **Architectural guardrails** — invariants, typed contracts, side-effect rules (read first) |
-| [roadmap.md](roadmap.md) | Phased implementation plan + completed phases (2026-08-08) |
+| [roadmap.md](roadmap.md) | Phase ledger + completed phases (P0 → P2-A, model A/B, benchmark baselines) |
 
 ## ADRs (Architecture Decision Records)
 

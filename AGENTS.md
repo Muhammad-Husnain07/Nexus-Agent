@@ -46,6 +46,36 @@ Every capability, alias, keyword, and policy comes from the registry metadata �
 hardcoded domain logic anywhere. The architecture is versioned (ADR 0008:
 `src/nexus/agent/architecture.py` — the single cache-key fingerprint).
 
+## Phase status (architecture FROZEN)
+
+| Phase | What | Status |
+|---|---|---|
+| P0-A | Deterministic resolver (CapabilitySemantics, generic suppression, branch-safe) | ✅ frozen |
+| P0-B | Parameter/provenance binder (L1–L5, BOUND/MISSING/AMBIGUOUS/INVALID) | ✅ frozen |
+| P0-C | Structured intent decomposition (IntentGraph, K83) + coverage | ✅ frozen |
+| P0-D | Evidence compiler, grounding gate, synthesis repair, deterministic renderer | ✅ frozen |
+| P1-A | Large-DAG efficiency (DROP_AND_PROCEED, alignment floor, wave timing) | ✅ frozen |
+| P1-B | `_response_status` machine (SUCCESS/PARTIAL/EXECUTION_FAILED/PLANNING_FAILED) | ✅ frozen |
+| P1-C | Bounded extraction recovery (diagnosed EMPTY_PLAN classes, one repair) | ✅ frozen |
+| P1-D | Map/fan-out collapse (D48: 1 MAP node, cardinality 3) | ✅ frozen |
+| P2-A | Hierarchical mega-DAG planning (chunked, coverage-invariant merge, collections guard) | ✅ frozen |
+
+**Production model config** (`.env`): planner + synthesis =
+`nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b` (`NEXUS_LLM__SYNTHESIS_MODEL`
+override for hybrid configs); embeddings OFF
+(`NEXUS_RESOLVER__ENABLE_EMBEDDING_RETRIEVAL=false` — no measured benefit at
+22 tools).
+
+**Benchmark baseline**: 98/135 × 3 reproducible (mean 91.1), binding 1.0,
+artifacts 0.788, grounding 0.763. Full phase history + mega-DAG validation in
+[`nexus-agent/docs/roadmap.md`](nexus-agent/docs/roadmap.md); the invariant
+ledger (I1–I19) in [`nexus-agent/docs/invariants.md`](nexus-agent/docs/invariants.md).
+
+**Post-freeze rule**: do not reopen the frozen orchestration architecture.
+Model configuration and benchmark instrumentation are the only permitted
+changes; further performance work is a separate P3 experiment with its own
+A/B measurement (see the P2-A.5 chunk-timing baseline).
+
 ## Backend Rules
 
 See [`nexus-agent/AGENTS.md`](nexus-agent/AGENTS.md) and [`nexus-agent/src/nexus/agent/AGENTS.md`](nexus-agent/src/nexus/agent/AGENTS.md).

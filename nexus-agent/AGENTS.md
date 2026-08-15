@@ -107,6 +107,28 @@ The AI contains **zero business logic**, **zero hardcoded domain rules**, and **
 5. **Dynamic Discovery** — All extension points (passes, caches, normalizers) use dynamic discovery (`pkgutil`, `importlib`). No hardcoded registrations.
 6. **Sequential Execution** — Complete each phase fully before proceeding to the next.
 
+## Phase Status (architecture FROZEN)
+
+| Phase | What | Status |
+|---|---|---|
+| P0-A | Deterministic resolver (CapabilitySemantics, generic suppression, dependency closure, branch-safe selection) | ✅ frozen |
+| P0-B | Parameter/provenance binder (L1–L5, AMBIGUOUS/MISSING/INVALID, default-override guard) | ✅ frozen |
+| P0-C | Structured intent decomposition (IntentGraph, K83, distinctness invariant) | ✅ frozen |
+| P0-D | Evidence compiler, grounding gate, synthesis repair, deterministic renderer | ✅ frozen |
+| P1-A | Large-DAG efficiency (DROP_AND_PROCEED, alignment floor, wave timing) | ✅ frozen |
+| P1-B | `_response_status` machine (never silent success on failure) | ✅ frozen |
+| P1-C | Bounded extraction recovery (diagnosed EMPTY_PLAN, one constrained repair) | ✅ frozen |
+| P1-D | Map/fan-out collapse (D48: 1 MAP node, cardinality 3) | ✅ frozen |
+| P2-A | Hierarchical mega-DAG planning (chunked, coverage-invariant merge, collections guard, `_map_degradations` ledger) | ✅ frozen |
+
+**Production model config** (`.env`): planner + synthesis =
+`nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b`; embeddings OFF
+(`NEXUS_RESOLVER__ENABLE_EMBEDDING_RETRIEVAL=false`).
+
+**Benchmark baseline**: 98/135 × 3 reproducible (mean 91.1), binding 1.0.
+See [`docs/roadmap.md`](docs/roadmap.md) and
+[`docs/invariants.md`](docs/invariants.md) (I1–I19).
+
 ---
 
 ## Graph Architecture — 19 Nodes (intent-first workflow compiler)

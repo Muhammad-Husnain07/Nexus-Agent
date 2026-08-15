@@ -22,6 +22,12 @@ block the current stage.
 | I11 | Invalid plans cannot be cached or executed. | GREEN (P0-D/D0, extended P1-A) | `agent/nodes/plan_validator_node.py` `unknown_input_key` rule (ERROR/REFINE); `semantic_parser_node._plan_unsafe_to_cache` guards ParseCache WRITE + READ (schema-invalid values, missing required inputs, invented keys, AND unprovable REQUIRED-input literals — the scenario-35 value-provenance replay class, added in P1-A); `compiler_node._graph_has_unknown_input_keys` re-checks PlanCache hits (invalid cached graphs are recompiled, never executed). |
 | I12 | Non-idempotent operations are never automatically retried across outcome uncertainty unless explicitly permitted by capability failure semantics. | GREEN (P1-A/A0) | `agent/executors/concurrent_executor.py` — retry loops + endpoint fallback bound by the idempotency-scoped `task_retries` (0 for non-idempotent); `tools/mcp_client.py` — MCP transport retries disabled for non-idempotent tools. Recovery-layer reflection retries remain gated by `max_reflection_retries` (M7 `failure_semantics` design is the follow-up). |
 | I13 | A plan may persist in the parse cache only when semantically cache-eligible; REFINE/ABORT/partial plans never persist. | GREEN (P2F) | The planner's write is structurally gated (`_plan_unsafe_to_cache` — schema/provenance, I11); the VALIDATOR is the semantic gatekeeper (`plan_validator_node._remove_semantically_ineligible_plan`) — any verdict that is not eligible (report invalid, or coverage < 100%, or a capability_alignment violation) removes the entry; the COMPILER removes the entry on compile failure. Reads are revalidated by the validator after every cache hit (a rejected cached entry is removed — pre-rule entries self-heal on first rejection). Cache-eligibility is a property of the PLAN's semantics (validator verdict + compile success), never of execution outcomes. |
+| I14 | Every executable intent must retain at least one viable capability path (branch-safe coverage invariant). | GREEN (P0-A.3 / P0-C) | `capabilities/capability_semantics.py` `branch_safe_select` — per-intent (branch-local) ranking/suppression/marginal-cut; the distinctness invariant re-admits a branch's only viable capability when its survivors are all copies of other branches' picks (K83's `reverse_geocode` survives a 100:2 raw-score domination). |
+| I15 | Resolver evidence must not silently override a correct deterministic pick (alignment verdict = same semantics as the resolver). | GREEN (P0-D.1) | `plan_validator_node._semantic_filter_engine` + `_ALIGNMENT_DOMINANCE_FLOOR` — generic-suppressed engine scores feed the alignment verdict; keyword-noise ratios never block; explicit web requests keep the generic fallback. |
+| I16 | An executable request that produces no artifacts/errors must never be answered as silent success. | GREEN (P1-B) | `response_node` `_response_status` machine — `PLANNING_FAILED` / `EXECUTION_FAILED` explicit terminal statuses; never "I processed your request." |
+| I17 | A node's required input with NO resolvable source (binder-classified) must not void valid branches on a multi-node plan. | GREEN (P1-A / P2-A) | `ViolationAction.DROP_AND_PROCEED` — unresolvable-input nodes drop (partial success), including mixed unresolvable+alignment verdicts (reviewer L5); the mega-DAG never wall-time-kills a 20+ node plan for one missing docker `repository`. |
+| I18 | A dangling MapNode (iterate_over without a declared collection) must never fail validation and burn a replan cycle — and a lost fan-out is never invisible. | GREEN (P2-A.2) | `semantic_parser_node._strip_dangling_maps` — strips `iterate_over` (single-body degradation) AND records `_map_degradations` (node/iterate_over/reason) on the state patch. |
+| I19 | Chunked (hierarchical) mega-DAG planning must not lose intent coverage across chunks. | GREEN (P2-A.1) | `_chunked_plan_extract` coverage invariant at the merge — units the chunk model skips are recovered deterministically via the hyphen-normalized engine resolve (top available capability added as a node). |
 
 Rules of engagement (binding):
 
@@ -33,6 +39,9 @@ Rules of engagement (binding):
    permits it (P0-D).
 5. Every stage lands fully green (invariant ledger + deterministic suite +
    scenario fast tier 3x) before the next stage starts.
+6. Model config changes are isolated experiments (MODEL-AB-01) — the
+   orchestration architecture is frozen; planner/synthesis model and
+   embeddings are the only post-freeze variables.
 
 ## Cache dependency table (P1-B.2 — component-specific fingerprints)
 

@@ -161,8 +161,13 @@ overrides current intent, never stores failures.
 | Architecture version drift | Unit | `tests/test_architecture_versions.py` |
 | Plan validator (incl. P4 coverage/alignment/provenance/traceability) | Unit | `tests/test_plan_validator.py` |
 | Intent detector | Unit | `tests/test_intent_detector.py` |
+| Structured intent decomposition (P0-C: IntentGraph, K83, coverage) | Unit | `tests/test_intent_decomposition.py` |
 | ReasoningBudget | Unit | `tests/test_reasoning_budget.py` |
 | Codegen RESOLVE synthesis | Unit | `tests/test_codegen_resolve.py` |
+| P0-A resolver semantics (rank/suppress/closure/branch-safe/distinctness) | Unit | `tests/test_resolver_p0a.py` |
+| P0-B parameter/provenance binder (L1-L5, AMBIGUOUS, identity) | Unit | `tests/test_parameter_binder.py` |
+| P0-D evidence layer (compile/anchoring/grounding/renderer) | Unit | `tests/test_evidence_layer.py` |
+| P1 efficiency + safety (wave timing, status machine, P2-A chunking/maps) | Unit | `tests/test_p1_efficiency.py` |
 | Adversarial/safety suite | Unit | `tests/test_adversarial.py` |
 | Sandbox SSRF | Unit | `tests/test_sandbox_ssrf.py` |
 | Contract drift / ephemeral drift | Unit | `tests/test_node_contracts.py`, `tests/test_ephemeral_fields.py` |

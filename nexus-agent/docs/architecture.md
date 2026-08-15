@@ -2,9 +2,15 @@
 
 ## Overview
 
-Nexus Agent is a **distributed compiler-inspired orchestration engine**. It transforms natural language into a 4-layer Intermediate Representation (Intent → Goal → Operation → Execution) via an **offline-to-runtime pipeline**. Intelligence (ontology, schema matching, validation) is pushed to the **Offline Registry Compiler**. The runtime uses a **Plugin-based Planner** with **Immutable Versioned Contexts** and **Event Sourcing**.
+Nexus Agent is a **distributed compiler-inspired orchestration engine**. It transforms natural language into a 4-layer Intermediate Representation (Intent → Goal → Operation → Execution) via an **offline-to-runtime pipeline**. Intelligence (ontology, schema matching, validation) is pushed to the **Offline Registry Compiler**. The runtime uses a **19-node deterministic workflow compiler** (intent-first) with **Immutable Versioned Contexts** and **Event Sourcing**.
 
 **Key Design Difference from Chatbots:** The system never mutates state. Nodes receive `Context(v)` and return `Context(v+1)` via `StatePatch`. The `@context_node` decorator enforces this automatically.
+
+**Architecture status: FROZEN.** Orchestration phases P0-A through P2-A are
+validated and frozen (see [roadmap.md](roadmap.md) for the phase ledger and
+commit references; [invariants.md](invariants.md) for I1–I19). Production
+model config: Nemotron-3-Ultra-550B for both planner and synthesis; embeddings
+OFF.
 
 ---
 
@@ -24,12 +30,12 @@ graph TB
         User[User / Chat UI]
         FastAPI[FastAPI Server :8000]
         Mock[Bookmark/Echo Proxy :8081]
-        Agent[LangGraph Agent<br/>18 nodes]
+        Agent[LangGraph Agent<br/>19 nodes]
         LLM[LLM Provider<br/>(LiteLLM)]
         Executor[ConcurrentExecutor<br/>wave-based]
         EventStore[Execution Events<br/>append-only PG]
         Metrics[EWMA Reliability<br/>metrics/store.py]
-        PassMgr[Plugin Pass Manager<br/>4 passes]
+        PassMgr[Plugin Pass Manager<br/>6 passes]
         KG[KnowledgeGraph<br/>8 specialized graphs]
         EC[ExecutionContext<br/>Context(v) → Context(v+1)]
         CG2[CompiledCapabilityGraph<br/>compiled_graph.py]

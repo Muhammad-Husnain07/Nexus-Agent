@@ -1,12 +1,11 @@
 # Nexus Agent — Roadmap (Master Implementation Plan)
 
-The evolution of Nexus from a LangGraph project into an **Agent Orchestration
-Runtime**. Every phase is independently shippable, keeps the full test suite
-green (baseline: 251 backend / 20 frontend), and preserves registered tools and
-DB data.
+The evolution of Nexus into an **Agent Orchestration Runtime**: deterministic
+compiler-inspired orchestration around a probabilistic planning core. Every
+phase keeps the deterministic test suite green and preserves registered tools
+and DB data.
 
-**Guiding principles** (see
-[engineering-principles.md](engineering-principles.md) + 
+**Guiding principles** (see [engineering-principles.md](engineering-principles.md) +
 [runtime-contract.md](runtime-contract.md)): no hardcoding, everything
 metadata-driven, typed contracts at every boundary, deterministic layers around
 probabilistic planning, side-effect-free pure cores, and the invariant chain —
@@ -14,159 +13,171 @@ LLM proposes, registry resolves, validator verifies, compiler decides, executor
 performs, artifacts prove, recovery handles, response only claims what
 artifacts prove, memory remembers with provenance.
 
+> **Architecture status: FROZEN.** The orchestration architecture (P0–P2) is
+> validated and frozen at commit `8656ead`. Only model configuration and
+> benchmark instrumentation change post-freeze; any further performance work is
+> a separate P3 experiment with its own A/B measurement.
+
 ---
 
-## Completed (2026-08-08) ✅
+## Completed phases ✅
 
-- **Stabilization (W1–W4)**: quorum graceful FAIL, `/state` fix, dead nodes
-  removed (19-node graph), Aggregator reduces on SUCCESS, typed-status
-  recovery, node-contract registry + drift tests, OTel spans.
-- **Handoff repair**: the `_deep_freeze` scalar bug (the every-domain all-None
-  artifact root cause), normalization state machine, artifact contract
-  validation, cache-key unification, execution→artifact invariants,
-  data-incorporation + per-artifact response coverage guards, memory
-  reinforcement gate.
-- **Architecture versioning (ADR 0008)**: `architecture.py` manifest — the
-  single cache-key fingerprint across all caches, telemetry, and CI.
-- **P4 (planner quality)**: IntentDetector (Tier-1 deterministic) + Tier-2 LLM
-  decomposer; PlanValidator coverage / alignment / parameter-provenance /
-  traceability rules; empty-plan policy; bounded repair with partial-execution
-  fallback; `RESOLVE(...)` producer-chain synthesis; replan cache-bypass.
-- **P0 (correctness + security)**: ReasoningBudget (unified replan counter,
-  wall-time/graph-step/LLM/tool enforcement), cancellation terminal states +
-  the `uncertain` outcome, idempotency keys, authorization gate, SSRF
-  hardening, approval semantic binding, prompt-injection boundary, memory
-  provenance + freshness.
-- **P2 (quality)**: reproducibility record, adversarial test suite, response
-  coverage metric, scenario tiers + stability score, 251 deterministic tests.
+### P0 — Correctness + Security (2026-08-08)
 
-## Remaining tracks
+- ReasoningBudget (unified replan counter, wall-time/graph-step/LLM/tool
+  enforcement), cancellation terminal states + the `uncertain` outcome,
+  idempotency keys, authorization gate, SSRF hardening, approval semantic
+  binding, prompt-injection boundary, memory provenance + freshness.
 
+### P0-A — Deterministic Resolver (2026-08-12, committed `5dc23ce`)
+
+- `CapabilitySemantics` (specificity / generic / fallback / domains / requires /
+  produces), deterministic ranker with generic-fallback suppression, marginal
+  cutoff, dependency closure (weather → geocode producer synthesis), alias
+  multi-match, keyword-boost always runs, capability metadata curated in
+  `validation_rules.semantics`.
+- **P0-A.3 branch-safe resolution** (`4fb1cf2`): per-intent (branch-local)
+  selection with the coverage invariant + removal diagnostics — a candidate
+  belonging to one intent never disappears because another intent has a
+  stronger top. Benchmark-gated contamination-free.
+
+### P0-B — Deterministic Parameter + Provenance Binder (2026-08-12, `8ea44fb`)
+
+- Layered binding: L1 user values / L2–L3 artifact-output (produces/consumes) /
+  L4 type guard / L5 provenance-checked LLM fallback; entity-identity producer
+  pairing (B3/B4 — Lahore ≠ Karachi); `BOUND / MISSING / AMBIGUOUS / INVALID`
+  classification; schema-default override guard (the docker `namespace`
+  class); cache-hit plans also bind. Gates B31/D47/C40/R119 = 100.
+
+### P0-C — Structured Intent Decomposition + Coverage (2026-08-12, `da0c245`)
+
+- `DetectedIntent` / `IntentGraph` IR (goals/entities/relationships — never
+  tool names); adaptive compound-signal trigger (anaphoric chains fire the
+  Tier-2 decomposer; simple queries cost zero); the intent graph feeds the
+  resolver branches AND validator coverage (engine-rank classifiability);
+  distinctness coverage invariant in `branch_safe_select` (K83's
+  `reverse_geocode` survives the marginal cutoff); planning-event intent
+  accounting (requested vs planned). K83 45→100, C-section green.
+
+### P0-D — Artifact → Evidence → Synthesis (2026-08-12, `a339fb4` + `53595f2`)
+
+- `EvidenceCompiler` (entity-anchored ResponseEvidence via P0-B identity +
+  producer chains), `RequiredEvidenceCompiler`, `GroundingValidator`
+  (required ⊆ available ⊆ rendered, hallucination detection), compact
+  `RESPONSE_EVIDENCE` packet injected into synthesis, one-pass synthesis
+  repair, entity-anchored deterministic renderer fallback. O101 80→100,
+  R119→100.
+- **P0-D.1 validator alignment semantics** (`e835838`): the alignment verdict
+  consumes the same CapabilitySemantics as the resolver (generic-suppressed
+  engine scores) — D49 72→100 stable.
+
+### P1-A — Large-DAG Efficiency (2026-08-13, `7c64da6`)
+
+- Per-wave duration instrumentation (WaveCompleted carries `duration_ms`;
+  critical-path accounting); `DROP_AND_PROCEED` for binder-classified
+  unresolvable inputs on multi-node plans (no full-LLM replan — V134
+  231s→119s, 0→7 branches executed); alignment dominance absolute floor
+  (keyword-noise never blocks); noise-floor intent classifiability.
+
+### P1-B — Empty-plan Safety (2026-08-13, `7c64da6`)
+
+- Explicit `_response_status` machine: `SUCCESS / PARTIAL_SUCCESS /
+  EXECUTION_FAILED / PLANNING_FAILED` — an executable request that produces
+  no artifacts/errors is an explicit failure, never "I processed your
+  request." Status rides the final_response SSE event + state.
+
+### P1-C — Bounded Nano Extraction Recovery (2026-08-13, `32a45c9`)
+
+- Diagnosed failure classes (`EMPTY_PLAN / INVALID_SCHEMA / MODEL_TIMEOUT /
+  LLM_ERROR`) — never a blind retry; ONE constrained repair prompt for
+  EMPTY_PLAN (names the detected units + registered capabilities, output
+  constrained to `valid_ops`), capped at one repair, then PLANNING_FAILED.
+
+### P1-D — Map / Fan-out (2026-08-13, `16774f6`)
+
+- Deterministic map-collapse pass: independent same-capability entity
+  instances → ONE Map node + declared collection (D48: detected=4,
+  planned=1 MAP, cardinality=3, executed=3, 1 wave, 100); collections flow
+  workflow→executor fan-out; evidence anchors map-item artifacts to
+  collection items.
+
+### P2 — Remaining Failure Elimination (2026-08-14/15)
+
+- **Benchmark contract classification** (`590b9ea`): `BENCHMARK_CONTRACT`
+  fires only when a required input is a CHAINED ARTIFACT absent from the
+  expected set (weather-only expectations no longer pollute RESOLUTION).
+- **Synthesis-coverage measurement** (`1088624`): coverage_breakdown on all
+  response paths — every analyzed ARTIFACT_GRAPH failure is Class B
+  (available=required, rendered=0): EvidenceCompiler is not losing
+  information; Nemotron generation omits entities.
+- **Model A/B (MODEL-AB-01)**: Step 3.7 Flash + Ultra 550B probes; the
+  `synthesis_model` override (Config D/E); renderer list display
+  (books render numbered title-author, `867df0c`).
+- **P2-A hierarchical mega-DAG planning** (`c7449dd` + `beec212` +
+  `9d72a79` + `8656ead`): size-aware chunked planning
+  (`max_single_pass_intents=12`, `chunk_size=6`) — 20+ intent requests plan
+  per dependency-ordered chunk (parallel extraction, deterministic merge)
+  instead of one doomed single-shot; coverage invariant at the merge
+  (hyphen-normalized engine resolve); collections-persistence guard
+  (`_strip_dangling_maps` — a stripped fan-out is never invisible via the
+  `_map_degradations` ledger); per-chunk timing instrumentation.
+
+### Production model configuration (frozen)
+
+```
+Planner   = nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b
+Synthesis = nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b (NEXUS_LLM__SYNTHESIS_MODEL)
+Embeddings= OFF (NEXUS_RESOLVER__ENABLE_EMBEDDING_RETRIEVAL=false)
+```
+
+### Benchmark baseline (frozen architecture, 135 scenarios)
+
+| Config | Pass | Avg | Notes |
+|---|---|---|---|
+| Nano+Nano (Run 13) | 94/135 | 90.3 | empty-plan class (Nano planner) |
+| Nano+Ultra (Run 14) | 95/135 | 89.7 | 5 llm_failed (Ultra endpoint under load) |
+| **Ultra+Ultra (135×3)** | **98/135 × 3** | **91.1** | reproducible; binding 1.0; artifacts 0.788; grounding 0.763 |
+
+Mega-DAG validation (P2-A): T132 0→7 executed; W135/U133/T132 all plan
+completely (all expected kinds, 0 empty plans on clean reps); T132 3/3
+stable; planning critical path = max(parallel chunk) = 78.4s (P2-A.5).
+
+---
+
+## Remaining tracks (post-freeze)
+
+- **P3-A/B: adaptive chunk balancing** (independent performance experiment —
+  the ONLY permitted orchestration-adjacent change; see contract below).
 - Durable background-job model (ExecutionRequest → Durable Job → Queue →
   Worker → Checkpoint → ArtifactStore — not `asyncio.create_task`).
 - Tenant isolation (multi-tenant authorization).
 - Full causal correlation-ID chain (invocation_id → intent_id → plan_id →
   execution_id → artifact_id → response_id) on every event.
-- Performance optimization driven by the benchmark baseline
-  (`scripts/benchmark.py`; the fingerprint-attributable baseline exists).
+- `nv-embed-v1` re-evaluation when the registry grows substantially beyond
+  22 tools (D10 verdict: no measured benefit at 22 tools — resolution 0.857
+  ON = OFF).
 
 ---
 
-## Phase 0 — Runtime Contract (docs) ✅ current
+## P3-A/B contract (adaptive chunk balancing)
 
-- [runtime-contract.md](runtime-contract.md) — invariants, contracts map,
-  side-effect rules, enforcement gates
-- [roadmap.md](roadmap.md) — this document
-- [architecture.md](architecture.md) — rewritten to the current runtime
-- Documentation restructure: stale docs removed/updated, docs index added
+**Status:** P3 is performance optimization ONLY. P0/P1/P2 are not reopened
+unless a new regression or concrete production failure provides evidence.
 
-## Phase 1 — Capability Resolution (`ResolutionEngine`)
+**Control (P2-A.5 baseline):** 4 chunks planned in parallel — 18s / 23s /
+35s / **78.4s (critical path)**. Planning wall = `max(chunk_latency)` = 78.4s
+of the 180s budget (44%); merge ~0.1s. The key metric is **`max(chunk_latency)`**
+(parallel execution), NOT the sum.
 
-Single source of truth for "what is relevant". One frozen `ResolutionResult`
-consumed by router (binary facts), planner (ranked candidates), and telemetry
-(explanation).
+**Hypothesis:** adaptive partitioning → more balanced chunks →
+lower `max(chunk_latency)` → more execution headroom → lower total wall time.
 
-- `resolution_result.py` — frozen models: `CandidateBase` (id, name, score,
-  confidence, `match_sources`, reasons) → `CapabilityCandidate` +
-  `WorkflowCandidate`; `ResolutionMetadata` (elapsed_ms, catalog_size,
-  fingerprint, registry_version, layers_run, resolver_version); `ResolutionResult`
-  (both candidate streams, `has_*_candidates` facts, metadata, explanation)
-- `resolution_engine.py` — capability stream (existing retriever layers with
-  multi-source reasons) + workflow stream (`template_engine`) +
-  `ConfidenceClassifier` (Phase 1: score bands; Phase 6: multi-factor)
-- **Availability facts**: `availability` on `CapabilityCandidate`
-  (available/unavailable/disabled/rate_limited/maintenance/permission_denied)
-  + the missing `enabled` filter in `with_tool_metadata`
-- Router consumes facts only (no score thresholds); planner gets ranked
-  candidates; debug endpoint returns `ResolutionResult`
-- `registry_version` (int) distinct from content-hash `fingerprint`
+**P3 MAY change:** chunk size, partition strategy, scheduling.
 
-## Phase 2 — ExecutionGoal Taxonomy
+**P3 MAY NOT change:** intent coverage, resolver semantics, binding, map
+semantics, evidence/grounding, validation contracts, execution correctness.
 
-Replace query-type thinking with composable goal flags.
-
-- `ExecutionGoal` flag set `{conversation, information, analysis, action,
-  workflow}` + `primary_goal` (deterministic priority) + `needs_requirements`
-  as a modifier — no more tool-count taxonomy
-- Legacy alias map for persisted checkpoints (`"single_tool" → "action"`, …)
-- Typed `GoalClassification` result; `response_type` becomes a typed enum
-
-## Phase 3 — Plan Validator (pre-compile)
-
-Deterministic safety layer between planner and compiler.
-
-- `PlanValidatorNode`: undefined ops, cycles, missing inputs
-  (`find_unmet_inputs`), schema mismatch, budget, policy/permission
-- Typed `PlanValidatorReport`; routes: valid → Compiler, structural →
-  RequirementCollector, refinable → PlanCritic
-
-## Phase 4 — Execution Policies + Strategy + Enriched Plan
-
-Execution behavior becomes declarative.
-
-- `execution_policy` block: timeout_s, retries, parallel, risk,
-  requires_approval, idempotent, cacheable, budget_usd, permissions, rollback
-  (back-compat readers)
-- Availability **policy** (maintenance windows) alongside Phase 1 facts
-- `ExecutionStrategy` (sequential/parallel/map/reduce/retry/background/
-  streaming) between planner and compiler
-- Enriched `ExecutionPlan`: goal, nodes, dependencies, policies,
-  estimated_cost, **estimated_latency_ms**, expected outputs, required
-  approvals, failure recovery; background-vs-inline decision via
-  settings-driven `background_threshold_ms`
-
-## Phase 5 — Memory Lifecycle
-
-Memory participates in planning and execution, not just response.
-
-- `MemoryScout` `TRIGGER_PLANNING` → typed `MemoryRetrievalResult` injected
-  into planner prompt/catalog (bounded)
-- Executor cacheable artifact reads (long-term, keyed by `execution_key`),
-  write-back on success
-
-## Phase 6 — Semantic Workflow Matching
-
-Hybrid discovery quality on top of RapidFuzz.
-
-- `embedding` vector column on `workflow_definition` + backfill (LLMClient.embed)
-- Hybrid scoring: vector cosine + token_set_ratio + metadata boost, fuzzy-only
-  fallback
-- `ConfidenceClassifier` multi-factor upgrade; resolver "embedding" source goes live
-
-## Phase 7 — Observability
-
-- Typed event models replacing `AgentEvent.payload: dict` (one model per event
-  type)
-- Per-node cost/latency/retries/decision-reason attributes; `ResolutionResult`
-  surfaced in `/debug` + LangSmith tags
-
-## Phase 8 — Artifact Registry
-
-- DB-backed artifact registry: schemas, versions, relationships, ownership,
-  lifecycle; in-session `ArtifactGraph` becomes a view over it
-
-## Phase 9 — Executable + Execution Contract
-
-- `ExecutionContract` implemented by every executable; `ResolutionResult`
-  unifies candidate streams (`executable_candidates`); `ExecutionContext`
-  enrichment (checkpoints/permissions/budget) migrates here
-
----
-
-## Execution order
-
-```
-0  Runtime Contract          ← done
-1  Capability Resolution     ← next
-2  ExecutionGoal flags
-3  Plan Validator
-4  Policies + Strategy + Enriched Plan
-5  Memory lifecycle
-6  Semantic workflow matching
-7  Observability
-8  Artifact Registry
-9  Executable + Execution Contract
-```
-
-Phases 1–4 hard-order; 5–8 swappable; 9 last. Every phase ends with: typed
-contract tests, purity tests, boundary grep gate, full suite + E2E green.
+**Experiment design:** P3-A vs P3-B on W135 (and T132/U133 when cold),
+measured by `max(chunk_latency)` + benchmark deltas against the frozen
+baseline; a change is adopted only if the 135-scenario aggregate and the
+mega-DAG gates stay green (A/B, one variable at a time).
