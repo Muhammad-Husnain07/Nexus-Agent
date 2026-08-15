@@ -226,6 +226,48 @@ def _input_entities_bound(evidence: dict) -> set[str]:
     return out
 
 
+_CONTRACT_META_CACHE: dict[str, dict[str, Any]] | None = None
+
+
+def _fetch_contract_meta() -> dict[str, dict[str, Any]]:
+    """Registry input/produces contract per capability, read directly from
+    the DB (the standalone runner has no populated GlobalContext)."""
+    global _CONTRACT_META_CACHE
+    if _CONTRACT_META_CACHE is not None:
+        return _CONTRACT_META_CACHE
+    meta: dict[str, dict[str, Any]] = {}
+    try:
+        os.chdir('/mnt/c/Users/Muhammad Husnain/Desktop/Nexus-Agentic-AI/nexus-agent')
+        import asyncio as _asyncio
+
+        from sqlalchemy import text
+
+        from nexus.db.base import async_session
+
+        async def _q():
+            async with async_session() as s:
+                rows = (await s.execute(text(
+                    "SELECT name, input_schema, produces, consumes FROM tool"
+                ))).mappings().all()
+                return rows
+
+        for r in _asyncio.run(_q()):
+            name = str(r['name'] or '')
+            if not name:
+                continue
+            in_schema = r['input_schema'] or {}
+            req = in_schema.get('required') if isinstance(in_schema, dict) else None
+            meta[name] = {
+                "input_required": [str(x) for x in req] if isinstance(req, list) else [],
+                "produces": [str(p) for p in (r['produces'] or [])],
+                "consumes": [str(c) for c in (r['consumes'] or [])],
+            }
+    except Exception:
+        meta = {}
+    _CONTRACT_META_CACHE = meta
+    return meta
+
+
 def score_scenario(sc: dict, events: list[dict], evidence: dict) -> dict:
     exp = sc.get("expected", {})
     summary = events_summary(events)
@@ -245,34 +287,42 @@ def score_scenario(sc: dict, events: list[dict], evidence: dict) -> dict:
     # requires latitude/longitude, so a "weather-only" expectation that
     # omits a coordinate-producing operation can never execute — the
     # system's geocode+weather plan is CORRECT. Such scenarios must not
-    # pollute the RESOLUTION dimension (embedding A/B noise).
+    # pollute the RESOLUTION dimension.
+    #
+    # Rule: fire ONLY when the required input is a CHAINED ARTIFACT —
+    # some OTHER registered tool produces it (latitude/longitude ←
+    # geocode) — and no EXPECTED capability produces it. User-supplied
+    # free-text inputs (query/name/repository — not produced by any tool)
+    # are never contract violations.
     _benchmark_contract = False
     _contract_reason = ""
     try:
-        from nexus.agent.nodes.plan_validator_node import _capability_meta as _bm_meta
-
         _exp_kinds = set(exp.get("tool_kinds") or exp.get("tools") or [])
-        for _op in list(_exp_kinds):
-            _required = set(_bm_meta(_op).get("input_required") or [])
-            if not _required:
-                continue
-            # Required inputs the registered tool cannot derive from its
-            # own produces-list are producer-requiring.
-            _produces = set(_bm_meta(_op).get("produces") or [])
-            _missing_req = _required - _produces
-            _other_kinds = _exp_kinds - {_op}
-            _other_produces = set()
-            for _o in _other_kinds:
-                _other_produces |= set(_bm_meta(_o).get("produces") or [])
-            _unserved = _missing_req - _other_produces
-            if _unserved:
-                _benchmark_contract = True
-                _contract_reason = (
-                    f"{_op} requires {sorted(_unserved)} which no expected "
-                    "capability produces — expectation structurally "
-                    "unachievable (BENCHMARK_CONTRACT)"
-                )
-                break
+        if _exp_kinds:
+            _reg_meta = _fetch_contract_meta()
+            _all_producers: set[str] = set()
+            for _m in _reg_meta.values():
+                _all_producers |= set(_m.get("produces") or [])
+            for _op in list(_exp_kinds):
+                _meta = _reg_meta.get(_op, {})
+                _req = set(_meta.get("input_required") or [])
+                if not _req:
+                    continue
+                _chained = _req & _all_producers  # producible by another tool
+                if not _chained:
+                    continue
+                _other_produces = set()
+                for _o in _exp_kinds - {_op}:
+                    _other_produces |= set(_reg_meta.get(_o, {}).get("produces") or [])
+                _unserved = _chained - _other_produces
+                if _unserved:
+                    _benchmark_contract = True
+                    _contract_reason = (
+                        f"{_op} requires chained input {sorted(_unserved)} "
+                        "which no expected capability produces — expectation "
+                        "structurally unachievable (BENCHMARK_CONTRACT)"
+                    )
+                    break
     except Exception:
         pass
 
