@@ -136,6 +136,28 @@ def test_conversational_no_output_is_not_failure():
     monkeypatch.undo()
 
 
+def test_map_degradations_surface_as_sse_event():
+    """PH-5 (I18): a stripped map fan-out is never invisible — the planner
+    patch's _map_degradations ledger surfaces as a map_degraded SSE event."""
+    from nexus.agent.runner import AgentRunner
+
+    runner = AgentRunner()
+    degradations = [
+        {"node": "m", "iterate_over": "search_meals_items", "reason": "missing collection"},
+    ]
+    events = runner._translate("SemanticPlannerNode", {
+        "_map_degradations": degradations,
+        "_logical_workflow": {"nodes": []},
+    })
+    hits = [ev for ev in events if ev.type == "map_degraded"]
+    assert hits
+    assert hits[0].payload.get("degradations") == degradations
+    # Empty ledger -> no event (no spam).
+    assert not [ev for ev in runner._translate(
+        "SemanticPlannerNode", {"_map_degradations": []}
+    ) if ev.type == "map_degraded"]
+
+
 def test_response_evidence_compile_failure_fails_closed():
     """PH-2 (Class A): when evidence compilation fails, the response must
     NEVER claim SUCCESS/coverage-1.0 — coverage 0.0, PARTIAL_SUCCESS, and a

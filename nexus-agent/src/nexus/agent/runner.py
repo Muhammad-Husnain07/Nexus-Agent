@@ -1096,6 +1096,15 @@ class AgentRunner:
                     "reason": "; ".join(state_update.get("_plan_validator_errors", []) or []),
                 })))
 
+        # --- SemanticPlannerNode → map degradation (PH-5: a stripped
+        # fan-out is never invisible — expected vs actual cardinality) ---
+        elif inner == "SemanticPlannerNode":
+            deg = state_update.get("_map_degradations")
+            if deg:
+                events.append(AgentEvent("map_degraded", {
+                    "degradations": deg,
+                }))
+
         # --- CompilerNode → execution graph compiled + composition progress ---
         elif inner == "CompilerNode":
             graph = state_update.get("_execution_graph")
