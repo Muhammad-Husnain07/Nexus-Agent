@@ -337,7 +337,13 @@ async def response_node(
         in ("greeting", "meta", "clarification", "knowledge", "cancellation", "background")
         or state.get("_needs_approval")
     ):
-        return {"final_response": existing, "_routing_decision": "finalize"}
+        # PH-1: total status machine — a passthrough keeps its prior status
+        # when stamped, and never leaves the machine at None.
+        return {
+            "final_response": existing,
+            "_routing_decision": "finalize",
+            "_response_status": state.get("_response_status") or "CONVERSATIONAL",
+        }
 
     artifacts = get_artifact_graph(str(state.get("session_id", "")))
     artifact_list = artifacts.all()
@@ -354,6 +360,7 @@ async def response_node(
             "_structured_payload": structured_payload,
             "_routing_decision": "finalize",
             "response_type": "artifact",
+            "_response_status": "SUCCESS",
         }
 
     errors = state.get("errors", [])
@@ -424,10 +431,16 @@ async def response_node(
                 "final_response": final,
                 "_routing_decision": "finalize",
                 "response_type": "conversational",
+                "_response_status": "CONVERSATIONAL",
             }
         except Exception as exc:
             logger.error("response_node.native_chat_failed", error=str(exc))
-            return {"final_response": "I'm not sure how to respond.", "_routing_decision": "finalize", "response_type": "error"}
+            return {
+                "final_response": "I'm not sure how to respond.",
+                "_routing_decision": "finalize",
+                "response_type": "error",
+                "_response_status": "EXECUTION_FAILED",
+            }
 
     if not artifact_list and not errors:
         # P1-B EMPTY-PLAN SAFETY INVARIANT: an EXECUTABLE request that
@@ -472,7 +485,12 @@ async def response_node(
                 "response_type": "error",
                 "_response_status": "PLANNING_FAILED" if not _workflow_nodes else "EXECUTION_FAILED",
             }
-        return {"final_response": "I processed your request.", "_routing_decision": "finalize", "response_type": "tool"}
+        return {
+            "final_response": "I processed your request.",
+            "_routing_decision": "finalize",
+            "response_type": "tool",
+            "_response_status": "CONVERSATIONAL",
+        }
 
     if errors and not artifact_list:
         logger.error("response_node.execution_errors", errors=errors)
@@ -508,7 +526,12 @@ async def response_node(
         )
     except Exception as exc:
         logger.error("response_node.compilation_failed", error=str(exc))
-        return {"final_response": "I'm sorry, I encountered an issue processing the context.", "_routing_decision": "finalize"}
+        return {
+            "final_response": "I'm sorry, I encountered an issue processing the context.",
+            "_routing_decision": "finalize",
+            "response_type": "error",
+            "_response_status": "EXECUTION_FAILED",
+        }
 
     # P0-D EVIDENCE COMPILATION: entity-anchored ResponseEvidence + the
     # required-entity set (deterministic — WHAT must be expressed). The
@@ -550,6 +573,7 @@ async def response_node(
                 "final_response": "I'm sorry, I couldn't complete that request: the invocation LLM budget was exhausted.",
                 "_routing_decision": "finalize",
                 "response_type": "error",
+                "_response_status": "EXECUTION_FAILED",
                 "_invocation_budget": _bud.to_dict(),
             }
         _llm_budget = _bud.to_dict()
@@ -585,6 +609,7 @@ async def response_node(
                     "final_response": "I'm sorry, I encountered an issue while composing the response. Please try again.",
                     "_routing_decision": "finalize",
                     "errors": state.get("errors", []) + [f"LLM call failed: {response.error}"],
+                    "_response_status": "EXECUTION_FAILED",
                 }
             final = response.content or "Task completed."
             # DATA INCORPORATION + RESPONSE-COVERAGE GUARD: a synthesized
@@ -631,6 +656,7 @@ async def response_node(
                     "final_response": "I'm sorry, I encountered an issue while composing the response. Please try again.",
                     "_routing_decision": "finalize",
                     "errors": state.get("errors", []) + [f"LLM call failed: {response.error}"],
+                    "_response_status": "EXECUTION_FAILED",
                 }
             final = response.content or "Task completed."
     except (asyncio.TimeoutError, Exception) as exc:
@@ -641,7 +667,11 @@ async def response_node(
                 state, artifact_list,
                 "I'm sorry, I encountered an issue while composing the response. Please try again.",
             )
-        return {"final_response": "I'm sorry, I encountered an issue while composing the response. Please try again.", "_routing_decision": "finalize"}
+        return {
+            "final_response": "I'm sorry, I encountered an issue while composing the response. Please try again.",
+            "_routing_decision": "finalize",
+            "_response_status": "EXECUTION_FAILED",
+        }
 
     # Degenerate response guard — retry with stricter prompt if needed
     for attempt in range(_DEGENERATE_RETRIES):
@@ -678,7 +708,12 @@ async def response_node(
                 state, artifact_list,
                 "I'm sorry, I couldn't process the tool results.",
             )
-        return {"final_response": "I'm sorry, I couldn't process the tool results.", "_routing_decision": "finalize", "response_type": "error"}
+        return {
+            "final_response": "I'm sorry, I couldn't process the tool results.",
+            "_routing_decision": "finalize",
+            "response_type": "error",
+            "_response_status": "EXECUTION_FAILED",
+        }
 
     # P2-A DETERMINISTIC FLOOR ON THE FINAL TEXT: the degenerate-retry loop
     # above can REPLACE the guarded response, so the incorporation/coverage

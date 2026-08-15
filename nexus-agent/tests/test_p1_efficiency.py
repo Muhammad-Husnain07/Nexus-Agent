@@ -109,7 +109,8 @@ def test_executable_no_output_is_explicit_failure(monkeypatch):
 
 def test_conversational_no_output_is_not_failure():
     """A pure conversational request with no artifacts is NOT a failure —
-    the empty-plan invariant only applies to executable requests."""
+    the empty-plan invariant only applies to executable requests. PH-1: the
+    conversational success path stamps CONVERSATIONAL (never None)."""
     import asyncio
 
     from nexus.agent.nodes import response as rn
@@ -120,13 +121,52 @@ def test_conversational_no_output_is_not_failure():
     )())
     monkeypatch.setattr(rn, "_last_user_message", lambda state: "hi there how are you today")
 
-    async def fake_complete(model=None, messages=None, **kw):
-        return type("R", (), {"failed": False, "content": "Hello! I'm doing well, thank you for asking.", "error": None})()
+    class _FakeLLM:
+        async def complete(self, model=None, messages=None, **kw):  # noqa: ARG002
+            return type("R", (), {
+                "failed": False,
+                "content": "Hello! I'm doing well, thank you for asking.",
+                "error": None,
+            })()
 
     state = _state(_query_type="conversational")
-    out = asyncio.run(rn.response_node(state, type("L", (), {"complete": fake_complete})(), "model"))
-    assert out.get("_response_status", "SUCCESS") in ("SUCCESS", "")
+    out = asyncio.run(rn.response_node(state, _FakeLLM(), "model"))
+    assert out["_response_status"] in ("SUCCESS", "", "CONVERSATIONAL")
+    assert "Hello!" in out["final_response"]
     monkeypatch.undo()
+
+
+def test_response_status_machine_is_total():
+    """PH-1: every ResponseNode exit stamps exactly one status — the status
+    machine must never leave _response_status at None. AST-level guard:
+    each final-response dict returned from response_node carries the key
+    (helper-based returns stamp internally)."""
+    import ast
+    import inspect
+
+    import nexus.agent.nodes.response as rn
+
+    tree = ast.parse(inspect.getsource(rn))
+    fn = next(
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and n.name == "response_node"
+    )
+    returns = [n for n in ast.walk(fn) if isinstance(n, ast.Return)]
+    assert returns, "expected returns in response_node"
+    for r in returns:
+        v = r.value
+        # Helper/expression returns (e.g. _synthesis_fallback_patch) stamp
+        # internally; only direct dict returns must carry the key.
+        if not isinstance(v, ast.Dict):
+            continue
+        keys = {k.value if isinstance(k, ast.Constant) else None for k in v.keys}
+        if "final_response" in keys:
+            assert "_response_status" in keys, (
+                f"response_node return missing _response_status at line {r.lineno}: "
+                + ast.unparse(v)[:120]
+            )
 
 
 def test_response_status_stamped_on_success_path():

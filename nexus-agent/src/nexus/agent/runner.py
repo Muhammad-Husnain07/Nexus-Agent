@@ -625,6 +625,13 @@ class AgentRunner:
                         initial_state["_invocation_status"] = (
                             "TIMED_OUT" if _exceeded == "wall_time" else "INTERRUPTED"
                         )
+                        # PH-1 (I16): the terminal marker must land in the
+                        # PERSISTED state, not just the seed — finalization
+                        # reads _last_state, and the checkpoint must never
+                        # be overwritten back to COMPLETED.
+                        _last_state["_invocation_status"] = (
+                            "TIMED_OUT" if _exceeded == "wall_time" else "INTERRUPTED"
+                        )
                         yield AgentEvent(
                             "error",
                             {"message": f"invocation budget exceeded ({_exceeded})"},
@@ -731,19 +738,33 @@ class AgentRunner:
             _emit_execution_completed(_last_state, "failed", self._event_bus, sid)
         else:
             # Normal completion: final status from the last state.
+            # Terminal-abnormal markers (TIMED_OUT/INTERRUPTED — PH-1) are
+            # monotonic: once set, they are never downgraded to COMPLETED.
+            _terminal = _last_state.get("_invocation_status")
             final_status = "completed"
-            if _last_state.get("_executor_failed"):
+            if _terminal in _TERMINAL_ABNORMAL:
+                final_status = _terminal.lower()
+            elif _last_state.get("_executor_failed"):
                 final_status = "failed"
             elif _last_state.get("_background_task_id"):
                 final_status = "queued"
             try:
-                if _last_state.get("_invocation_status") in (None, "RUNNING"):
+                if _terminal in (None, "RUNNING"):
                     _last_state["_invocation_status"] = "COMPLETED"
                     # D2/P0-D (I6): persist the terminal marker so the
                     # checkpoint never reports a finished run as running.
                     await graph.aupdate_state(
                         run_config,
                         {"_invocation_status": "COMPLETED"},
+                    )
+                else:
+                    # Terminal-abnormal (budget-exceeded): persist the truth
+                    # NOW — the finally block also resets the pending graph
+                    # (as_node="__start__"), so a crash between here and the
+                    # finally can never leave a misleading COMPLETED.
+                    await graph.aupdate_state(
+                        run_config,
+                        {"_invocation_status": _terminal},
                     )
             except Exception:
                 pass

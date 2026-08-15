@@ -3,6 +3,37 @@ kind: ConfigMap
 metadata:
   name: nexus-config
 data:
+  # ===========================================================================
+  # Nexus Agent — production configuration (AUTHORITATIVE for this deployment).
+  # Do not rely on the developer .env to correct this manifest.
+  # ===========================================================================
+  NEXUS_ENV: "production"
+
+  # --- LLM: production model config (must match nexus-agent/.env) -------------
+  # Planner + synthesis on Nemotron-3-Ultra-550B (NIM). The NIM base_url and
+  # NVIDIA_NIM_API_KEY live in the Secret.
+  NEXUS_LLM__DEFAULT_PROVIDER: "nvidia_nim"
+  NEXUS_LLM__DEFAULT_MODEL: "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
+  NEXUS_LLM__SYNTHESIS_MODEL: "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
+  NEXUS_LLM__TIMEOUT_S: "60"
+  NEXUS_LLM__MAX_RETRIES: "3"
+  # Provider entry (base_url + api key go in the Secret as NVIDIA_NIM_API_KEY):
+  # NEXUS_LLM__PROVIDERS: '[{"name":"nvidia_nim","base_url":"https://integrate.api.nvidia.com/v1","api_key_ref":"NVIDIA_NIM_API_KEY","models":["nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"],"cost_per_1k_input":0,"cost_per_1k_output":0,"max_tokens":131072,"supports_streaming":true,"supports_tools":true,"supports_structured_output":true,"prompt_format":"auto"}]'
+
+  # --- Resolution: embeddings OFF (D10 verdict — no measured benefit) --------
+  NEXUS_RESOLVER__ENABLE_EMBEDDING_RETRIEVAL: "false"
+
+  # --- Tools / sandbox / SSRF --------------------------------------------------
+  # Sandbox MUST stay enabled. ALLOWED_HOSTS is an EXPLICIT allowlist of the
+  # hosts used by the tools registered in this deployment (wildcard "*" is
+  # forbidden in production). Trim to your real tool hosts; never widen to "*".
+  NEXUS_TOOLS__SANDBOX_ENABLED: "true"
+  NEXUS_TOOLS__ALLOWED_HOSTS: '["api.agify.io","api.artic.edu","api.coingecko.com","api.dictionaryapi.dev","api.nationalize.io","api.open-meteo.com","catfact.ninja","dog.ceo","en.wikipedia.org","fakestoreapi.com","geocoding-api.open-meteo.com","ghibliapi.vercel.app","graphql.anilist.co","gutendex.com","httpbin.org","hub.docker.com","jsonplaceholder.typicode.com","nominatim.openstreetmap.org","official-joke-api.appspot.com","open.er-api.com","openlibrary.org","opentdb.com","pokeapi.co","swapi.dev","universities.hipolabs.com","valorant-api.com","www.themealdb.com"]'
+  NEXUS_TOOLS__EXECUTION_TIMEOUT_S: "30"
+  NEXUS_TOOLS__MAX_RETRIES: "3"
+  NEXUS_TOOLS__RETRY_BACKOFF_S: "1.0"
+
+  # --- Database / Redis ---------------------------------------------------------
   NEXUS_DATABASE__POOL_SIZE: "10"
   NEXUS_DATABASE__MAX_OVERFLOW: "20"
   NEXUS_DATABASE__ECHO_SQL: "false"
@@ -10,26 +41,7 @@ data:
   NEXUS_REDIS__DB: "0"
   NEXUS_REDIS__MAX_CONNECTIONS: "20"
   NEXUS_REDIS__SSL: "false"
-  NEXUS_LLM__DEFAULT_PROVIDER: "openai"
-  NEXUS_LLM__DEFAULT_MODEL: "gpt-4o"
-  NEXUS_LLM__TEMPERATURE: "0.7"
-  NEXUS_LLM__MAX_TOKENS: "4096"
-  NEXUS_LLM__TIMEOUT_S: "60"
-  NEXUS_LLM__MAX_RETRIES: "3"
 
-  NEXUS_OBSERVABILITY__LANGSMITH_PROJECT: "nexus-agent"
+  # --- Observability -------------------------------------------------------------
   NEXUS_OBSERVABILITY__LOG_LEVEL: "INFO"
   NEXUS_OBSERVABILITY__LOG_FORMAT: "json"
-  NEXUS_AGENT__MAX_ITERATIONS: "25"
-  NEXUS_AGENT__MAX_PLAN_STEPS: "10"
-  NEXUS_AGENT__CONTEXT_WINDOW_TOKENS: "128000"
-  NEXUS_AGENT__SUMMARIZATION_THRESHOLD_TOKENS: "64000"
-  NEXUS_AGENT__HITL_DEFAULT: "true"
-  NEXUS_TOOLS__EXECUTION_TIMEOUT_S: "30"
-  NEXUS_TOOLS__MAX_RETRIES: "3"
-  NEXUS_TOOLS__RETRY_BACKOFF_S: "1.0"
-  NEXUS_TOOLS__SANDBOX_ENABLED: "false"
-  NEXUS_SERVER__HOST: "0.0.0.0"
-  NEXUS_SERVER__PORT: "8000"
-  NEXUS_SERVER__WORKERS: "1"
-  NEXUS_ENV: "production"

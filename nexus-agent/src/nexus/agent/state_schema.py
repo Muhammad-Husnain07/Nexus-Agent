@@ -544,8 +544,10 @@ class AgentState(TypedDict, total=False):
     _map_degradations: list[dict[str, Any]]
 
     # P1-B: explicit terminal response status (SUCCESS / PARTIAL_SUCCESS /
-    # CLARIFICATION_REQUIRED / EXECUTION_FAILED / PLANNING_FAILED) — an
-    # executable request never collapses into silent-success text.
+    # CLARIFICATION_REQUIRED / EXECUTION_FAILED / PLANNING_FAILED /
+    # CONVERSATIONAL) — an executable request never collapses into
+    # silent-success text. PH-1: EVERY ResponseNode exit stamps one of
+    # these — the machine is total, never None.
     _response_status: str
 
     # Runtime-only ephemeral fields (carried in state but not in TypedDict)
