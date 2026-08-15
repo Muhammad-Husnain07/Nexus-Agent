@@ -374,6 +374,27 @@ def test_chunk_intent_units_preserves_dependency_pair():
     assert "intent 5" in joined[0]
 
 
+def test_collections_persistence_guard_strips_dangling_map():
+    """P2-A.2: a node whose iterate_over has no declared collection (lost
+    across a replan/chunked-merge boundary) degrades to a single body —
+    never a dangling map that fails validation."""
+    from nexus.agent.nodes.semantic_parser_node import _strip_dangling_maps
+
+    nodes = [
+        {"op": "search_meals", "ref": "m", "inputs": {"query": "${item}"},
+         "iterate_over": "search_meals_items", "depends_on": []},
+        {"op": "define_word", "ref": "w", "inputs": {"word": "cache"}, "depends_on": []},
+    ]
+    # Collection exists -> map preserved.
+    kept = _strip_dangling_maps(nodes, {"search_meals_items": ["chicken", "pasta"]})
+    assert kept[0].get("iterate_over") == "search_meals_items"
+    # Collection missing (replan boundary) -> iterate_over stripped.
+    pruned = _strip_dangling_maps(nodes, {})
+    assert "iterate_over" not in pruned[0]
+    assert pruned[0]["op"] == "search_meals"
+    assert pruned[1]["op"] == "define_word"
+
+
 def test_chunk_intent_units_empty():
     from nexus.agent.nodes.semantic_parser_node import _chunk_intent_units
 

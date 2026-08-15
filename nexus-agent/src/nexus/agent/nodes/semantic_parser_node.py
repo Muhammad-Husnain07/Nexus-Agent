@@ -2078,6 +2078,16 @@ async def semantic_parser_node(
                 cardinalities=[len(v) for v in _map_collections.values()],
                 nodes_after=len(nodes),
             )
+        # P2-A.2 COLLECTIONS PERSISTENCE INVARIANT: every ``iterate_over``
+        # ref must have a declared collection — a dangling map node (from a
+        # chunked merge or a replan boundary where collections were lost)
+        # would fail validation with ``unresolved_iterate_over`` and burn a
+        # replan cycle. Strip the iterate_over from any node whose
+        # collection is absent (the node degrades to a single body
+        # execution — never a dangling map).
+        _wf_collections = parsed.get("collections") if isinstance(parsed, dict) else {}
+        nodes = _strip_dangling_maps(nodes, _wf_collections)
+        parsed["nodes"] = nodes
     except Exception as _map_exc:
         logger.warning("semantic_planner.map_collapse_failed", error=str(_map_exc)[:150])
 
@@ -2137,6 +2147,35 @@ async def semantic_parser_node(
         binding_report=binding_report,
         intent_graph=intent_graph,
     )
+
+
+def _strip_dangling_maps(
+    nodes: list[dict[str, Any]],
+    collections: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """P2-A.2 collections-persistence guard: every ``iterate_over`` ref
+    must have a declared collection. A dangling map node (collections lost
+    across a replan/chunked-merge boundary) degrades to a single body
+    execution — never a validation-failing map. Returns the pruned nodes.
+    """
+    if not isinstance(collections, dict):
+        collections = {}
+    pruned: list[dict[str, Any]] = []
+    for n in nodes:
+        if not isinstance(n, dict):
+            pruned.append(n)
+            continue
+        _io = n.get("iterate_over")
+        if _io and str(_io) not in collections:
+            logger.warning(
+                "semantic_planner.strip_dangling_map",
+                node=n.get("ref"),
+                iterate_over=str(_io),
+            )
+            n = dict(n)
+            n.pop("iterate_over", None)
+        pruned.append(n)
+    return pruned
 
 
 def _collapse_map_candidates(
