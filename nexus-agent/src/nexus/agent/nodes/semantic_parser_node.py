@@ -842,6 +842,65 @@ async def _chunked_plan_extract(
             merged_nodes.append(node)
     if not merged_nodes:
         return None
+    # P2-A.1 COVERAGE INVARIANT AT THE MERGE: a chunk unit whose capability
+    # the model skipped (T132's ``reverse-geocoded location`` unit → no
+    # ``reverse_geocode`` node) is recovered DETERMINISTICALLY — resolve
+    # the unit through the same engine the branch solver uses and add the
+    # top available candidate as a node. The model proposes; the
+    # deterministic resolver guarantees coverage (the chunked analogue of
+    # the branch-safe coverage invariant).
+    try:
+        from nexus.capabilities.resolution_engine import get_resolution_engine  # noqa: PLC0415
+        from nexus.context.global_context import get_global_context as _cov_gc  # noqa: PLC0415
+
+        _engine = get_resolution_engine()
+        _gc = _cov_gc()
+        _merged_ops = {str(n.get("op") or "") for n in merged_nodes}
+        for unit in units:
+            _u_low = unit.lower()
+            # Covered = the merged plan has an op whose registry
+            # keyword/alias bridge matches the unit (metadata-driven —
+            # never op-name substring guessing).
+            _matched = False
+            try:
+                from nexus.agent.planners.intent_detector import unit_candidates  # noqa: PLC0415
+
+                _cands = unit_candidates(
+                    type("U", (), {"text": unit.replace("-", " "), "negated": False,
+                                   "order": 0, "instance_hint": 1,
+                                   "comparison": False, "confidence": 1.0})(),
+                    _gc,
+                )
+                if _merged_ops & set(_cands):
+                    _matched = True
+            except Exception:
+                _matched = False
+            if not _matched:
+                # Fallback: engine rank for the unit — the top available
+                # candidate is the deterministic pick. Hyphenated units
+                # ("reverse-geocoded location") tokenize as one word —
+                # normalize hyphens to spaces so the keyword bridge sees
+                # the intended tokens.
+                _res = await _engine.resolve(unit.replace("-", " "), top_k=5)
+                _top = next(
+                    (c for c in _res.capability_candidates if c.availability == "available"),
+                    None,
+                )
+                if _top is not None and _top.name not in _merged_ops:
+                    merged_nodes.append({
+                        "op": _top.name,
+                        "ref": f"cov_{len(merged_nodes)}",
+                        "inputs": {},
+                        "depends_on": [],
+                    })
+                    _merged_ops.add(_top.name)
+                    logger.info(
+                        "semantic_planner.chunk_coverage_added",
+                        unit=unit[:40],
+                        op=_top.name,
+                    )
+    except Exception as _cov_exc:
+        logger.warning("semantic_planner.chunk_coverage_failed", error=str(_cov_exc)[:150])
     return {"version": "1.0", "nodes": merged_nodes, "collections": {}}
 
 
@@ -1783,6 +1842,7 @@ async def semantic_parser_node(
             logger.info(
                 "semantic_planner.chunked_merged_direct",
                 nodes=len(_chunked.get("nodes") or []),
+                ops=[n.get("op") for n in _chunked.get("nodes") or []],
             )
 
     # Try instructor first with strict Literal enforcement; on a typed LLM
