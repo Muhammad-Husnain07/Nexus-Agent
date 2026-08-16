@@ -408,7 +408,12 @@ export default function ChatPage() {
               {/* Live run panel: phase + steps + approval + banners */}
               {(streaming || observing || lifecycle.phase !== "idle") && currentSessionId && (
                 <div className="max-w-[75%] space-y-2 animate-in fade-in duration-200">
-                  <div className="bg-muted rounded-2xl rounded-bl-sm px-4 py-3 text-sm space-y-2">
+                    <div className="bg-muted rounded-2xl rounded-bl-sm px-4 py-3 text-sm space-y-2">
+                    {currentSessionId && (
+                      <div className="flex justify-end">
+                        <Link to={`/dev?session=${currentSessionId}`} className="text-[10px] text-primary hover:underline">Open Developer Console</Link>
+                      </div>
+                    )}
                     {lifecycle.phase === "background" ? (
                       <div className="flex items-center justify-between gap-2 bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded-md px-3 py-2 text-xs">
                         <span className="flex items-center gap-2">
