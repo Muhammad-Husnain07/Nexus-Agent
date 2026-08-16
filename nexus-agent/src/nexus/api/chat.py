@@ -348,7 +348,47 @@ async def get_session_state(
         status=status,
         current_node=next_nodes[0] if next_nodes else None,
         final_response=fr,
+        approval_pending=_approval_pending_read_model(state_snapshot.values),
     )
+
+
+def _approval_pending_read_model(values: dict[str, Any]) -> dict[str, Any] | None:
+    """FE Step 1.5: expose an OPEN approval checkpoint as a read model.
+
+    The server owns the approval (binding + expiry); a refreshed browser
+    reconstructs the approval UX from this snapshot — never from client
+    memory. Sanitized: the internal ``operation_hash`` is NOT exposed.
+    Returns None when no approval is pending.
+    """
+    pending = values.get("_approval_pending")
+    if not isinstance(pending, dict) or not pending:
+        return None
+    try:
+        from nexus.agent.nodes.approval_checkpoint_resume_node import (  # noqa: PLC0415
+            _approval_expired,
+        )
+
+        requested_at = pending.get("requested_at")
+        expires_at: float | None = None
+        if isinstance(requested_at, (int, float)) and requested_at > 0:
+            from nexus.config.settings import get_settings  # noqa: PLC0415
+
+            expires_at = float(requested_at) + float(
+                get_settings().agent.approval_expiry_s
+            )
+        return {
+            "policy": str(pending.get("policy") or ""),
+            "step": str(pending.get("step") or ""),
+            "message": str(pending.get("message") or ""),
+            "context": str(pending.get("context") or ""),
+            "tools": [str(t) for t in (pending.get("tools") or [])],
+            "tool_details": pending.get("tool_details") or {},
+            "requested_at": requested_at,
+            "expires_at": expires_at,
+            "expired": _approval_expired(pending),
+        }
+    except Exception:
+        return None
 
 
 def derive_run_status(has_next: bool, invocation_status: str | None) -> str:

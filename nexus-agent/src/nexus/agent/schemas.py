@@ -42,3 +42,11 @@ class AgentStateResponse(BaseModel):
     current_node: str | None = Field(default=None, description="Currently executing node")
     final_response: str | None = Field(default=None, description="Final response if completed")
     error: str | None = Field(default=None, description="Error if run failed")
+    # FE Step 1.5: an OPEN approval checkpoint as a read model — a refreshed
+    # browser reconstructs the approval UX from the server (which owns the
+    # approval), never from client memory. Sanitized: no operation_hash.
+    approval_pending: dict[str, Any] | None = Field(
+        default=None,
+        description="Open approval checkpoint read model (policy/step/message/context/"
+        "tools/tool_details/requested_at/expires_at/expired); None when no approval is pending",
+    )
