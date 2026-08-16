@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -7,12 +8,12 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import {
-  useWorkflowsList,
+  useWorkflows,
   useCreateWorkflow,
   useUpdateWorkflow,
   useDeleteWorkflow,
   useToggleWorkflow,
-} from "@/hooks/use-workflows-api";
+} from "@/hooks/use-workflows";
 import type { Workflow, WorkflowStep } from "@/types/workflow";
 import { Plus, Trash2, Power, PowerOff, ChevronDown, ChevronRight, Pencil, X } from "lucide-react";
 
@@ -135,7 +136,7 @@ function StepEditor({ steps, onChange }: { steps: WorkflowStep[]; onChange: (s: 
 }
 
 export default function WorkflowsPage() {
-  const { data, isLoading } = useWorkflowsList();
+  const { data, isLoading, isError } = useWorkflows();
   const createWorkflow = useCreateWorkflow();
   const updateWorkflow = useUpdateWorkflow();
   const deleteWorkflow = useDeleteWorkflow();
@@ -201,7 +202,7 @@ export default function WorkflowsPage() {
     };
     try {
       if (editingId) {
-        await updateWorkflow.mutateAsync({ id: editingId, data: body });
+        await updateWorkflow.mutateAsync({ id: editingId, input: body });
         toast.success("Workflow updated (version bumped)");
       } else {
         await createWorkflow.mutateAsync(body);
@@ -264,6 +265,8 @@ export default function WorkflowsPage() {
         <CardContent className="p-0">
           {isLoading ? (
             <div className="p-6 text-sm text-muted-foreground">Loading workflows…</div>
+          ) : isError ? (
+            <div className="p-6 text-sm text-destructive">Could not load workflows.</div>
           ) : (data?.workflows?.length ?? 0) === 0 ? (
             <div className="p-6 text-sm text-muted-foreground">
               No workflows registered. Define deterministic processes for your business flows.
@@ -281,7 +284,7 @@ export default function WorkflowsPage() {
                     </button>
                     <div className="flex-1">
                       <div className="flex items-center gap-2">
-                        <span className="font-medium">{wf.name}</span>
+                        <Link to={`/workflows/${wf.id}`} className="font-medium text-primary hover:underline">{wf.name}</Link>
                         <Badge variant={wf.enabled ? "success" : "secondary"}>
                           {wf.enabled ? "Active" : "Inactive"}
                         </Badge>

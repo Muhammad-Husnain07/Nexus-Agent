@@ -14,7 +14,7 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY . .
-RUN npm run build
+RUN npm run build && npm run build:embed
 
 # ── Runtime ──────────────────────────────────────────────────────────────────
 FROM nginx:alpine
@@ -22,6 +22,7 @@ FROM nginx:alpine
 RUN addgroup -S nexus && adduser -S nexus -G nexus
 
 COPY --from=builder /app/dist /usr/share/nginx/html
+COPY --from=builder /app/dist-embed /usr/share/nginx/html/dist-embed
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 RUN chown -R nexus:nexus /usr/share/nginx/html /var/cache/nginx /var/run && \

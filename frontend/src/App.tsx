@@ -17,6 +17,9 @@ const ToolNew = lazy(() => import("@/routes/tools/new"))
 const Sessions = lazy(() => import("@/routes/sessions/index"))
 const SessionDetail = lazy(() => import("@/routes/sessions/[id]"))
 const Memory = lazy(() => import("@/routes/memory/index"))
+const Workflows = lazy(() => import("@/routes/workflows/index"))
+const WorkflowDetail = lazy(() => import("@/routes/workflows/[id]"))
+const WidgetStudio = lazy(() => import("@/routes/widget/index"))
 const Playground = lazy(() => import("@/routes/playground/index"))
 const Settings = lazy(() => import("@/routes/settings"))
 const Tasks = lazy(() => import("@/routes/tasks/index"))
@@ -63,6 +66,9 @@ export default function App() {
                   <Route path="/sessions" element={<Sessions />} />
                   <Route path="/sessions/:id" element={<SessionDetail />} />
                   <Route path="/memory" element={<Memory />} />
+                  <Route path="/workflows" element={<Workflows />} />
+                  <Route path="/workflows/:id" element={<WorkflowDetail />} />
+                  <Route path="/widget" element={<WidgetStudio />} />
                   <Route path="/tasks" element={<Tasks />} />
                   <Route path="/tasks/:id" element={<TaskDetail />} />
                   <Route path="/settings" element={<Settings />} />

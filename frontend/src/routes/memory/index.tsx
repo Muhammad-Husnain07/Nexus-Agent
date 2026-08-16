@@ -7,8 +7,8 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { useMemories, useDeleteMemory } from "@/hooks/use-memory"
-import { BrainCircuit, Search, Trash2, HelpCircle, Loader2 } from "lucide-react"
+import { useMemories, useDeleteMemory, useMemory } from "@/hooks/use-memory"
+import { BrainCircuit, Search, Trash2, HelpCircle, Loader2, Eye } from "lucide-react"
 import { formatDate } from "@/lib/utils"
 import { toast } from "sonner"
 
@@ -18,7 +18,9 @@ export default function MemoryPage() {
   const [tab, setTab] = useState("all")
   const [search, setSearch] = useState("")
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
-  const { data: memories, isLoading } = useMemories({ q: search || undefined, kind: tab === "all" ? undefined : tab })
+  const [detailsId, setDetailsId] = useState<string | null>(null)
+  const { data: memories, isLoading, isError } = useMemories({ q: search || undefined, kind: tab === "all" ? undefined : tab })
+  const { data: details, isLoading: detailsLoading } = useMemory(detailsId ?? "")
   const deleteMemory = useDeleteMemory()
   const items = Array.isArray(memories) ? memories : []
 
@@ -53,6 +55,8 @@ export default function MemoryPage() {
 
             {isLoading ? (
               <div className="space-y-2">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-20 w-full rounded-lg" />)}</div>
+            ) : isError ? (
+              <div className="text-center py-12 text-destructive">Could not load memories. Please retry.</div>
             ) : items.length === 0 ? (
               <div className="text-center py-12 text-muted-foreground">
                 <BrainCircuit size={40} className="mx-auto mb-3 opacity-30" />
@@ -79,9 +83,14 @@ export default function MemoryPage() {
                             {mem.session_id && <span>· Session: {mem.session_id.slice(0, 8)}...</span>}
                           </div>
                         </div>
-                        <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0 opacity-60 hover:opacity-100" onClick={() => setDeleteConfirm(mem.id)}>
-                          <Trash2 size={14} />
-                        </Button>
+                         <div className="flex gap-1 shrink-0">
+                           <Button variant="ghost" size="icon" className="h-8 w-8 opacity-60 hover:opacity-100" onClick={() => setDetailsId(mem.id)} aria-label="View memory details">
+                             <Eye size={14} />
+                           </Button>
+                           <Button variant="ghost" size="icon" className="h-8 w-8 opacity-60 hover:opacity-100" onClick={() => setDeleteConfirm(mem.id)} aria-label="Delete memory">
+                             <Trash2 size={14} />
+                           </Button>
+                         </div>
                       </div>
                     </CardContent>
                   </Card>
@@ -104,6 +113,22 @@ export default function MemoryPage() {
               {deleteMemory.isPending ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />} Delete
             </Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!detailsId} onOpenChange={() => setDetailsId(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Memory details</DialogTitle>
+            <DialogDescription>Canonical memory content returned by the Nexus API.</DialogDescription>
+          </DialogHeader>
+          {detailsLoading ? <div className="py-6 text-sm text-muted-foreground">Loading…</div> : details ? (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2"><Badge variant="outline" className="capitalize">{details.kind}</Badge><span className="text-xs text-muted-foreground">Importance {(details.importance || 0).toFixed(2)}</span></div>
+              <p className="text-sm whitespace-pre-wrap rounded-md bg-muted/40 p-3">{details.content}</p>
+              <div className="text-xs text-muted-foreground">Created {formatDate(details.created_at)}{details.last_accessed_at ? ` · Last accessed ${formatDate(details.last_accessed_at)}` : ""}</div>
+            </div>
+          ) : <div className="py-6 text-sm text-muted-foreground">Memory not found.</div>}
         </DialogContent>
       </Dialog>
     </div>

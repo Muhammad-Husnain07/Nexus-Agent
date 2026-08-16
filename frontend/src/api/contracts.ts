@@ -138,6 +138,44 @@ export const workflowInstanceSchema = z.object({
   completed_at: z.string().nullable(),
 });
 
+export const workflowStepSchema = z.object({
+  id: z.string(),
+  description: z.string().optional(),
+  intent: z.string().nullable().optional(),
+  capability: z.string().nullable().optional(),
+  requires_input: z.boolean().optional(),
+  question: z.string().nullable().optional(),
+  inputs: z.record(z.string(), z.unknown()).optional(),
+  dynamic: z.boolean().optional(),
+  workflow_ref: z.string().nullable().optional(),
+  template: z.string().nullable().optional(),
+});
+
+export const workflowSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  trigger_intent_pattern: z.string(),
+  steps: z.array(workflowStepSchema),
+  priority: z.number(),
+  max_nodes: z.number(),
+  enabled: z.boolean(),
+  version: z.number(),
+  created_at: z.string().nullable(),
+  updated_at: z.string().nullable(),
+});
+
+export const memorySchema = z.object({
+  id: z.string(),
+  session_id: z.string().nullable(),
+  kind: z.enum(["episodic", "semantic", "procedural"]),
+  content: z.string(),
+  metadata_: z.record(z.string(), z.unknown()).nullable(),
+  importance: z.number(),
+  created_at: z.string(),
+  last_accessed_at: z.string().nullable(),
+});
+
 export class ContractError extends Error {
   constructor(
     public readonly contract: string,

@@ -7,7 +7,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import ChatWidget from "@/components/embed/chat-widget";
-import { Code2, Copy, Check, Monitor, ExternalLink, Puzzle } from "lucide-react";
+import { Code2, Copy, Check, Monitor, ExternalLink, Puzzle, AlertTriangle, CircleCheck } from "lucide-react";
 import { useState as useReactState } from "react";
 
 /**
@@ -32,6 +32,8 @@ export default function WidgetStudioPage() {
   const [copied, setCopied] = useState(false);
   const [tab, setTab] = useState("html");
   const [showAdvanced, setShowAdvanced] = useReactState(false);
+  const [configError, setConfigError] = useState<string | null>(null);
+  const [bundleState, setBundleState] = useState<"unknown" | "checking" | "ready" | "missing">("unknown");
 
   const previewConfig = useMemo(() => ({
     apiBase,
@@ -48,7 +50,7 @@ export default function WidgetStudioPage() {
   }), [apiBase, title, greeting, placeholder, primary, launcher, position, height, width, persistSession]);
 
   const origin = typeof window !== "undefined" ? window.location.origin : "";
-  const widgetSrc = `${origin}/embed-widget.js`;
+  const widgetSrc = `${origin}/dist-embed/embed-widget.js`;
   const resolvedApi = apiBase.trim() || "/api/v1";
 
   const htmlSnippet = useMemo(() => {
@@ -111,6 +113,32 @@ export default function WidgetStudioPage() {
     }
   };
 
+  const validateConfig = () => {
+    const trimmedApi = apiBase.trim();
+    if (!trimmedApi) return setConfigError("API base URL is required.");
+    if (!/^https?:\/\//.test(trimmedApi) && !trimmedApi.startsWith("/")) {
+      return setConfigError("API base URL must be an absolute HTTP(S) URL or a local /api path.");
+    }
+    if (!title.trim()) return setConfigError("Widget title is required.");
+    if (!/^#[0-9a-f]{6}$/i.test(primary.trim())) return setConfigError("Primary color must be a six-digit hex color.");
+    if (width < 280 || width > 560 || height < 320 || height > 900) return setConfigError("Widget dimensions are outside the supported range.");
+    setConfigError(null);
+    toast.success("Widget configuration is valid");
+  };
+
+  const verifyBundle = async () => {
+    setBundleState("checking");
+    try {
+      const response = await fetch("/dist-embed/embed-widget.js", { method: "HEAD" });
+      setBundleState(response.ok ? "ready" : "missing");
+      if (!response.ok) toast.error("Embed bundle is not built. Run npm run build:embed.");
+      else toast.success("Embed bundle is ready");
+    } catch {
+      setBundleState("missing");
+      toast.error("Could not verify the embed bundle.");
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4">
@@ -122,10 +150,20 @@ export default function WidgetStudioPage() {
             Configure the assistant widget, preview it live, and embed it in any application with one snippet.
           </p>
         </div>
-        <Button variant="outline" onClick={() => window.open("/embed-widget.js", "_blank")}>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={validateConfig}>Validate configuration</Button>
+          <Button variant="outline" onClick={() => void verifyBundle()} disabled={bundleState === "checking"}>
+            {bundleState === "ready" ? <CircleCheck className="h-4 w-4 text-green-500" /> : <Code2 className="h-4 w-4" />}
+            {bundleState === "checking" ? "Checking…" : "Verify bundle"}
+          </Button>
+          <Button variant="outline" onClick={() => window.open(widgetSrc, "_blank")}>
           <ExternalLink className="h-4 w-4" /> Open widget bundle
-        </Button>
+          </Button>
+        </div>
       </div>
+
+      {configError && <div role="alert" className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"><AlertTriangle className="h-4 w-4" />{configError}</div>}
+      {bundleState === "missing" && <div role="alert" className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">Build the embed artifact with <code>npm run build:embed</code> before opening the bundle or deploying the snippet.</div>}
 
       <div className="grid gap-6 lg:grid-cols-2">
         {/* ── Configuration ── */}
@@ -142,8 +180,8 @@ export default function WidgetStudioPage() {
                 <Input value={apiBase} onChange={(e) => setApiBase(e.target.value)} placeholder="/api/v1" className="font-mono text-xs" />
               </div>
               <div className="space-y-1.5">
-                <Label>Widget title</Label>
-                <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Assistant" />
+                   <Label htmlFor="widget-title">Widget title</Label>
+                   <Input id="widget-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Assistant" />
               </div>
             </div>
 
@@ -219,7 +257,7 @@ export default function WidgetStudioPage() {
               </button>
               {showAdvanced && (
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  The bundle is built with <code className="rounded bg-muted-foreground/10 px-1">npm run build:embed</code> into{" "}
+                   The bundle is built with <code className="rounded bg-muted-foreground/10 px-1">npm run build:embed</code> into{" "}
                   <code className="rounded bg-muted-foreground/10 px-1">dist-embed/embed-widget.js</code>. Host it on any static
                   server/CDN and point <code className="rounded bg-muted-foreground/10 px-1">data-api-base</code> at a Nexus API —
                   no build step needed on the embedding site.

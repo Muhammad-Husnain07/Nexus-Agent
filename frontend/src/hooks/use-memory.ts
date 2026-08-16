@@ -1,16 +1,22 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import api from "../lib/api";
+import { useMemoryDetail, useMemoryQuery, useDeleteMemoryMutation } from "./use-memory-query";
 
-export function useMemories(params?: Record<string, unknown>) {
-  return useQuery({ queryKey: ["memories", params], queryFn: async () => { const r = await api.get("/memory", { params }); return r.data; } });
+export function useMemories(params: Record<string, unknown> = {}) {
+  return useMemoryQuery({
+    q: typeof params.q === "string" ? params.q : undefined,
+    kind: params.kind === "episodic" || params.kind === "semantic" || params.kind === "procedural"
+      ? params.kind
+      : undefined,
+  });
 }
+
 export function useMemory(id: string) {
-  return useQuery({ queryKey: ["memory", id], queryFn: async () => { const r = await api.get(`/memory/${id}`); return r.data; }, enabled: !!id });
+  return useMemoryDetail(id);
 }
+
 export function useDeleteMemory() {
-  const qc = useQueryClient();
-  return useMutation({ mutationFn: async (id: string) => { await api.delete(`/memory/${id}`); }, onSuccess: () => qc.invalidateQueries({ queryKey: ["memories"] }) });
+  return useDeleteMemoryMutation();
 }
+
 export function useSearchMemories(query: string) {
-  return useQuery({ queryKey: ["memories-search", query], queryFn: async () => { const r = await api.get("/memory", { params: { q: query } }); return r.data; }, enabled: query.length > 2 });
+  return useMemoryQuery({ q: query.length > 2 ? query : undefined });
 }
