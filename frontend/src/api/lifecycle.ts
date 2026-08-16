@@ -28,6 +28,7 @@ export type RunPhase =
   | "approval"
   | "clarification"
   | "synthesizing"
+  | "background"
   | "complete"
   | "failed"
   | "cancelled"
@@ -153,14 +154,28 @@ export function reduceRunEvent(state: RunLifecycle, ev: AgentEvent): RunLifecycl
       next.finalText = String(payload.text ?? next.finalText);
       next.responseStatus = (payload.response_status as ResponseStatus | undefined) ?? null;
       next.coverage = (payload.coverage_breakdown as Record<string, unknown> | undefined) ?? null;
-      if (next.phase !== "approval" && next.phase !== "clarification") next.phase = "synthesizing";
+      // approval/clarification/background are sticky — final_response does
+      // not leave them (the background banner stays until the task UI).
+      if (
+        next.phase !== "approval" &&
+        next.phase !== "clarification" &&
+        next.phase !== "background"
+      ) {
+        next.phase = "synthesizing";
+      }
       break;
     }
     case "execution_completed": {
       const status = String(payload.status ?? "");
       if (status === "cancelled") next.phase = "cancelled";
+      // FE Step 3: handed to a worker — the durable task surface takes over.
+      else if (status === "queued") next.phase = "background";
       else if (status === "failed" && !next.finalText) next.phase = "failed";
       else if (next.finalText) next.phase = "complete";
+      break;
+    }
+    case "workflow_composing_progress": {
+      if (payload.background === true) next.phase = "background";
       break;
     }
     case "workflow_completed":

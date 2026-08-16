@@ -1,33 +1,37 @@
 import { useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Link } from "react-router-dom";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { useTasksList, useCreateTask, useTaskAction } from "@/hooks/use-workflows-api";
-import { Pause, Play, X, Plus } from "lucide-react";
+import { useCreateTask, useTaskAction, useTasks } from "@/hooks/use-tasks";
+import { Pause, Play, X, Plus, ArrowRight } from "lucide-react";
+import { mapTaskStatus } from "@/api/status";
+import { cn } from "@/lib/utils";
 
-const STATUS_VARIANTS: Record<string, string> = {
-  queued: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-400",
-  running: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-400",
-  paused: "bg-muted text-muted-foreground",
-  completed: "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400",
-  failed: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400",
-  cancelled: "bg-muted text-muted-foreground",
+const TONE_BADGE: Record<string, string> = {
+  success: "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400",
+  danger: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400",
+  info: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-400",
+  warning: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-400",
+  neutral: "bg-muted text-muted-foreground",
 };
+
+function StatusBadge({ status }: { status: string }) {
+  const pres = mapTaskStatus(status);
+  return <Badge className={TONE_BADGE[pres.tone] ?? ""} title={pres.description}>{pres.label}</Badge>;
+}
 
 export default function TasksPage() {
   const [statusFilter, setStatusFilter] = useState<string>("");
-  const { data, isLoading } = useTasksList(statusFilter || undefined);
+  const { data, isLoading } = useTasks(statusFilter ? { status: statusFilter } : {});
   const createTask = useCreateTask();
   const taskAction = useTaskAction();
 
   const [showCreate, setShowCreate] = useState(false);
-  const [taskType, setTaskType] = useState("");
-  const [payloadText, setPayloadText] = useState("{}");
-  const [scheduleCron, setScheduleCron] = useState("");
-  const [nextRunAt, setNextRunAt] = useState("");
-  const [maxAttempts, setMaxAttempts] = useState(3);
+  const [taskType, setTaskType] = useState("workflow_run");
+  const [message, setMessage] = useState("");
   const [sessionId, setSessionId] = useState("");
 
   const handleCreate = async () => {
@@ -35,28 +39,25 @@ export default function TasksPage() {
       toast.error("Task type is required");
       return;
     }
-    let payload: Record<string, unknown> = {};
-    try {
-      payload = payloadText.trim() ? JSON.parse(payloadText) : {};
-    } catch {
-      toast.error("Payload must be valid JSON");
-      return;
-    }
     try {
       await createTask.mutateAsync({
         task_type: taskType.trim(),
-        payload,
-        ...(scheduleCron.trim() ? { schedule_cron: scheduleCron.trim() } : {}),
-        ...(nextRunAt.trim() ? { next_run_at: nextRunAt.trim() } : {}),
-        ...(maxAttempts !== 3 ? { max_attempts: maxAttempts } : {}),
+        payload: message.trim()
+          ? {
+              execution_id: crypto.randomUUID(),
+              session_id: sessionId.trim() || undefined,
+              message: message.trim(),
+              execution_plan_version: 2,
+              resolver_version: 1,
+              planner_version: 1,
+              compiler_version: 2,
+            }
+          : {},
         ...(sessionId.trim() ? { session_id: sessionId.trim() } : {}),
       });
       setShowCreate(false);
-      setTaskType("");
-      setPayloadText("{}");
-      setScheduleCron("");
-      setNextRunAt("");
-      setMaxAttempts(3);
+      setTaskType("workflow_run");
+      setMessage("");
       setSessionId("");
       toast.success("Task created");
     } catch {
@@ -79,7 +80,7 @@ export default function TasksPage() {
         <div>
           <h1 className="text-2xl font-semibold">Tasks</h1>
           <p className="text-sm text-muted-foreground">
-            Long-running orchestration jobs processed by the worker.
+            Long-running orchestration jobs processed by the worker — durable across refresh.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -104,59 +105,29 @@ export default function TasksPage() {
 
       {showCreate && (
         <Card>
-          <CardHeader><CardTitle className="text-base">Create background task</CardTitle></CardHeader>
-          <CardContent className="space-y-3">
-            <div className="grid gap-3 md:grid-cols-2">
+          <CardContent className="p-4 space-y-3">
+            <div className="grid gap-3 md:grid-cols-3">
               <div className="space-y-1">
                 <p className="text-xs font-medium text-muted-foreground">Task type *</p>
-                <Input
-                  placeholder="e.g. workflow_run"
-                  value={taskType}
-                  onChange={(e) => setTaskType(e.target.value)}
-                />
+                <Input value={taskType} onChange={(e) => setTaskType(e.target.value)} />
               </div>
-              <div className="space-y-1">
-                <p className="text-xs font-medium text-muted-foreground">Max attempts</p>
+              <div className="space-y-1 md:col-span-2">
+                <p className="text-xs font-medium text-muted-foreground">Session id (optional)</p>
                 <Input
-                  type="number"
-                  min={1}
-                  max={10}
-                  value={maxAttempts}
-                  onChange={(e) => setMaxAttempts(Number(e.target.value) || 3)}
-                />
-              </div>
-            </div>
-            <textarea
-              placeholder='Payload JSON (e.g. {"workflow": "invoice_approval"})'
-              value={payloadText}
-              onChange={(e) => setPayloadText(e.target.value)}
-              rows={3}
-              className="w-full rounded-md border bg-background px-3 py-2 font-mono text-xs outline-none focus:ring-2 focus:ring-ring"
-            />
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="space-y-1">
-                <p className="text-xs font-medium text-muted-foreground">Cron schedule (optional)</p>
-                <Input
-                  placeholder="e.g. 0 9 * * 1"
-                  value={scheduleCron}
-                  onChange={(e) => setScheduleCron(e.target.value)}
-                />
-              </div>
-              <div className="space-y-1">
-                <p className="text-xs font-medium text-muted-foreground">Run at (optional, ISO)</p>
-                <Input
-                  placeholder="e.g. 2026-08-03T09:00:00Z"
-                  value={nextRunAt}
-                  onChange={(e) => setNextRunAt(e.target.value)}
+                  placeholder="Originating conversation session"
+                  value={sessionId}
+                  onChange={(e) => setSessionId(e.target.value)}
                 />
               </div>
             </div>
             <div className="space-y-1">
-              <p className="text-xs font-medium text-muted-foreground">Session id (optional)</p>
+              <p className="text-xs font-medium text-muted-foreground">
+                Message for workflow_run (optional — runs the agent in the background)
+              </p>
               <Input
-                placeholder="Originating conversation session"
-                value={sessionId}
-                onChange={(e) => setSessionId(e.target.value)}
+                placeholder="e.g. Get the weather in Lahore"
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
               />
             </div>
             <div className="flex gap-2">
@@ -189,10 +160,15 @@ export default function TasksPage() {
                 <tbody>
                   {data?.tasks?.map((t) => (
                     <tr key={t.id} className="border-b last:border-0">
-                      <td className="px-4 py-3 font-mono text-xs">{t.task_type}</td>
                       <td className="px-4 py-3">
-                        <Badge className={STATUS_VARIANTS[t.status] ?? ""}>{t.status}</Badge>
+                        <Link
+                          to={`/tasks/${t.id}`}
+                          className="font-mono text-xs text-primary hover:underline inline-flex items-center gap-1"
+                        >
+                          {t.task_type} <ArrowRight className="h-3 w-3" />
+                        </Link>
                       </td>
+                      <td className="px-4 py-3"><StatusBadge status={t.status} /></td>
                       <td className="px-4 py-3">{t.attempts}/{t.max_attempts}</td>
                       <td className="px-4 py-3 font-mono text-xs">{t.schedule_cron ?? "—"}</td>
                       <td className="px-4 py-3 text-xs text-muted-foreground">

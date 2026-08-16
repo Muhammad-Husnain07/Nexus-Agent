@@ -70,9 +70,10 @@ async def create_task(body: TaskCreate, request: Request) -> dict[str, Any]:
     """Create a task record and enqueue it (or schedule it)."""
     from datetime import UTC, datetime
 
-    if body.session_id:
-        if not await _task_accessible(request, {"session_id": body.session_id}):
-            raise HTTPException(status_code=403, detail="Session not accessible")
+    if body.session_id and not await _task_accessible(
+        request, {"session_id": body.session_id}
+    ):
+        raise HTTPException(status_code=403, detail="Session not accessible")
 
     next_run = None
     if body.next_run_at:
@@ -125,12 +126,23 @@ async def list_tasks(
     request: Request,
     status: str | None = None,
     task_type: str | None = None,
+    session_id: str | None = None,
     limit: int = 50,
 ) -> dict[str, Any]:
-    """List tasks with optional filters (PH-3: session-scoped)."""
+    """List tasks with optional filters (PH-3: session-scoped; FE Step 3:
+    optional session_id filter so a chat page can link its background run)."""
+    if session_id:
+        try:
+            uuid.UUID(str(session_id))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Invalid session_id") from exc
+        if not await _task_accessible(request, {"session_id": session_id}):
+            raise HTTPException(status_code=403, detail="Session not accessible")
     registry = await _registry()
     tasks = await registry.list(status=status, task_type=task_type, limit=min(limit, 200))
     visible = [t for t in tasks if await _task_accessible(request, t)]
+    if session_id:
+        visible = [t for t in visible if str(t.get("session_id") or "") == str(session_id)]
     return {"tasks": visible, "count": len(visible)}
 
 

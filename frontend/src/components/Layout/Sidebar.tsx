@@ -1,15 +1,15 @@
 import { NavLink } from "react-router-dom"
 import { cn } from "@/lib/utils"
-import { LayoutDashboard, MessageSquare, Wrench, FolderOpen, BrainCircuit, Play, Settings, X, Sparkles } from "lucide-react"
+import { LayoutDashboard, MessageSquare, Wrench, FolderOpen, BrainCircuit, ListChecks, Settings, X, Sparkles } from "lucide-react"
 
 const items = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/chat", label: "Chat", icon: MessageSquare },
   { to: "/tools", label: "Tools", icon: Wrench },
   { to: "/sessions", label: "Sessions", icon: FolderOpen },
+  { to: "/tasks", label: "Tasks", icon: ListChecks },
   { to: "/memory", label: "Memory", icon: BrainCircuit },
   { to: "/settings", label: "Settings", icon: Settings },
-  { to: "/test", label: "Playground", icon: Play },
 ]
 
 interface Props { open: boolean; onClose: () => void }
@@ -64,7 +64,7 @@ export default function Sidebar({ open, onClose }: Props) {
         {open && (
           <div className="p-4 border-t border-sidebar-border">
             <p className="text-xs text-sidebar-muted/60">Nexus Agent v0.1.0</p>
-            <p className="text-[10px] text-sidebar-muted/40 mt-0.5">5-node LangGraph</p>
+            <p className="text-[10px] text-sidebar-muted/40 mt-0.5">19-node deterministic workflow compiler</p>
           </div>
         )}
       </aside>

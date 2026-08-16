@@ -12,10 +12,12 @@ import { useSessionsList, useMessages, useCreateSession, useArchiveSession } fro
 import { useQueryClient } from "@tanstack/react-query"
 import type { Session } from "@/types/session"
 import { useChatRun } from "@/hooks/use-chat-run"
+import { useTasks } from "@/hooks/use-tasks"
 import { mapExecutionStatus } from "@/api/status"
 import { summarizeRun, type RunLifecycle } from "@/api/lifecycle"
 import { getRunState } from "@/api/runs"
 import type { StepState } from "@/api/lifecycle"
+import { Link } from "react-router-dom"
 
 interface Msg {
   id: string
@@ -60,6 +62,7 @@ const PHASE_LABEL: Record<string, string> = {
   approval: "Needs approval",
   clarification: "Needs clarification",
   synthesizing: "Preparing answer",
+  background: "Running in background",
   complete: "Complete",
   failed: "Failed",
   cancelled: "Cancelled",
@@ -97,7 +100,6 @@ function RunStatusBanner({ lifecycle }: { lifecycle: RunLifecycle }) {
   const summary = summarizeRun(lifecycle)
   if (lifecycle.phase === "approval") return null
   if (lifecycle.phase === "clarification") return null
-
   let tone = "bg-muted/40 text-muted-foreground"
   let icon = <Loader2 size={13} className="animate-spin" />
   let text = PHASE_LABEL[lifecycle.phase] ?? lifecycle.phase
@@ -184,6 +186,13 @@ export default function ChatPage() {
 
   const { data: pastMessages } = useMessages(currentSessionId ?? "", { page_size: 100 })
   const { lifecycle, streaming, observing, send, cancel, reconstruct } = useChatRun()
+  // FE Step 3: when the run is handed to a worker, find its durable task so
+  // the banner can link to /tasks/:id (TanStack Query = authoritative).
+  const { data: bgTasks } = useTasks(
+    { session_id: currentSessionId ?? undefined },
+    lifecycle.phase === "background" && !!currentSessionId,
+  )
+  const bgTask = bgTasks?.tasks?.find((t) => t.task_type === "workflow_run")
 
   // Load from URL params
   useEffect(() => {
@@ -400,7 +409,22 @@ export default function ChatPage() {
               {(streaming || observing || lifecycle.phase !== "idle") && currentSessionId && (
                 <div className="max-w-[75%] space-y-2 animate-in fade-in duration-200">
                   <div className="bg-muted rounded-2xl rounded-bl-sm px-4 py-3 text-sm space-y-2">
-                    <RunStatusBanner lifecycle={lifecycle} />
+                    {lifecycle.phase === "background" ? (
+                      <div className="flex items-center justify-between gap-2 bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded-md px-3 py-2 text-xs">
+                        <span className="flex items-center gap-2">
+                          <Loader2 size={13} className="animate-spin" />
+                          Running in background — you can leave this page.
+                        </span>
+                        <Link
+                          to={bgTask ? `/tasks/${bgTask.id}` : "/tasks"}
+                          className="font-medium underline underline-offset-2 hover:opacity-80"
+                        >
+                          {bgTask ? "View task" : "View tasks"}
+                        </Link>
+                      </div>
+                    ) : (
+                      <RunStatusBanner lifecycle={lifecycle} />
+                    )}
                     {(lifecycle.phase === "planning" || lifecycle.phase === "validating" || lifecycle.phase === "executing" || lifecycle.phase === "synthesizing") && (
                       <div className="flex items-center gap-2 text-xs text-muted-foreground">
                         <Loader2 size={13} className="animate-spin" />
