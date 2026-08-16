@@ -1,7 +1,5 @@
-export interface ChatMessage {
-  id: string;
-  role: "user" | "assistant" | "tool" | "system";
-  content: Record<string, unknown> | null;
-  tool_calls?: Record<string, unknown>[];
-  created_at: string;
-}
+/**
+ * Chat domain types — canonical definitions live in types/api.ts.
+ * This module re-exports them (legacy import path).
+ */
+export { type ChatMessage, type MessageContent } from "./api";

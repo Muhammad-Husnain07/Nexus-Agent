@@ -50,3 +50,15 @@ export interface TaskList {
   tasks: Task[];
   count: number;
 }
+
+export interface WorkflowInstance {
+  id: string;
+  definition_id: string;
+  session_id: string | null;
+  status: string;
+  current_step: number | null;
+  collected: Record<string, unknown>;
+  error_message: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+}

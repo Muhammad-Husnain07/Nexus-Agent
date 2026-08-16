@@ -1,0 +1,65 @@
+name: Frontend CI
+
+on:
+  push:
+    branches: [main]
+    paths: ["frontend/**", ".github/workflows/frontend.yml"]
+  pull_request:
+    branches: [main]
+    paths: ["frontend/**", ".github/workflows/frontend.yml"]
+  schedule:
+    - cron: "0 6 * * *"
+
+# FE plan Step 1 acceptance: typecheck, unit tests, build, e2e smoke all
+# runnable on a clean checkout. The full browser E2E matrix (E1/E4/E6 —
+# chat lifecycle, approval, background task) runs nightly once wired (Step 6).
+
+jobs:
+  pr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Type check
+        run: npm run typecheck
+      - name: Unit tests (vitest)
+        run: npm test
+      - name: Lint (oxlint)
+        run: npm run lint
+      - name: Build
+        run: npm run build
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+      - name: E2E smoke (no backend required)
+        run: npx playwright test
+      - name: E2E lifecycle matrix (E1/E4/E6 — needs live backend + NIM)
+        if: github.event_name == 'schedule'
+        run: |
+          echo "Wire the backend + NIM endpoint, then: npx playwright test e2e/lifecycle"
+        shell: bash

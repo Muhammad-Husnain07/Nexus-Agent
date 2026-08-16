@@ -5,7 +5,7 @@ export interface Tool {
   purpose: string;
   tool_type: "http_api" | "mcp";
   endpoint_url: string;
-  mcp_server_url: string;
+  mcp_server_url: string | null;
   http_method: string;
   auth_type: string;
   auth_ref: string;
@@ -16,12 +16,20 @@ export interface Tool {
   tags: string[];
   category: string;
   risk_level: string;
+  requires_approval: boolean;
+  compensating_operation: string | null;
   enabled: boolean;
   tenant_public: boolean;
   idempotent: boolean;
   rate_limit_per_minute: number | null;
   keywords: string[];
   aliases: string[];
+  capabilities: string[] | null;
+  produces: string[] | null;
+  consumes: string[] | null;
+  related: string[] | null;
+  cacheable: boolean;
+  embedding: number[] | null;
   version: number;
   created_at: string;
   updated_at: string;
@@ -32,4 +40,9 @@ export interface ToolList {
   total: number;
   page: number;
   page_size: number;
+}
+
+export interface ToolSearchResult {
+  tool: Tool;
+  score: number;
 }
