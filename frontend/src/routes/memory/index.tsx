@@ -66,7 +66,7 @@ export default function MemoryPage() {
             ) : (
               <div className="space-y-2">
                 {items.map((mem) => (
-                  <Card key={mem.id} className="card-hover">
+                   <Card key={mem.id} data-testid={`memory-${mem.id}`} className="card-hover">
                     <CardContent className="p-4">
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex-1 min-w-0">

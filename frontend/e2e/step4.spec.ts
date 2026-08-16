@@ -62,17 +62,17 @@ test.describe("Step 4 user surfaces", () => {
     const searchTerm = target.content.trim().split(/\s+/)[0].slice(0, 30);
 
     await page.goto("http://localhost:5173/memory");
-    await expect(page.getByText(target.content.slice(0, 20))).toBeVisible({ timeout: 30000 });
+    await expect(page.getByTestId(`memory-${target.id}`)).toBeVisible({ timeout: 30000 });
     const search = page.getByPlaceholder("Search memories...").first();
     await search.fill(searchTerm);
-    await expect(page.getByText(target.content.slice(0, 20))).toBeVisible({ timeout: 30000 });
+    await expect(page.getByTestId(`memory-${target.id}`)).toBeVisible({ timeout: 30000 });
 
     await page.getByRole("button", { name: "Delete memory" }).first().click();
     await expect(page.getByRole("heading", { name: "Delete Memory" })).toBeVisible();
     await page.getByRole("button", { name: "Delete", exact: true }).click();
-    await expect(page.getByText(target.content.slice(0, 20))).not.toBeVisible({ timeout: 30000 });
+    await expect(page.getByTestId(`memory-${target.id}`)).not.toBeVisible({ timeout: 30000 });
     await page.reload();
-    await expect(page.getByText(target.content.slice(0, 20))).not.toBeVisible({ timeout: 30000 });
+    await expect(page.getByTestId(`memory-${target.id}`)).not.toBeVisible({ timeout: 30000 });
   });
 
   test("widget configure -> validate -> generate embed snippet", async ({ page }) => {
