@@ -147,6 +147,25 @@ def _terminal_reset_needed(status: str | None) -> bool:
     return bool(status) and status in _TERMINAL_ABNORMAL
 
 
+async def _cancellation_requested(redis: Any, session_id: str) -> bool:
+    """FE Step 2: cooperative cancel flag (POST /sessions/{id}/cancel).
+
+    Degrade-open: a Redis outage never cancels a run and never raises.
+    """
+    try:
+        return bool(await redis.get(f"nexus:cancel:agent_run:{session_id}"))
+    except Exception:
+        return False
+
+
+async def _clear_cancellation(redis: Any, session_id: str) -> None:
+    """A fresh invocation must never inherit a stale cancel flag."""
+    try:
+        await redis.delete(f"nexus:cancel:agent_run:{session_id}")
+    except Exception:
+        pass
+
+
 def build_contract_meta() -> dict[str, Any]:
     """P1-B.1: the current checkpoint compatibility contract.
 
@@ -602,6 +621,9 @@ class AgentRunner:
             _node_start_times: dict[str, float] = {}
             _last_event_time: float = time_module.perf_counter()
             initial_state.setdefault("_invocation_status", "RUNNING")
+            # FE Step 2: a fresh invocation never inherits a stale cancel flag.
+            if redis is not None:
+                await _clear_cancellation(redis, sid)
             async for event in graph.astream(initial_state, run_config, stream_mode="updates"):
                 if not isinstance(event, dict):
                     logger.warning("runner.skipping_non_dict_event", event_type=type(event).__name__, event=repr(event)[:200])
@@ -638,6 +660,15 @@ class AgentRunner:
                         )
                         _error_msg = f"invocation budget exceeded ({_exceeded})"
                         break
+                # FE Step 2 cooperative cancellation: an operator (SSE client
+                # Stop, WS cancel) sets nexus:cancel:agent_run:{sid}; the run
+                # checks it between node events and cancels itself — the
+                # observer is disposable, the cancel is durable.
+                if redis is not None:
+                    _cancel_requested = await _cancellation_requested(redis, sid)
+                    if _cancel_requested:
+                        logger.info("runner.cancel_requested", session_id=sid)
+                        raise asyncio.CancelledError
                 node_name: str = next(iter(event))
                 state_update: Any = event[node_name]
 

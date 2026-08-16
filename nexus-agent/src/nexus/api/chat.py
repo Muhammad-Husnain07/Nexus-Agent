@@ -7,6 +7,7 @@ and ``GET /sessions/{session_id}/state`` for inspecting checkpoint state.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import uuid
 from collections.abc import AsyncIterator
@@ -190,7 +191,14 @@ def _stream_response(  # noqa: PLR0913
     user_context: dict[str, Any] | None = None,
     request_id: str | None = None,
 ) -> EventSourceResponse:
-    """Return an SSE streaming response with heartbeats and shutdown tracking."""
+    """Return an SSE streaming response with heartbeats and shutdown tracking.
+
+    FE Step 2 (browser is disposable): the RUN is decoupled from the
+    observer. ``runner.invoke`` executes in a detached task; this handler
+    only observes its events through a queue. A client disconnect cancels
+    the OBSERVER, never the run — the refreshed browser reconstructs the
+    in-flight run via ``GET /sessions/{id}/state``.
+    """
 
     conn_id = str(uuid.uuid4())
     if app_state is not None:
@@ -200,43 +208,40 @@ def _stream_response(  # noqa: PLR0913
         app_state.active_agent_runs = getattr(app_state, "active_agent_runs", 0) + 1
 
     async def _generate() -> AsyncIterator[dict[str, Any]]:
-        final_text: str | None = None
-        try:
-            event_aiter = runner.invoke(
-                session_id=sid,
-                user_message=message,
-                user_context=user_context,
-                request_id=request_id,
+        # Bounded queue: backpressure to the run when the observer is slow;
+        # the run itself never blocks on a dead observer.
+        queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=500)
+        # Deliberately unreferenced after creation: the run is detached and
+        # must survive the observer (the loop keeps it alive while running).
+        _run_task = asyncio.create_task(
+            _drain_invoke(
+                runner.invoke(
+                    session_id=sid,
+                    user_message=message,
+                    user_context=user_context,
+                    request_id=request_id,
+                ),
+                queue,
+                sid,
+                message,
             )
-
-            async for sse_event in _heartbeat_generator(event_aiter):
-                # Capture final response text for persistence
-                if sse_event.get("event") == "final_response":
-                    try:
-                        import json as _json
-                        payload = _json.loads(sse_event.get("data", "{}"))
-                        payload_data = payload.get("payload", {})
-                        if payload_data.get("text"):
-                            final_text = payload_data["text"]
-                    except Exception:
-                        pass
+        )
+        try:
+            async for sse_event in _heartbeat_generator(_QueueIterator(queue)):
                 yield sse_event
-
             yield {"event": "done", "data": "{}"}
         except asyncio.CancelledError:
-            logger.info("sse.stream_cancelled", session_id=sid)
+            # Observer disconnected — the run keeps executing server-side;
+            # state is reconstructable via GET /state.
+            logger.info("sse.observer_disconnected", session_id=sid)
         except Exception as exc:
             logger.error("sse.stream_error", session_id=sid, error=str(exc))
-            try:
+            with contextlib.suppress(Exception):
                 yield {"event": "error", "data": json.dumps({"message": str(exc)})}
-            except Exception:
-                pass
         finally:
             if app_state is not None:
                 app_state.active_agent_runs = max(0, getattr(app_state, "active_agent_runs", 1) - 1)
                 app_state.active_sse_connections.discard(conn_id)
-            # Persist messages asynchronously after stream ends
-            asyncio.ensure_future(_persist_messages(sid, message, final_text))
 
     return EventSourceResponse(
         _generate(),
@@ -246,6 +251,53 @@ def _stream_response(  # noqa: PLR0913
             "Connection": "keep-alive",
         },
     )
+
+
+class _QueueIterator:
+    """Adapt an asyncio.Queue of events (None = end) into an async iterator."""
+
+    def __init__(self, queue: asyncio.Queue[Any]) -> None:
+        self._queue = queue
+
+    def __aiter__(self) -> _QueueIterator:
+        return self
+
+    async def __anext__(self) -> Any:
+        item = await self._queue.get()
+        if item is None:
+            raise StopAsyncIteration
+        return item
+
+
+async def _drain_invoke(
+    event_aiter: AsyncIterator[AgentEvent],
+    queue: asyncio.Queue[Any],
+    sid: str,
+    message: str,
+) -> None:
+    """Drain the invocation into the observer queue.
+
+    Runs detached: message persistence happens when the RUN finishes, not
+    when the observer disconnects (a refreshed browser never loses the
+    conversation record).
+    """
+    final_text: str | None = None
+    try:
+        async for event in event_aiter:
+            if isinstance(event, AgentEvent):
+                payload = event.payload or {}
+                if event.type == "final_response" and payload.get("text"):
+                    final_text = payload["text"]
+            await queue.put(event)
+    except Exception as exc:
+        logger.error("sse.run_error", session_id=sid, error=str(exc))
+        with contextlib.suppress(Exception):
+            await queue.put({"event": "error", "data": json.dumps({"message": str(exc)})})
+    finally:
+        with contextlib.suppress(Exception):
+            asyncio.ensure_future(_persist_messages(sid, message, final_text))
+        with contextlib.suppress(Exception):
+            await queue.put(None)
 
 
 async def _json_response(
@@ -298,6 +350,32 @@ async def _json_response(
         error=error,
         events=events,
     )
+
+
+@router.post("/{session_id}/cancel")
+async def cancel_session_run(session_id: uuid.UUID, request: Request) -> dict[str, Any]:
+    """FE Step 2: cooperatively cancel an in-flight run for a session.
+
+    Sets the durable cancel flag (nexus:cancel:agent_run:{sid}); the runner
+    checks it between node events and cancels itself (the run is decoupled
+    from the SSE observer, so a Stop must cancel the RUN, not the observer).
+    """
+    from nexus.security.ownership import require_session_access  # noqa: PLC0415
+
+    await require_session_access(request, session_id)
+
+    from nexus.redis_client.client import get_redis_client  # noqa: PLC0415
+
+    redis = get_redis_client()
+    if redis is not None:
+        try:
+            await redis.set(
+                f"nexus:cancel:agent_run:{session_id}", "1", ex=600,
+            )
+        except Exception as exc:
+            logger.warning("chat.cancel_flag_failed", error=str(exc)[:200])
+    logger.info("chat.cancel_requested", session_id=str(session_id))
+    return {"cancelled": True}
 
 
 @router.get("/{session_id}/state")

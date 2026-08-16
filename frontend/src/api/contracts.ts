@@ -47,6 +47,23 @@ export const agentStateSchema = z.object({
   approval_pending: approvalPendingSchema.nullable(),
 });
 
+export const agentEventSchema = z.object({
+  type: z.string(),
+  ts: z.string(),
+  payload: z.record(z.string(), z.unknown()),
+});
+
+export const chatResponseSchema = z.object({
+  session_id: z.string(),
+  final_response: z.string().nullable(),
+  requires_approval: z.boolean(),
+  approval_payload: z.record(z.string(), z.unknown()).nullable(),
+  interrupted: z.boolean(),
+  error: z.string().nullable(),
+  events: z.array(agentEventSchema),
+  request_id: z.string().nullable().optional(),
+});
+
 export const messageContentSchema = z
   .record(z.string(), z.unknown())
   .nullable();

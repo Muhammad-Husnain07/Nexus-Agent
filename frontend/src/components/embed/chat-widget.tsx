@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Send, Square, Sparkles, X, MessageCircle, Check, Wrench, Loader2 } from "lucide-react";
+import { readSSEStream } from "@/api/stream";
+import { createSessionAt, openChatStreamAt } from "@/api/chat";
 
 export interface WidgetConfig {
   /** Base URL of the Nexus API (e.g. "https://api.example.com/api/v1"). */
@@ -48,11 +50,6 @@ interface WidgetMessage {
   } | null;
 }
 
-interface SSEEvent {
-  type: string;
-  payload?: Record<string, unknown>;
-}
-
 const DEFAULTS = {
   apiBase: "/api/v1",
   title: "Assistant",
@@ -73,17 +70,6 @@ function mergeConfig(config: WidgetConfig = {}): Required<Omit<WidgetConfig, "se
     ...config,
     apiBase: (config.apiBase || DEFAULTS.apiBase).replace(/\/+$/, ""),
   } as never;
-}
-
-function parseSSE(line: string): SSEEvent | null {
-  if (!line.startsWith("data: ")) return null;
-  const raw = line.slice(6).trim();
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as SSEEvent;
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -129,12 +115,7 @@ export default function ChatWidget(config: WidgetConfig) {
           }
         }
         if (!sid) {
-          const res = await fetch(`${cfg.apiBase}/sessions`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ title: cfg.title }),
-          });
-          const data = (await res.json()) as { id: string };
+          const data = await createSessionAt(cfg.apiBase, cfg.title);
           sid = data.id;
           if (cfg.persistSession) {
             try {
@@ -174,27 +155,19 @@ export default function ChatWidget(config: WidgetConfig) {
     let tools: string[] = [];
     let approval: WidgetMessage["approval"] = null;
     try {
-      const res = await fetch(`${cfg.apiBase}/sessions/${sessionId}/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: msg, stream: true }),
-        signal: controller.signal,
-      });
+      const res = await openChatStreamAt(
+        cfg.apiBase,
+        sessionId,
+        { message: msg, stream: true },
+        controller.signal,
+      );
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          const evt = parseSSE(line);
-          if (!evt) continue;
-          const payload = evt.payload ?? {};
+      // FE Step 2: the SHARED SSE parser (src/api/stream.ts) — the widget no
+      // longer carries its own line-splitting SSE implementation.
+      await readSSEStream(res.body, {
+        onEvent: (evt) => {
+          const payload = (evt.payload ?? {}) as Record<string, unknown>;
           emit(evt.type, payload);
           if (evt.type === "final_response" && typeof payload.text === "string") {
             acc = payload.text;
@@ -233,8 +206,16 @@ export default function ChatWidget(config: WidgetConfig) {
                 : msg_,
             ));
           }
-        }
-      }
+        },
+        onError: (message) => {
+          acc = message;
+          setMessages((m) => m.map((msg_, i) =>
+            i === m.length - 1 && msg_.role === "assistant"
+              ? { ...msg_, content: acc, running: false }
+              : msg_,
+          ));
+        },
+      });
       if (!acc && !approval) {
         setMessages((m) => m.map((msg_, i) =>
           i === m.length - 1 && msg_.role === "assistant"

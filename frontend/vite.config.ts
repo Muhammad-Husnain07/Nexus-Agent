@@ -17,6 +17,8 @@ export default defineConfig({
         changeOrigin: true,
         proxyTimeout: 0,
         timeout: 0,
+        // FE Step 2: WS cancel goes through /api/v1/sessions/{id}/ws.
+        ws: true,
       },
       "/ws": { target: "ws://172.27.173.1:8000", ws: true },
     },

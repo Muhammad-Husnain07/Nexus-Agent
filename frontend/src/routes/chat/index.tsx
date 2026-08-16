@@ -5,71 +5,26 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { Send, Square, MessageSquare, Plus, Trash2, Loader2, CheckCircle2, Wrench, Sparkles, Copy, Check, ChevronDown, ChevronRight, User, HelpCircle } from "lucide-react"
+import { Send, Square, MessageSquare, Plus, Trash2, Loader2, CheckCircle2, Wrench, Sparkles, Copy, Check, User, HelpCircle, AlertTriangle, Clock, Ban } from "lucide-react"
 import { toast } from "sonner"
 import { cn, formatTime } from "@/lib/utils"
 import { useSessionsList, useMessages, useCreateSession, useArchiveSession } from "@/hooks/use-sessions"
 import { useQueryClient } from "@tanstack/react-query"
-import api from "@/lib/api"
 import type { Session } from "@/types/session"
-
-interface ToolCallEvent {
-  tool: string
-  status: "running" | "success" | "error"
-  args?: string
-  result?: string
-}
-
-interface PlanStep {
-  id?: string
-  description?: string
-  tool_name?: string | null
-}
+import { useChatRun } from "@/hooks/use-chat-run"
+import { mapExecutionStatus } from "@/api/status"
+import { summarizeRun, type RunLifecycle } from "@/api/lifecycle"
+import { getRunState } from "@/api/runs"
+import type { StepState } from "@/api/lifecycle"
 
 interface Msg {
   id: string
   role: "user" | "assistant"
   content: string
-  plan?: PlanStep[]
-  toolCalls?: ToolCallEvent[]
-  reflectionScore?: number
-  reflectionFeedback?: string
   ts?: string
 }
 
-async function parseSSEStream(res: Response, onEvent: (type: string, payload: any) => void, onDone?: () => void) {
-  if (!res.body) { onDone?.(); return }
-  const reader = res.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ""
-  let currentEvent = ""
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split("\n")
-      buffer = lines.pop() || ""
-      for (const line of lines) {
-        if (line.startsWith("event: ")) {
-          currentEvent = line.slice(7).trim()
-        } else if (line.startsWith("data: ")) {
-          try {
-            const data = JSON.parse(line.slice(6))
-            const type = data.type || data.event || currentEvent
-            const payload = data.payload || data
-            onEvent(type, payload)
-          } catch { /* skip malformed JSON */ }
-          currentEvent = ""
-        }
-      }
-    }
-  } catch { /* stream aborted */ }
-  onDone?.()
-}
-
-function TypewriterText({ text, speed = 20 }: { text: string; speed?: number }) {
+function TypewriterText({ text, speed = 15 }: { text: string; speed?: number }) {
   const [displayed, setDisplayed] = useState("")
   const idxRef = useRef(0)
 
@@ -97,43 +52,117 @@ function CopyButton({ text }: { text: string }) {
   )
 }
 
-function ThinkingSection({ plan, toolCalls, loading, done }: { plan?: PlanStep[]; toolCalls?: ToolCallEvent[]; loading: boolean; done: boolean }) {
-  const [expanded, setExpanded] = useState(true)
-  useEffect(() => { if (done) setExpanded(false) }, [done])
-  if (!plan?.length && (!toolCalls || toolCalls.length === 0) && !loading) return null
+const PHASE_LABEL: Record<string, string> = {
+  requesting: "Sending request…",
+  planning: "Planning",
+  validating: "Validating plan",
+  executing: "Executing operations",
+  approval: "Needs approval",
+  clarification: "Needs clarification",
+  synthesizing: "Preparing answer",
+  complete: "Complete",
+  failed: "Failed",
+  cancelled: "Cancelled",
+  timed_out: "Timed out",
+  interrupted: "Interrupted",
+  observing: "Run in progress",
+}
+
+function StepRow({ step }: { step: StepState }) {
+  const pres = mapExecutionStatus(step.status === "success" ? "completed"
+    : step.status === "error" ? "failed"
+    : step.status === "timeout" ? "timed_out"
+    : step.status === "validation_error" ? "failed"
+    : step.status === "interrupted" ? "cancelled"
+    : step.status)
+  const running = step.status === "running" || step.status === "queued" || step.status === "retrying"
+  return (
+    <div className={cn("flex items-center gap-2 text-xs px-2 py-1 rounded",
+      running ? "bg-muted/50" : pres.tone === "success" ? "bg-green-500/5" : pres.tone === "danger" ? "bg-red-500/5" : "bg-muted/20")}>
+      {running ? <Loader2 size={12} className="animate-spin text-muted-foreground" /> :
+       pres.tone === "success" ? <CheckCircle2 size={12} className="text-green-500" /> :
+       pres.tone === "danger" ? <AlertTriangle size={12} className="text-destructive" /> :
+       <Wrench size={12} className="text-muted-foreground" />}
+      <span className="font-mono font-medium">{step.tool}</span>
+      <span className={cn("text-[10px]", pres.tone === "danger" ? "text-destructive" : "text-muted-foreground")}>{pres.label}</span>
+      {step.cached && <Badge variant="secondary" className="text-[9px]">cached</Badge>}
+      {step.durationMs != null && <span className="text-[9px] text-muted-foreground/60 ml-auto">{Math.round(step.durationMs)}ms</span>}
+      {step.error && <span className="text-[10px] text-destructive truncate max-w-[40%]" title={step.error}>{step.error}</span>}
+    </div>
+  )
+}
+
+function RunStatusBanner({ lifecycle }: { lifecycle: RunLifecycle }) {
+  if (lifecycle.phase === "complete") return null
+  const summary = summarizeRun(lifecycle)
+  if (lifecycle.phase === "approval") return null
+  if (lifecycle.phase === "clarification") return null
+
+  let tone = "bg-muted/40 text-muted-foreground"
+  let icon = <Loader2 size={13} className="animate-spin" />
+  let text = PHASE_LABEL[lifecycle.phase] ?? lifecycle.phase
+
+  if (lifecycle.phase === "failed") {
+    tone = "bg-red-500/10 text-destructive"; icon = <AlertTriangle size={13} />
+    text = lifecycle.error || "The request failed."
+  } else if (lifecycle.phase === "timed_out") {
+    tone = "bg-red-500/10 text-destructive"; icon = <Clock size={13} />
+    text = "Timed out — the invocation wall-time budget was exceeded."
+  } else if (lifecycle.phase === "interrupted") {
+    tone = "bg-amber-500/10 text-amber-600 dark:text-amber-400"; icon = <Ban size={13} />
+    text = "Interrupted — the invocation budget was exceeded."
+  } else if (lifecycle.phase === "cancelled") {
+    tone = "bg-muted/40 text-muted-foreground"; icon = <Square size={13} />
+    text = "Cancelled — nothing further was executed."
+  } else if (lifecycle.phase === "executing" && summary.failed > 0 && lifecycle.finalText) {
+    tone = "bg-amber-500/10 text-amber-600 dark:text-amber-400"; icon = <AlertTriangle size={13} />
+    text = `${summary.succeeded} of ${summary.succeeded + summary.failed} operations succeeded. ${summary.failedTools[0] ? `The ${summary.failedTools.join(", ")} operation${summary.failedTools.length > 1 ? "s" : ""} could not be completed.` : ""}`
+  }
 
   return (
-    <div className="space-y-1 mb-2">
-      <button onClick={() => setExpanded(!expanded)} className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors w-full text-left">
-        {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        {done ? (
-          <span className="flex items-center gap-1"><CheckCircle2 size={12} className="text-green-500" /> Completed</span>
-        ) : loading ? (
-          <span className="flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> Thinking...</span>
-        ) : <span>Steps</span>}
-      </button>
-      {expanded && (
-        <div className="space-y-1.5 pl-5 border-l-2 border-muted animate-in slide-in-from-left-1 duration-200">
-          {plan?.map((step, i) => (
-            <div key={i} className="flex items-center gap-2 text-xs">
-              <Badge variant="outline" className={cn("h-5 w-5 p-0 flex items-center justify-center rounded-full shrink-0 text-[10px] font-mono",
-                done ? "bg-green-500/10 text-green-600 border-green-200 dark:border-green-800" : "bg-muted")}>{i + 1}</Badge>
-              <span className="text-muted-foreground">{step.description || step.id}</span>
-              {step.tool_name && <Badge variant="secondary" className="text-[10px]">{step.tool_name}</Badge>}
-            </div>
-          ))}
-          {toolCalls?.map((tc, i) => (
-            <div key={`tc-${i}`} className={cn("flex items-center gap-2 text-xs px-2 py-1 rounded transition-colors",
-              tc.status === "running" ? "bg-muted/50" : tc.status === "success" ? "bg-green-500/5" : "bg-red-500/5")}>
-              {tc.status === "running" ? <Loader2 size={12} className="animate-spin text-muted-foreground" /> :
-               tc.status === "success" ? <CheckCircle2 size={12} className="text-green-500" /> :
-               <Wrench size={12} className="text-destructive" />}
-              <span className="font-mono font-medium">{tc.tool}</span>
-              {tc.status === "success" && <span className="text-green-600 dark:text-green-400">Done</span>}
-            </div>
-          ))}
-        </div>
-      )}
+    <div className={cn("flex items-center gap-2 px-3 py-2 rounded-lg text-xs", tone)}>
+      {icon}
+      <span className="flex-1">{text}</span>
+    </div>
+  )
+}
+
+function ApprovalCard({ lifecycle, onDecision }: { lifecycle: RunLifecycle; onDecision: (text: string) => void }) {
+  const approval = lifecycle.approval
+  const [expiryLabel, setExpiryLabel] = useState("")
+  useEffect(() => {
+    if (!lifecycle.approvalExpiresAt) return
+    const tick = () => {
+      const remaining = lifecycle.approvalExpiresAt! - Date.now()
+      if (remaining <= 0) setExpiryLabel("Expired — please re-send your request")
+      else setExpiryLabel(`Expires in ${Math.ceil(remaining / 1000)}s`)
+    }
+    tick()
+    const id = setInterval(tick, 1000)
+    return () => clearInterval(id)
+  }, [lifecycle.approvalExpiresAt])
+
+  if (!approval) return null
+  return (
+    <div className="border border-amber-500/30 bg-amber-500/5 rounded-lg p-3 space-y-2">
+      <div className="flex items-center gap-2 text-xs font-medium">
+        <HelpCircle size={13} className="text-amber-500" />
+        Approval required ({approval.policy || "policy"})
+        {lifecycle.approvalExpiresAt && (
+          <span className="text-[10px] text-muted-foreground ml-auto">{expiryLabel}</span>
+        )}
+      </div>
+      {approval.context && <p className="text-xs text-muted-foreground">{approval.context}</p>}
+      <div className="flex flex-wrap gap-1">
+        {approval.tools.map((t) => <Badge key={t} variant="secondary" className="text-[10px] font-mono">{t}</Badge>)}
+      </div>
+      <div className="flex flex-wrap gap-1.5 pt-1">
+        <Button size="sm" variant="default" onClick={() => onDecision("approve")}>Approve</Button>
+        <Button size="sm" variant="outline" onClick={() => onDecision("reject")}>Reject</Button>
+        <Button size="sm" variant="outline" onClick={() => onDecision("cancel")}>Cancel</Button>
+        <Button size="sm" variant="ghost" onClick={() => onDecision("modify")}>Modify…</Button>
+        <Button size="sm" variant="ghost" onClick={() => onDecision("What would this do?")}>Clarify</Button>
+      </div>
     </div>
   )
 }
@@ -148,14 +177,13 @@ export default function ChatPage() {
 
   const [messages, setMessages] = useState<Msg[]>([])
   const [input, setInput] = useState("")
-  const [loading, setLoading] = useState(false)
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
-  const abortRef = useRef<AbortController | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
 
   const { data: pastMessages } = useMessages(currentSessionId ?? "", { page_size: 100 })
+  const { lifecycle, streaming, observing, send, cancel, reconstruct } = useChatRun()
 
   // Load from URL params
   useEffect(() => {
@@ -163,17 +191,72 @@ export default function ChatPage() {
     if (sid && sessions.find((s) => s.id === sid)) setCurrentSessionId(sid)
   }, [searchParams, sessions])
 
+  // FE Step 2: keep the session in the URL so a refresh reconstructs the
+  // SAME session (the browser is disposable; the backend owns the run).
+  useEffect(() => {
+    if (!currentSessionId) return
+    if (searchParams.get("session") !== currentSessionId) {
+      const next = new URLSearchParams(searchParams)
+      next.set("session", currentSessionId)
+      window.history.replaceState(null, "", `?${next.toString()}`)
+    }
+  }, [currentSessionId, searchParams])
+
   // Load past messages
   useEffect(() => {
     if (pastMessages?.items && currentSessionId) {
       const mapped: Msg[] = pastMessages.items
         .filter((m: any) => m.role === "user" || m.role === "assistant")
-        .map((m: any) => ({ id: m.id, role: m.role as "user" | "assistant", content: (m.content?.text || m.content || "").toString(), ts: m.created_at }))
+        .map((m: any) => ({ id: m.id, role: m.role as "user" | "assistant", content: (m.content?.text || "").toString(), ts: m.created_at }))
       setMessages(mapped)
     } else if (currentSessionId) {
       setMessages([])
     }
   }, [pastMessages, currentSessionId])
+
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }) }, [messages, lifecycle.phase, lifecycle.steps])
+
+  // FE Step 2 refresh/reconnect reconstruction: the browser is disposable —
+  // GET state restores phase/approval; a running server-side run is observed
+  // (interval held in a ref so effect re-runs never kill the poll).
+  const observeRef = useRef<{ session: string; timer?: ReturnType<typeof setInterval> } | null>(null)
+  useEffect(() => {
+    if (!currentSessionId) return
+    if (streaming || lifecycle.phase !== "idle") return
+    const tick = async () => {
+      try {
+        const state = await getRunState(currentSessionId)
+        if (state.status === "running") {
+          if (!observeRef.current || observeRef.current.session !== currentSessionId) {
+            if (observeRef.current?.timer) clearInterval(observeRef.current.timer)
+            observeRef.current = { session: currentSessionId, timer: setInterval(tick, 3000) }
+          }
+          return
+        }
+        // Run finished server-side — stop polling, restore the terminal phase.
+        if (observeRef.current?.timer) {
+          clearInterval(observeRef.current.timer)
+          observeRef.current = null
+        }
+        await reconstruct(currentSessionId)
+      } catch {
+        // "No agent run found" (404) — the run may still be starting
+        // server-side; keep polling until it appears or the run ends.
+        if (!observeRef.current || observeRef.current.session !== currentSessionId) {
+          if (observeRef.current?.timer) clearInterval(observeRef.current.timer)
+          observeRef.current = { session: currentSessionId, timer: setInterval(tick, 3000) }
+        }
+      }
+    }
+    void tick()
+  }, [currentSessionId, streaming, lifecycle.phase, reconstruct])
+
+  useEffect(() => {
+    return () => {
+      if (observeRef.current?.timer) clearInterval(observeRef.current.timer)
+      observeRef.current = null
+    }
+  }, [currentSessionId])
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }) }, [messages])
 
@@ -198,13 +281,10 @@ export default function ChatPage() {
   const switchSession = useCallback((id: string) => {
     setCurrentSessionId(id)
     setMessages([])
-    setLoading(false)
-    abortRef.current?.abort()
   }, [])
 
-  const send = useCallback(async () => {
-    if (!input.trim()) return
-
+  const sendMessage = useCallback(async (text: string) => {
+    if (!text.trim()) return
     let sessionId = currentSessionId
     if (!sessionId) {
       try {
@@ -214,64 +294,20 @@ export default function ChatPage() {
         queryClient.invalidateQueries({ queryKey: ["sessions-list"] })
       } catch { toast.error("Failed to create session"); return }
     }
-
-    const userMsg: Msg = { id: crypto.randomUUID(), role: "user", content: input }
-    const assistantId = crypto.randomUUID()
-    setMessages((prev) => [...prev, userMsg, { id: assistantId, role: "assistant", content: "", toolCalls: [] }])
+    const userMsg: Msg = { id: crypto.randomUUID(), role: "user", content: text }
+    setMessages((prev) => [...prev, userMsg])
     setInput("")
-    setLoading(true)
-    abortRef.current = new AbortController()
+    await send(sessionId, text)
+    queryClient.invalidateQueries({ queryKey: ["sessions-list"] })
+  }, [currentSessionId, createSessionMutation, send, queryClient])
 
-    try {
-      const res = await fetch(`/api/v1/sessions/${sessionId}/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-        body: JSON.stringify({ message: input }),
-        signal: abortRef.current.signal,
-      })
-      if (!res.ok) {
-        toast.error(`Chat request failed (${res.status})`)
-        setLoading(false)
-        return
-      }
+  const onApprovalDecision = useCallback((decisionText: string) => {
+    if (currentSessionId) void sendMessage(decisionText)
+  }, [currentSessionId, sendMessage])
 
-      parseSSEStream(res,
-        (type, payload) => {
-          if (type === "final_response" && payload?.text) {
-            setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, content: m.content + payload.text } : m))
-          } else if (type === "tool_call_completed" && payload) {
-            setMessages((prev) => prev.map((m) => {
-              if (m.id !== assistantId) return m
-              const calls = [...(m.toolCalls || [])]
-              const idx = calls.findIndex((c) => c.tool === payload.tool_name)
-              if (idx >= 0) calls[idx] = { ...calls[idx], status: payload.status === "error" ? "error" : "success", result: payload.result || payload.error }
-              else calls.push({ tool: payload.tool_name, status: payload.status === "error" ? "error" : "success", args: JSON.stringify(payload.args), result: payload.result || payload.error })
-              return { ...m, toolCalls: calls }
-            }))
-          } else if (type === "tool_call_started" && payload) {
-            setMessages((prev) => prev.map((m) => {
-              if (m.id !== assistantId) return m
-              const calls = [...(m.toolCalls || [])]
-              if (!calls.find((c) => c.tool === payload.tool_name)) calls.push({ tool: payload.tool_name, status: "running" })
-              return { ...m, toolCalls: calls }
-            }))
-          } else if (type === "plan_created" && payload?.steps) {
-            setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, plan: payload.steps } : m))
-          } else if (type === "reflection_result" && payload) {
-            setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, reflectionScore: payload.score, reflectionFeedback: payload.feedback } : m))
-          } else if (type === "error" && payload) {
-            toast.error(payload.message || "Agent error")
-          } else if (type === "done") {
-            queryClient.invalidateQueries({ queryKey: ["sessions-list"] })
-          }
-        },
-        () => { setLoading(false); abortRef.current = null; queryClient.invalidateQueries({ queryKey: ["sessions-list"] }) }
-      )
-    } catch (err: unknown) {
-      if (err instanceof Error && err.name !== "AbortError") toast.error("Connection lost")
-      setLoading(false); abortRef.current = null
-    }
-  }, [input, currentSessionId, createSessionMutation, queryClient])
+  const busy = streaming || lifecycle.phase === "requesting"
+  const responseStatus = lifecycle.responseStatus
+  const partial = responseStatus === "PARTIAL_SUCCESS" && lifecycle.finalText
 
   return (
     <div className="flex h-[calc(100vh-8rem)] gap-0 -m-4">
@@ -339,28 +375,17 @@ export default function ChatPage() {
                         <div className="whitespace-pre-wrap">{m.content}</div>
                       </div>
                     ) : (
-                      <div className="bg-muted rounded-2xl rounded-bl-sm px-4 py-2.5 text-sm">
-                        <ThinkingSection plan={m.plan} toolCalls={m.toolCalls}
-                          loading={loading && m.id === messages[messages.length - 1]?.id && !m.content}
-                          done={!!m.content} />
+                      <div className="bg-muted rounded-2xl rounded-bl-sm px-4 py-2.5 text-sm space-y-2">
                         {m.content && (
                           <div className="whitespace-pre-wrap leading-relaxed">
                             <TypewriterText text={m.content} speed={15} />
                           </div>
-                        )}
-                        {!m.content && loading && (
-                          <div className="flex items-center gap-2 py-2"><Loader2 size={14} className="animate-spin text-muted-foreground" /><span className="text-sm text-muted-foreground">Thinking...</span></div>
                         )}
                       </div>
                     )}
                     <div className={cn("flex items-center gap-2 px-1", m.role === "user" && "justify-end")}>
                       {m.ts && <span className="text-[10px] text-muted-foreground/60">{formatTime(m.ts)}</span>}
                       {m.role === "assistant" && m.content && <CopyButton text={m.content} />}
-                      {m.role === "assistant" && m.reflectionScore !== undefined && (
-                        <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full",
-                          m.reflectionScore >= 7 ? "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400" : "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-400")}
-                          title={m.reflectionFeedback || ""}>{m.reflectionScore}/10</span>
-                      )}
                     </div>
                   </div>
                   {m.role === "user" && (
@@ -370,31 +395,73 @@ export default function ChatPage() {
                   )}
                 </div>
               ))}
+
+              {/* Live run panel: phase + steps + approval + banners */}
+              {(streaming || observing || lifecycle.phase !== "idle") && currentSessionId && (
+                <div className="max-w-[75%] space-y-2 animate-in fade-in duration-200">
+                  <div className="bg-muted rounded-2xl rounded-bl-sm px-4 py-3 text-sm space-y-2">
+                    <RunStatusBanner lifecycle={lifecycle} />
+                    {(lifecycle.phase === "planning" || lifecycle.phase === "validating" || lifecycle.phase === "executing" || lifecycle.phase === "synthesizing") && (
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <Loader2 size={13} className="animate-spin" />
+                        {PHASE_LABEL[lifecycle.phase]}
+                        {lifecycle.phase === "executing" && Object.keys(lifecycle.steps).length > 0 && (
+                          <span className="text-[10px]">({Object.keys(lifecycle.steps).length} operation{Object.keys(lifecycle.steps).length > 1 ? "s" : ""})</span>
+                        )}
+                      </div>
+                    )}
+                    {Object.keys(lifecycle.steps).length > 0 && (
+                      <div className="space-y-1 pl-1 border-l-2 border-muted pl-3">
+                        {Object.values(lifecycle.steps).map((step) => <StepRow key={step.taskId} step={step} />)}
+                      </div>
+                    )}
+                    <ApprovalCard lifecycle={lifecycle} onDecision={onApprovalDecision} />
+                    {partial && (
+                      <div className="bg-amber-500/10 text-amber-600 dark:text-amber-400 rounded-md px-2 py-1.5 text-xs flex items-center gap-2">
+                        <AlertTriangle size={12} />
+                        {(() => { const s = summarizeRun(lifecycle); return `${s.succeeded} of ${s.succeeded + s.failed} operations succeeded.${s.failedTools[0] ? ` The ${s.failedTools.join(", ")} operation${s.failedTools.length > 1 ? "s" : ""} could not be completed.` : ""}` })()}
+                      </div>
+                    )}
+                    {lifecycle.finalText && (
+                      <div data-testid="run-final-text" className="whitespace-pre-wrap leading-relaxed text-sm">
+                        <TypewriterText text={lifecycle.finalText} speed={10} />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
               <div ref={messagesEndRef} />
             </div>
 
             <div className="border-t p-3 flex gap-2 bg-background">
+              {lifecycle.phase === "clarification" && lifecycle.clarification ? (
+                <div className="flex-1 flex items-center gap-2 px-3 py-2 rounded-md bg-muted/40 text-xs text-muted-foreground">
+                  <HelpCircle size={13} />
+                  {lifecycle.clarification.question}
+                </div>
+              ) : null}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Input ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), send())}
-                    placeholder="Ask anything..." className="flex-1" disabled={loading} />
+                    onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), void sendMessage(input))}
+                    placeholder={lifecycle.phase === "clarification" ? "Answer to continue…" : "Ask anything..."}
+                    className="flex-1" disabled={busy} />
                 </TooltipTrigger>
                 <TooltipContent>Press Enter to send, Shift+Enter for new line</TooltipContent>
               </Tooltip>
-              {loading ? (
+              {busy ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <Button variant="destructive" size="icon" onClick={() => { toast.info("Stream stopped"); abortRef.current?.abort() }}>
+                    <Button variant="destructive" size="icon" aria-label="Stop" onClick={() => currentSessionId && void cancel(currentSessionId)}>
                       <Square size={16} />
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent>Stop generating</TooltipContent>
+                  <TooltipContent>Stop / cancel run</TooltipContent>
                 </Tooltip>
               ) : (
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <Button size="icon" onClick={send} disabled={!input.trim()}><Send size={16} /></Button>
+                    <Button size="icon" onClick={() => void sendMessage(input)} disabled={!input.trim()}><Send size={16} /></Button>
                   </TooltipTrigger>
                   <TooltipContent>Send message</TooltipContent>
                 </Tooltip>
