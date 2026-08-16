@@ -1,5 +1,5 @@
 /** Contract-validated workflow definitions and instances. */
-import { del, get, patch, post, put } from "./client";
+import { del, get, post, put } from "./client";
 import { parseContract, workflowInstanceSchema, workflowSchema } from "./contracts";
 import type { Workflow, WorkflowInstance, WorkflowStep } from "../types/workflow";
 

@@ -6,7 +6,6 @@ import { toast } from "sonner";
 import { useTask, useTaskAction } from "@/hooks/use-tasks";
 import { mapTaskStatus } from "@/api/status";
 import { Pause, Play, X, ArrowLeft, Loader2 } from "lucide-react";
-import { cn } from "@/lib/utils";
 
 const TONE_BADGE: Record<string, string> = {
   success: "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400",

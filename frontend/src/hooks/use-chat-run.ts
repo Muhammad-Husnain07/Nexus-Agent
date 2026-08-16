@@ -9,8 +9,6 @@ import { cancelRun, openChatStream } from "../api/chat";
 import {
   createRunLifecycle,
   phaseFromRunStatus,
-  reduceRunEvent,
-  transitionRun,
 } from "../api/lifecycle";
 import { getRunState } from "../api/runs";
 import { readSSEStream } from "../api/stream";

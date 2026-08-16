@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useMemories, useDeleteMemory, useMemory } from "@/hooks/use-memory"
-import { BrainCircuit, Search, Trash2, HelpCircle, Loader2, Eye } from "lucide-react"
+import { BrainCircuit, Search, Trash2, Loader2, Eye } from "lucide-react"
 import { formatDate } from "@/lib/utils"
 import { toast } from "sonner"
 

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Activity, Braces, Clock3, Code2, Database, GitBranch, Layers3, Search, ShieldAlert, Workflow } from "lucide-react";
+import { Activity, Braces, Clock3, Code2, GitBranch, Layers3, Search, ShieldAlert, Workflow } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
